@@ -35,3 +35,7 @@ A round is one completed agent review of a distinct PR head. At most ten rounds 
 The controller posts the reason in the PR and adds `agent:needs-human`. `agent:paused` stops automated work. A human may resume after resolving the problem; the ten-round lifetime cap remains.
 
 A human reviews and squash merges. Only a merged linked PR completes the issue and moves it to Done. Closing an unmerged PR requires triage or a human decision, and never marks the story completed automatically.
+
+## Admission before automation
+
+Maintainers apply `agent:admitted` to outside submissions before paid triage/review. Repository writers, configured operators, and the managed writer are trusted automatically. The triage agent may still authorize Ready once the checklist and dependencies pass. All hosted dispatches share the concurrency and rolling-credit reservations described in `docs/operations.md`; exhausted budgets defer work without consuming new implementation slots.

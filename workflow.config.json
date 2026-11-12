@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "ghAwVersion": "0.88.7",
-  "ghAwActionsSha": "5e508589e03a7757a7e05b26e834292f5445bfb6",
+  "ghAwVersion": "1.2.2",
+  "ghAwActionsSha": "53d0749e19424a918acd82b4d140264ce48f2f14",
   "engine": "codex",
   "authentication": "app",
   "supportedEngines": ["codex", "claude", "copilot"],
@@ -39,11 +39,24 @@
     "CLAUDE.md",
     "workflow.config.json",
     "package.json",
-    "package-lock.json"
+    "package-lock.json",
+    ".npmrc"
   ],
   "labels": {
     "automated": "agent:managed",
     "paused": "agent:paused",
-    "needsHuman": "agent:needs-human"
+    "needsHuman": "agent:needs-human",
+    "admitted": "agent:admitted"
+  },
+  "engineVersions": {
+    "codex": "0.167.0",
+    "claude": "2.1.319",
+    "copilot": "1.0.107"
+  },
+  "budget": {
+    "maxConcurrent": 5,
+    "dailyCredits": 28000,
+    "agentCredits": 1000,
+    "detectionCredits": 400
   }
 }

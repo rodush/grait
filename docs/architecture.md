@@ -33,3 +33,9 @@ Two independent rulesets enforce delivery checks and human merge authority. Only
 The controller cannot prevent a project administrator from manually exceeding WIP. Restrict direct status changes and route all claims through the controller. One controller per project is essential; copying the scheduler into several repositories does not create a cross-repository lock. Scope this baseline to one repository's automatic dispatches, or extend the central controller before automating more repositories on the same board.
 
 Local agents must wait for a confirmed claim and honor pause state. Hosted sandboxing, GitHub rules, and credentials provide technical boundaries; prose instructions alone do not constrain an independently configured local harness.
+
+## Security boundaries
+
+Admission is deterministic and precedes triage/review, including scheduled reconciliation. The controller serializes budget reservations in a dedicated issue ledger before any dispatch. Authorizers check the active reservation and controller identity; generated jobs independently reject reruns so partial reruns cannot reuse a reservation. Uncertain dispatches fail closed. See [operations](operations.md) for recovery.
+
+Release credentials live in a protected environment, separate from writer/reviewer credentials. Default-branch CI is verified with a read-only job token. The release credential creates a new tag only; separate creation and immutable-tag rules prevent writers from planting a tag or anyone from moving it during publication.

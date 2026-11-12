@@ -9,7 +9,13 @@ function fixture() {
   const config = { ...baseConfig, controllerRepository: "org/repo", humanOperators: ["operator"] };
   const records = new Map();
   const saves = [];
-  const api = { request: async () => ({}), list: async () => [] };
+  const api = {
+    request: async (path) => {
+      const number = Number(path.match(/issues\/(\d+)$/)?.[1]);
+      return number ? issueItem(number).content : {};
+    },
+    list: async () => [],
+  };
   const controller = new Controller({
     api,
     projectApi: api,
@@ -41,6 +47,7 @@ function issueItem(number, status = "Ready") {
     status,
     content: {
       __typename: "Issue",
+      user: { login: "operator" },
       number,
       title: `Story ${number}`,
       body: "Requirements",
@@ -56,7 +63,11 @@ test("slot reservation precedes dispatch and a sixth story cannot be claimed", a
   controller.project.items = items;
   controller.canClaim = async () => true;
   const observed = [];
-  controller.dispatch = async () => observed.push(availableSlots(items, config));
+  controller.dispatch = async (_number, _state, _kind, _inputs, onReserved) => {
+    await onReserved();
+    observed.push(availableSlots(items, config));
+    return true;
+  };
   for (const item of items) {
     const { state } = await controller.ledger.load(item.content.number);
     state.triagedDigest = issueDigest(item.content);
@@ -104,7 +115,7 @@ async function reviewFixture({ rethink = false, managed = true } = {}) {
       repo: { full_name: managed ? "org/repo" : "contributor/fork" },
     },
     user: { login: managed ? "writer[bot]" : "contributor" },
-    labels: [{ name: "agent:managed" }],
+    labels: [{ name: "agent:managed" }, { name: "agent:admitted" }],
   };
   controller.project.items = [item];
   controller.linkedItem = async () => item;

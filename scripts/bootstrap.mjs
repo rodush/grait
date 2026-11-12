@@ -2,6 +2,7 @@ import { parseArgs, promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
 import { parse as parseToml } from "smol-toml";
+import { Ledger } from "./lib/ledger.mjs";
 import { GitHub } from "./lib/github.mjs";
 import { repositoryRules, repositorySettings } from "./lib/bootstrap.mjs";
 import { sameLogin } from "./lib/policy.mjs";
@@ -14,6 +15,7 @@ const { values } = parseArgs({
     maintainers: { type: "string" },
     "writer-login": { type: "string" },
     "reviewer-login": { type: "string" },
+    "release-app-id": { type: "string" },
     "status-app-id": { type: "string" },
     model: { type: "string" },
     apply: { type: "boolean", default: false },
@@ -47,6 +49,7 @@ const plan = {
   rulesets: [
     "Required delivery gates (staged disabled until activation)",
     "Human merge authority (staged disabled until activation)",
+    "Release tag creation and immutability (active immediately)",
   ],
   releaseEnvironment:
     "Selected human maintainers approve releases; the requesting human may approve",
@@ -79,6 +82,10 @@ if (!values.apply) {
     const token =
       process.env.GH_TOKEN ||
       (await promisify(execFile)("gh", ["auth", "token"], { encoding: "utf8" })).stdout.trim();
+    if (config.authentication === "app" && !/^[1-9]\d*$/.test(values["release-app-id"] || ""))
+      throw new Error(
+        "App mode requires a dedicated --release-app-id (numeric App ID, not client ID)",
+      );
     const api = new GitHub(token);
     const projectApi = new GitHub(process.env.PROJECT_TOKEN || token);
     const actors = [];
@@ -192,11 +199,18 @@ if (!values.apply) {
       (values["writer-login"].endsWith("[bot]")
         ? (await api.request(`apps/${values["writer-login"].replace(/\[bot\]$/, "")}`)).id
         : null);
-    for (const rule of repositoryRules(actors, statusAppId)) {
+    if (config.authentication === "app") {
+      const reviewerApp = await api.request(
+        `apps/${values["reviewer-login"].replace(/\[bot\]$/, "")}`,
+      );
+      if ([Number(statusAppId), reviewerApp.id].includes(Number(values["release-app-id"])))
+        throw new Error("Release App must be separate from implementation and review Apps");
+    }
+    for (const rule of repositoryRules(actors, statusAppId, values["release-app-id"])) {
       const existing = existingRules.find(
         (item) => item.name === rule.name && sameLogin(item.source, repo),
       );
-      rule.enforcement = existing?.enforcement || "disabled";
+      rule.enforcement = rule.target === "tag" ? "active" : existing?.enforcement || "disabled";
       await api.request(
         existing ? `repos/${repo}/rulesets/${existing.id}` : `repos/${repo}/rulesets`,
         { method: existing ? "PUT" : "POST", body: rule },
@@ -204,6 +218,7 @@ if (!values.apply) {
     }
     for (const [name, color] of [
       [config.labels.automated, "0E8A16"],
+      [config.labels.admitted, "1D76DB"],
       [config.labels.paused, "FBCA04"],
       [config.labels.needsHuman, "B60205"],
     ]) {
@@ -219,7 +234,36 @@ if (!values.apply) {
         deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
       },
     });
+    let budgetNumber = currentVariables.find(
+      (item) => item.name === "AUTOMATION_BUDGET_ISSUE",
+    )?.value;
+    let budgetLogin = currentVariables.find(
+      (item) => item.name === "AUTOMATION_BUDGET_LOGIN",
+    )?.value;
+    if (!budgetNumber) {
+      const operator = await api.request("user");
+      if (!actors.some((actor) => sameLogin(actor.login, operator.login)))
+        throw new Error(
+          "Bootstrap must authenticate as a configured human operator to initialize the budget",
+        );
+      const issue = await api.request(`repos/${repo}/issues`, {
+        method: "POST",
+        body: {
+          title: "Automation budget ledger — do not delete",
+          body: "Internal rolling credit reservations. Do not edit or delete the ledger comment; it is not a development story.",
+        },
+      });
+      budgetNumber = String(issue.number);
+      budgetLogin = operator.login;
+      const ledger = new Ledger(api, repo, budgetLogin);
+      const { state } = await ledger.load(issue.number);
+      state.reservations = [];
+      await ledger.save(issue.number);
+    }
     const variables = {
+      AUTOMATION_BUDGET_ISSUE: budgetNumber,
+      AUTOMATION_BUDGET_LOGIN: budgetLogin,
+      ...(values["release-app-id"] ? { RELEASE_APP_ID: values["release-app-id"] } : {}),
       PROJECT_ID: project.id,
       AUTOMATION_LOGIN: values["writer-login"],
       REVIEW_LOGIN: values["reviewer-login"],

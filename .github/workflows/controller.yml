@@ -53,6 +53,8 @@ jobs:
           AUTOMATION_ENABLED: ${{ vars.AUTOMATION_ENABLED }}
           AUTOMATION_TOKEN: ${{ steps.auth.outputs.token }}
           PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN || steps.auth.outputs.token }}
+          AUTOMATION_BUDGET_ISSUE: ${{ vars.AUTOMATION_BUDGET_ISSUE }}
+          AUTOMATION_BUDGET_LOGIN: ${{ vars.AUTOMATION_BUDGET_LOGIN }}
           PROJECT_ID: ${{ vars.PROJECT_ID }}
           AUTOMATION_LOGIN: ${{ vars.AUTOMATION_LOGIN }}
           REVIEW_LOGIN: ${{ vars.REVIEW_LOGIN }}

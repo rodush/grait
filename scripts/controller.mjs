@@ -14,6 +14,8 @@ try {
     writer: process.env.AUTOMATION_LOGIN,
     reviewer: process.env.REVIEW_LOGIN,
     config,
+    budgetIssue: process.env.AUTOMATION_BUDGET_ISSUE,
+    budgetLogin: process.env.AUTOMATION_BUDGET_LOGIN,
   }).initialize();
   await controller.run({
     task: event.inputs?.task || "reconcile",

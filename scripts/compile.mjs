@@ -15,7 +15,9 @@ const config = validateConfig(
   JSON.parse(await readFile(join(root, "workflow.config.json"), "utf8")),
 );
 const codex = parseToml(await readFile(join(root, "config/codex.toml"), "utf8"));
-const versionResult = await execute("gh", ["aw", "version"], { encoding: "utf8" });
+const compiler = process.env.GH_AW_BINARY || "gh";
+const prefix = process.env.GH_AW_BINARY ? [] : ["aw"];
+const versionResult = await execute(compiler, [...prefix, "version"], { encoding: "utf8" });
 const version = `${versionResult.stdout}${versionResult.stderr}`.trim();
 if (version !== `gh aw version v${config.ghAwVersion}`)
   throw new Error(`Install gh-aw v${config.ghAwVersion}; found ${version}`);
@@ -41,22 +43,27 @@ export function generatedComponents() {
         config.engine === "codex"
           ? {
               id: "codex",
+              version: config.engineVersions.codex,
               args: [
                 "--config",
                 `model_reasoning_effort=${JSON.stringify(codex.model_reasoning_effort)}`,
               ],
             }
-          : config.engine,
+          : { id: config.engine, version: config.engineVersions[config.engine] },
       model:
         config.engine === "codex"
           ? `\${{ vars.AGENT_MODEL || '${codex.model}' }}`
           : "${{ vars.AGENT_MODEL }}",
       "max-turns": 60,
-      "max-ai-credits": 1000,
+      "max-ai-credits": config.budget.agentCredits,
+      env: { NPM_CONFIG_MIN_RELEASE_AGE: "3" },
       permissions: { contents: "read", issues: "read", "pull-requests": "read", actions: "read" },
       network: { allowed: ["defaults", "github", "node"] },
       "safe-outputs": {
-        "threat-detection": { "continue-on-error": false },
+        "threat-detection": {
+          "continue-on-error": false,
+          "max-ai-credits": config.budget.detectionCredits,
+        },
         "max-patch-files": 50,
         "max-patch-size": 2048,
         "report-failure-as-issue": false,
@@ -139,7 +146,7 @@ async function compile(directory) {
   }
   try {
     const args = [
-      "aw",
+      ...prefix,
       "compile",
       "--no-check-update",
       "--action-mode",
@@ -150,7 +157,7 @@ async function compile(directory) {
       "template/repository",
     ];
     if (process.argv.includes("--approve")) args.push("--approve");
-    const result = await execute("gh", args, { cwd: directory, maxBuffer: 8 * 1024 * 1024 });
+    const result = await execute(compiler, args, { cwd: directory, maxBuffer: 8 * 1024 * 1024 });
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
     for (const name of await readdir(join(directory, ".github/workflows"))) {

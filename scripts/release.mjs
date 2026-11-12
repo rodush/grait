@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { createRelease } from "./lib/release.mjs";
 import { GitHub } from "./lib/github.mjs";
 
 try {
@@ -11,6 +12,7 @@ try {
   )
     throw new Error("Provide a semantic version tag such as v1.2.3");
   const api = new GitHub(process.env.GH_TOKEN);
+  const releaseApi = new GitHub(process.env.RELEASE_CREDENTIAL);
   const config = JSON.parse(await readFile("workflow.config.json", "utf8"));
   const repo = process.env.GITHUB_REPOSITORY;
   const actor = await api.request(`users/${encodeURIComponent(process.env.GITHUB_ACTOR)}`);
@@ -38,17 +40,7 @@ try {
   );
   if (!runs.some((run) => run.head_sha === commit.sha && run.conclusion === "success"))
     throw new Error("Successful default-branch CI is required before release");
-  await api.request(`repos/${repo}/releases`, {
-    method: "POST",
-    body: {
-      tag_name: version,
-      target_commitish: commit.sha,
-      name: version,
-      generate_release_notes: true,
-      draft: false,
-      prerelease: version.includes("-"),
-    },
-  });
+  await createRelease(releaseApi, repo, version, commit.sha);
   console.log(`Published ${version} at ${commit.sha}`);
 } catch (error) {
   console.error(error.message);

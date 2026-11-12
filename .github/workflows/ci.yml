@@ -9,6 +9,8 @@ permissions:
 concurrency:
   group: template-ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+env:
+  NPM_CONFIG_MIN_RELEASE_AGE: "3"
 jobs:
   validate:
     name: Template validation
@@ -22,6 +24,7 @@ jobs:
         with:
           node-version: "24"
           cache: npm
+      - run: npm install --global npm@12.2.2 --ignore-scripts --min-release-age=3
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npm run check
       - run: npm test
@@ -30,7 +33,7 @@ jobs:
       - name: Install pinned gh-aw compiler
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh extension install github/gh-aw --pin v0.88.7
+        run: gh extension install github/gh-aw --pin v1.2.2
       - name: Check compiled workflow drift
         env:
           GH_TOKEN: ${{ github.token }}

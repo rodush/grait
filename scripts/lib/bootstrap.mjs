@@ -1,4 +1,4 @@
-export function repositoryRules(actors, statusAppId) {
+export function repositoryRules(actors, statusAppId, releaseAppId) {
   const conditions = { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } };
   return [
     {
@@ -49,6 +49,28 @@ export function repositoryRules(actors, statusAppId) {
         bypass_mode: "pull_request",
       })),
       rules: [{ type: "update" }],
+    },
+    {
+      name: "Release tag creation",
+      target: "tag",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+      bypass_actors: releaseAppId
+        ? [{ actor_id: Number(releaseAppId), actor_type: "Integration", bypass_mode: "always" }]
+        : actors.map((actor) => ({
+            actor_id: actor.id,
+            actor_type: "User",
+            bypass_mode: "always",
+          })),
+      rules: [{ type: "creation" }],
+    },
+    {
+      name: "Immutable release tags",
+      target: "tag",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+      bypass_actors: [],
+      rules: [{ type: "update" }, { type: "deletion" }],
     },
   ];
 }

@@ -9,6 +9,10 @@ const assert = (condition, message) => {
   if (!condition) failures.push(message);
 };
 const config = validateConfig(JSON.parse(await readFile("workflow.config.json", "utf8")));
+const npmrc = await readFile(".npmrc", "utf8");
+assert(/^min-release-age=3$/m.test(npmrc), "npm packages must mature for at least three days");
+assert(/^engine-strict=true$/m.test(npmrc), "npm must enforce engine support for the age gate");
+assert(/^ignore-scripts=true$/m.test(npmrc), "Dependency install scripts must stay disabled");
 const codexText = await readFile("config/codex.toml", "utf8");
 const codex = parseToml(codexText);
 const installedCodex = await readFile(".codex/config.toml", "utf8").catch((error) => {

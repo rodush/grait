@@ -48,6 +48,23 @@ try {
           !workflow.jobs.safe_outputs.needs.includes("authorize")
         )
           throw new Error(`${engine}/${authentication}/${role}: missing authorization dependency`);
+        for (const job of ["agent", "detection", "safe_outputs", "conclusion"])
+          if (!workflow.jobs[job].if?.includes("github.run_attempt == 1"))
+            throw new Error(
+              `${engine}/${authentication}/${role}: ${job} permits unbudgeted reruns`,
+            );
+        if (workflow.env?.NPM_CONFIG_MIN_RELEASE_AGE !== "3")
+          throw new Error(`${engine}/${authentication}/${role}: missing npm maturity policy`);
+        for (const job of Object.values(workflow.jobs))
+          for (const step of job.steps || [])
+            if (
+              /npm (?:install|exec)/.test(step.run || "") &&
+              step.env?.NPM_CONFIG_MIN_RELEASE_AGE !== undefined &&
+              Number(step.env.NPM_CONFIG_MIN_RELEASE_AGE) < 3
+            )
+              throw new Error(
+                `${engine}/${authentication}/${role}: npm installer bypasses maturity policy`,
+              );
         if (!workflow.concurrency.group.includes("inputs.number"))
           throw new Error(
             `${engine}/${authentication}/${role}: concurrency would serialize unrelated stories`,

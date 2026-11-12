@@ -19,10 +19,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           AUTOMATION_ENABLED: ${{ vars.AUTOMATION_ENABLED }}
+          AUTOMATION_BUDGET_ISSUE: ${{ vars.AUTOMATION_BUDGET_ISSUE }}
+          AUTOMATION_BUDGET_LOGIN: ${{ vars.AUTOMATION_BUDGET_LOGIN }}
           AUTOMATION_LOGIN: ${{ vars.AUTOMATION_LOGIN }}
         run: node scripts/authorize.mjs
   agent:
+    if: github.run_attempt == 1
     needs: [authorize]
+  detection:
+    if: github.run_attempt == 1
+  safe_outputs:
+    if: github.run_attempt == 1
+  conclusion:
+    if: github.run_attempt == 1
 safe-outputs:
   needs: [authorize]
 ---

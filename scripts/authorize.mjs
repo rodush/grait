@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { admitted } from "./lib/admission.mjs";
 import { GitHub } from "./lib/github.mjs";
 import { Ledger } from "./lib/ledger.mjs";
 import { issueDigest, positiveInteger, sameLogin } from "./lib/policy.mjs";
@@ -6,6 +7,13 @@ import { issueDigest, positiveInteger, sameLogin } from "./lib/policy.mjs";
 try {
   const event = JSON.parse(await readFile(process.env.GITHUB_EVENT_PATH, "utf8"));
   const inputs = event.inputs || {};
+  if (
+    process.env.GITHUB_RUN_ATTEMPT !== "1" ||
+    !sameLogin(process.env.GITHUB_ACTOR, process.env.AUTOMATION_LOGIN)
+  )
+    throw new Error(
+      "Only fresh controller dispatches may consume a budget reservation; reruns are forbidden",
+    );
   const repo = process.env.GITHUB_REPOSITORY;
   const config = JSON.parse(await readFile("workflow.config.json", "utf8"));
   if (process.env.AUTOMATION_ENABLED !== "true" || !sameLogin(config.controllerRepository, repo))
@@ -39,7 +47,24 @@ try {
     if (String(value) !== inputs[key])
       throw new Error(`Dispatch ${key} differs from its authorization`);
   }
+  const budgetNumber = Number(process.env.AUTOMATION_BUDGET_ISSUE);
+  if (!positiveInteger(budgetNumber)) throw new Error("Missing budget issue");
+  const budget = await new Ledger(api, repo, process.env.AUTOMATION_BUDGET_LOGIN).load(
+    budgetNumber,
+  );
+  const reservations = budget.state.reservations?.filter(
+    (entry) => entry.operation === inputs.operation_id,
+  );
+  if (
+    !budget.comment ||
+    reservations?.length !== 1 ||
+    reservations[0].completed ||
+    reservations[0].kind !== kind
+  )
+    throw new Error("Dispatch has no active budget reservation");
   const issue = await api.request(`repos/${repo}/issues/${inputs.number}`);
+  if (!(await admitted(api, repo, issue, config, process.env.AUTOMATION_LOGIN)))
+    throw new Error("Issue or PR no longer admitted for automation");
   if (
     issue.labels.some((label) =>
       [config.labels.paused, config.labels.needsHuman].includes(label.name),

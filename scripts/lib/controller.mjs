@@ -1,3 +1,4 @@
+import { admitted, DispatchBudget } from "./admission.mjs";
 import { randomUUID } from "node:crypto";
 import { Ledger } from "./ledger.mjs";
 import { Project } from "./project.mjs";
@@ -35,6 +36,8 @@ export class Controller {
     writer,
     reviewer,
     config,
+    budgetIssue,
+    budgetLogin,
     now = () => new Date(),
   }) {
     this.api = api;
@@ -47,6 +50,14 @@ export class Controller {
     this.ledger = new Ledger(api, repo, writer);
     this.project = new Project(projectApi, projectId, config.statuses);
     this.dependencies = new Map();
+    this.budgetIssue = Number(budgetIssue);
+    this.budget = new DispatchBudget(
+      new Ledger(api, repo, budgetLogin),
+      this.budgetIssue,
+      config.budget,
+      (pending) => this.findRun(pending),
+      now,
+    );
     if (!writer || !reviewer || sameLogin(writer, reviewer))
       throw new Error("Distinct implementation and review identities are required");
     if (!sameLogin(config.controllerRepository, repo))
@@ -82,9 +93,16 @@ export class Controller {
     await this.ledger.save(number);
   }
 
-  async dispatch(number, state, kind, inputs) {
+  async dispatch(number, state, kind, inputs, onReserved = async () => {}) {
     const operation = `${kind}-${number}-${randomUUID()}`;
-    state.pending = { kind, operation, at: this.now().toISOString(), ...inputs };
+    const pending = { kind, operation, at: this.now().toISOString(), ...inputs };
+    if (!(await this.budget.reserve(pending))) {
+      state.reason = "Waiting for global automation concurrency or rolling daily credit budget";
+      await this.ledger.save(number);
+      return false;
+    }
+    await onReserved();
+    state.pending = pending;
     await this.ledger.save(number); // Persist intent before dispatch; uncertain dispatches are never retried blindly.
     try {
       await this.api.request(`repos/${this.repo}/actions/workflows/${WORKFLOWS[kind]}/dispatches`, {
@@ -109,6 +127,7 @@ export class Controller {
         `Could not confirm ${kind} dispatch; inspect Actions before resuming`,
       );
     }
+    return true;
   }
 
   async findRun(pending) {
@@ -197,6 +216,9 @@ export class Controller {
   }
 
   async claim(item, state, local = false) {
+    const current = await this.api.request(`repos/${this.repo}/issues/${item.content.number}`);
+    if (!(await admitted(this.api, this.repo, current, this.config, this.writer))) return false;
+    if (issueDigest(current) !== state.triagedDigest) return false;
     if (state.paused || state.pending || state.triagedDigest !== issueDigest(item.content))
       return false;
     if (
@@ -205,20 +227,36 @@ export class Controller {
     )
       return false;
     if (!(await this.canClaim(item.content))) return false;
-    // The single repository-wide controller lock covers both this move and the dispatch.
-    await this.project.move(item, this.config.statuses.inProgress);
-    state.phase = local ? "local" : "implementing";
-    state.claimedAt = this.now().toISOString();
-    state.reason = local ? "Local claim granted; implementation may start" : "Hosted claim granted";
-    if (local) await this.ledger.save(item.content.number);
-    else
-      await this.dispatch(item.content.number, state, "implement", { digest: state.triagedDigest });
-    return true;
+    const reserveSlot = async () => {
+      await this.project.move(item, this.config.statuses.inProgress);
+      state.phase = local ? "local" : "implementing";
+      state.claimedAt = this.now().toISOString();
+      state.reason = local
+        ? "Local claim granted; implementation may start"
+        : "Hosted claim granted";
+    };
+    if (local) {
+      await reserveSlot();
+      await this.ledger.save(item.content.number);
+      return true;
+    }
+    return this.dispatch(
+      item.content.number,
+      state,
+      "implement",
+      { digest: state.triagedDigest },
+      reserveSlot,
+    );
   }
 
   async reconcileIssue(item) {
     const number = item.content.number;
     const issue = await this.api.request(`repos/${this.repo}/issues/${number}`);
+    if (
+      number === this.budgetIssue ||
+      !(await admitted(this.api, this.repo, issue, this.config, this.writer))
+    )
+      return;
     item.content = { ...item.content, title: issue.title, body: issue.body };
     const { state } = await this.ledger.load(number);
     if (issue.state === "closed") return;
@@ -260,7 +298,6 @@ export class Controller {
     const pending = await this.completed(number, state);
     if (state.paused) return;
     if (!state.pending && state.retry === "implement") {
-      state.retry = null;
       const prs = await this.api.list(
         `repos/${this.repo}/pulls?state=open&head=${encodeURIComponent(this.repository.owner.login + ":agent/issue-" + number)}`,
       );
@@ -271,6 +308,7 @@ export class Controller {
           pr.head.repo?.full_name === this.repo,
       );
       if (existing) {
+        state.retry = null;
         state.pr = existing.number;
         state.phase = existing.draft ? "implementing" : "review";
         if (!existing.draft) await this.project.move(item, this.config.statuses.review);
@@ -278,7 +316,10 @@ export class Controller {
       } else {
         if (item.status !== this.config.statuses.inProgress)
           throw new Error("An implementation retry requires its existing In Progress reservation");
-        await this.dispatch(number, state, "implement", { digest: state.triagedDigest });
+        if (await this.dispatch(number, state, "implement", { digest: state.triagedDigest })) {
+          state.retry = null;
+          await this.ledger.save(number);
+        }
       }
       return;
     }
@@ -374,6 +415,7 @@ export class Controller {
   }
 
   async reconcilePR(pr) {
+    if (!(await admitted(this.api, this.repo, pr, this.config, this.writer))) return;
     const { state } = await this.ledger.load(pr.number);
     state.history ||= [];
     let item = await this.linkedItem(pr);
@@ -689,17 +731,28 @@ export class Controller {
 
   async run({ task = "reconcile", number, actor, event = {} } = {}) {
     if (task !== "reconcile") await this.operatorTask(task, Number(number), actor);
-    if (event.issue && !event.issue.pull_request) await this.project.add(event.issue, this.repo);
+    if (
+      event.issue &&
+      !event.issue.pull_request &&
+      event.issue.number !== this.budgetIssue &&
+      (await admitted(this.api, this.repo, event.issue, this.config, this.writer))
+    )
+      await this.project.add(event.issue, this.repo);
     if (event.pull_request?.number) {
       const pr = await this.api.request(`repos/${this.repo}/pulls/${event.pull_request.number}`);
       await this.reconcilePR(pr);
     }
     const issues = await this.api.list(`repos/${this.repo}/issues?state=open`);
     for (const issue of issues.filter((entry) => !entry.pull_request))
-      await this.project.add(issue, this.repo);
+      if (
+        issue.number !== this.budgetIssue &&
+        (await admitted(this.api, this.repo, issue, this.config, this.writer))
+      )
+        await this.project.add(issue, this.repo);
     const all = this.project.items.filter(
       (item) =>
         !item.isArchived &&
+        item.content?.number !== this.budgetIssue &&
         item.content?.__typename === "Issue" &&
         item.content.repository.nameWithOwner === this.repo,
     );

@@ -18,6 +18,19 @@ export function parseBlock(body, name) {
 export function validateConfig(config) {
   if (!/^[a-f0-9]{40}$/.test(config.ghAwActionsSha))
     throw new Error("The gh-aw runtime action must be pinned to a commit SHA");
+  if (
+    !config.labels?.admitted ||
+    Object.values(config.labels).length !== new Set(Object.values(config.labels)).size
+  )
+    throw new Error("Distinct admission and control labels are required");
+  for (const key of ["maxConcurrent", "dailyCredits", "agentCredits", "detectionCredits"])
+    if (!Number.isSafeInteger(config.budget?.[key]) || config.budget[key] < 1)
+      throw new Error("Positive integer automation budgets are required");
+  if (config.budget.dailyCredits < config.budget.agentCredits + config.budget.detectionCredits)
+    throw new Error("Daily budget must cover one complete agent and detection run");
+  for (const engine of config.supportedEngines)
+    if (!/^\d+\.\d+\.\d+$/.test(config.engineVersions?.[engine]))
+      throw new Error("Pin each engine to a mature stable version");
   if (config.schemaVersion !== 1) throw new Error("Unsupported workflow configuration version");
   if (!config.supportedEngines.includes(config.engine)) throw new Error("Unsupported agent engine");
   if (

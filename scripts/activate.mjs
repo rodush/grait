@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { GitHub } from "./lib/github.mjs";
+import { Ledger } from "./lib/ledger.mjs";
 import { Project } from "./lib/project.mjs";
 import { digest, sameLogin, validateConfig } from "./lib/policy.mjs";
 import { repositoryRules } from "./lib/bootstrap.mjs";
@@ -39,7 +40,14 @@ try {
       item.value,
     ]),
   );
-  for (const name of ["PROJECT_ID", "AUTOMATION_LOGIN", "REVIEW_LOGIN", "AGENT_MODEL"])
+  for (const name of [
+    "PROJECT_ID",
+    "AUTOMATION_LOGIN",
+    "REVIEW_LOGIN",
+    "AGENT_MODEL",
+    "AUTOMATION_BUDGET_ISSUE",
+    "AUTOMATION_BUDGET_LOGIN",
+  ])
     if (!variables.get(name)) throw new Error(`Missing repository variable ${name}`);
   if (
     sameLogin(variables.get("AUTOMATION_LOGIN"), variables.get("REVIEW_LOGIN")) ||
@@ -95,8 +103,41 @@ try {
   const appId = writer.endsWith("[bot]")
     ? (await api.request(`apps/${writer.replace(/\[bot\]$/, "")}`)).id
     : null;
+  const budgetNumber = Number(variables.get("AUTOMATION_BUDGET_ISSUE"));
+  if (!Number.isSafeInteger(budgetNumber) || budgetNumber < 1)
+    throw new Error("Invalid budget issue");
+  if (
+    !config.humanOperators.some((login) =>
+      sameLogin(login, variables.get("AUTOMATION_BUDGET_LOGIN")),
+    )
+  )
+    throw new Error("Budget ledger must originate from a configured bootstrap operator");
+  const budget = await new Ledger(api, repo, variables.get("AUTOMATION_BUDGET_LOGIN")).load(
+    budgetNumber,
+  );
+  if (!budget.comment || !Array.isArray(budget.state.reservations))
+    throw new Error("Missing initialized budget ledger");
+  const releaseSecrets = new Set(
+    (await api.list(`repos/${repo}/environments/release/secrets`, "secrets")).map(
+      (item) => item.name,
+    ),
+  );
+  if (config.authentication === "app") {
+    if (
+      !variables.get("RELEASE_APP_ID") ||
+      !variables.get("RELEASE_APP_CLIENT_ID") ||
+      !releaseSecrets.has("RELEASE_APP_PRIVATE_KEY")
+    )
+      throw new Error("Configure the dedicated release App and its release-environment secret");
+    const writerApp = await api.request(`apps/${writer.replace(/\[bot\]$/, "")}`);
+    const reviewerLogin = variables.get("REVIEW_LOGIN");
+    const reviewerApp = await api.request(`apps/${reviewerLogin.replace(/\[bot\]$/, "")}`);
+    if ([writerApp.id, reviewerApp.id].includes(Number(variables.get("RELEASE_APP_ID"))))
+      throw new Error("Release App must be separate from implementation and review Apps");
+  } else if (!releaseSecrets.has("RELEASE_TOKEN"))
+    throw new Error("Configure RELEASE_TOKEN in the release environment");
   const rules = await api.list(`repos/${repo}/rulesets`);
-  for (const expected of repositoryRules(actors, appId)) {
+  for (const expected of repositoryRules(actors, appId, variables.get("RELEASE_APP_ID"))) {
     const rule = rules.find((item) => item.name === expected.name && sameLogin(item.source, repo));
     if (!rule) throw new Error(`Missing staged ruleset ${expected.name}`);
     await api.request(`repos/${repo}/rulesets/${rule.id}`, { method: "PUT", body: expected });
