@@ -40,7 +40,8 @@
     "workflow.config.json",
     "package.json",
     "package-lock.json",
-    ".npmrc"
+    ".npmrc",
+    "docs/worktrees.md"
   ],
   "labels": {
     "automated": "agent:managed",

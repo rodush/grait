@@ -59,7 +59,7 @@ export async function generateHarnessFiles(root) {
     const text = await readFile(join(root, source), "utf8");
     readSkill(text, agent.skill);
     for (const directory of skillRoots) files.set(`${directory}/${agent.skill}/SKILL.md`, text);
-    const instructions = `Read AGENTS.md and apply the ${agent.skill} skill at ${source}. Follow its distinction between local and controller-authorized hosted execution. Inherit the parent harness's model and permissions; this role grants no additional authority.\n`;
+    const instructions = `Read AGENTS.md and apply the ${agent.skill} skill at ${source}. Follow its distinction between local and controller-authorized hosted execution. Use a local worktree separate from the coordinator and unrelated sub-agents; the tester and implementer for one issue share its worktree and branch with sequential exclusive ownership; follow docs/worktrees.md for sequential commit handoffs and cleanup after merge. Inherit the parent harness's model and permissions; this role grants no additional authority.\n`;
     files.set(
       `.codex/agents/${agent.name}.toml`,
       `# Generated from automation/agents.json; run npm run harness:generate.\n${stringifyToml({ name: agent.name, description: agent.description, developer_instructions: instructions })}`,

@@ -17,3 +17,7 @@ Wait for or report the hosted run's state. Do not analyze the diff locally, prod
 ## Authorized hosted workflow
 
 Apply the [review policy](../../../docs/review-guidelines.md) and [hosted review contract](../../../automation/prompts/review.md) to the exact requested head. Read contributor code through GitHub APIs without executing it. Publish actionable inline findings and one formal review with stable finding IDs and matching controller metadata. A stale head, missing evidence, or conflicting instructions cannot authorize a merge.
+
+## Worktree ownership
+
+For local execution, use a worktree separate from the coordinator and unrelated sub-agents. Tester and implementer assigned to one issue share that issue’s worktree and branch with sequential exclusive ownership. Follow the [worktree protocol](../../../docs/worktrees.md). Record and verify the committed handoff SHA before transferring ownership; never allow concurrent writes. The coordinator integrates accepted commits and cleans up task-owned worktrees after merge. Hosted API-only roles retain their no-checkout policy.

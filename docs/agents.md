@@ -31,3 +31,7 @@ npm run check
 Generated files are committed and checked for drift. The gh-aw compiler embeds the skill bodies in shared workflow fragments, so hosted jobs do not depend on local harness discovery. Keep controller inputs and output schemas in `automation/prompts/`; portable skills explain the task and execution boundaries.
 
 Native formats follow the [Codex agent reference](https://learn.chatgpt.com/docs/agent-configuration/subagents), [Claude Code agent reference](https://code.claude.com/docs/en/sub-agents), and [Copilot agent reference](https://docs.github.com/en/copilot/reference/custom-agents-configuration). Skills use the shared `SKILL.md` format with each harness's discovery location.
+
+## Coordinator responsibilities
+
+The coordinator keeps its checkout isolated and assigns separate worktrees to unrelated sub-agents. The tester and implementer for the same issue share one worktree and branch, handing over exclusive ownership sequentially. It records the role, scope, base SHA, and handoff evidence, serializes tester/implementer ownership of the shared issue branch, and verifies commits before integration. See [the worktree protocol](worktrees.md), including cleanup after human merge.

@@ -39,3 +39,7 @@ A human reviews and squash merges. Only a merged linked PR completes the issue a
 ## Admission before automation
 
 Maintainers apply `agent:admitted` to outside submissions before paid triage/review. Repository writers, configured operators, and the managed writer are trusted automatically. The triage agent may still authorize Ready once the checklist and dependencies pass. All hosted dispatches share the concurrency and rolling-credit reservations described in `docs/operations.md`; exhausted budgets defer work without consuming new implementation slots.
+
+## Coordinator and delegated work
+
+The coordinator has a separate worktree from delegated work. Tester and implementer for the same issue share one worktree and branch, handing over exclusive write ownership sequentially. Unrelated sub-agents use separate worktrees. Follow `docs/worktrees.md` for isolation, ownership, integration, and cleanup after merge. Hosted jobs have separate ephemeral checkouts; API-only review does not check out PR code.

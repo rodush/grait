@@ -10,6 +10,10 @@ These rules apply across programming languages. Add stack-specific rules beside 
 - Keep unrelated refactors out of functional changes, unless refactoring is needed to simplify current codebase, or to account for new functionality. Preserve public behavior unless the issue authorizes changing it.
 - Handle invalid input, empty states, resource lifetimes, concurrency, and failure paths deliberately.
 
+## Agent workspace isolation
+
+The coordinator and unrelated sub-agents must use separate worktrees. The tester and implementer for one issue share that issue’s worktree and branch, with sequential exclusive ownership. Follow the protocol in `docs/worktrees.md` for assigning paths, sequential tester/implementer ownership, integrating exact commits into the shared issue branch, and cleanup after merge. Never delegate into the coordinator’s checkout.
+
 ## Readability and consistency
 
 - Follow the language's established naming and formatting conventions. Choose descriptive names and explain intent when code alone cannot express it.

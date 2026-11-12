@@ -10,7 +10,7 @@ Use `gh workflow run controller.yml -f task=claim-local -f number=123` to reques
 
 ## Make a change
 
-Use an isolated branch such as `feat/123-short-description` or `fix/123-short-description`. Keep one issue's outcome per PR. Follow the existing language's conventions and add the smallest meaningful regression tests for changed behavior. Update documentation and example configuration when behavior changes.
+Use a separate worktree for the coordinator and unrelated sub-agents; tester and implementer for the same issue share one worktree and branch with sequential exclusive ownership; follow the [handoff and cleanup protocol](docs/worktrees.md). Use an isolated branch such as `feat/123-short-description` or `fix/123-short-description`. Keep one issue's outcome per PR. Follow the existing language's conventions and add the smallest meaningful regression tests for changed behavior. Update documentation and example configuration when behavior changes.
 
 Template tooling requires Node.js 24 and npm locally. These commands validate GRAIT’s repository automation; application build and run commands are defined separately when a stack is added. See the [runtime and command reference](docs/setup.md#repository-tooling-runtime) for prerequisites and regeneration rules.
 

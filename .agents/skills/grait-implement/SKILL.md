@@ -12,3 +12,7 @@ If no claim exists, have an authorized operator request `claim-local` and wait f
 Implement within the accepted scope and permitted paths. Run meaningful behavioral checks, preserve their evidence, and open an issue-linked PR using Conventional Commits. Report missing validation honestly. Humans retain merge and release authority.
 
 Inside the hosted implementation workflow, follow the [safe-output contract](../../../automation/prompts/implement.md). In a local harness, use the claimed issue's isolated branch and the operator-authorized GitHub identity. Protected policy or automation changes require human handling.
+
+## Worktree ownership
+
+For local execution, use a worktree separate from the coordinator and unrelated sub-agents. Tester and implementer assigned to one issue share that issue’s worktree and branch with sequential exclusive ownership. Follow the [worktree protocol](../../../docs/worktrees.md). Record and verify the committed handoff SHA before transferring ownership; never allow concurrent writes. The coordinator integrates accepted commits and cleans up task-owned worktrees after merge. Hosted API-only roles retain their no-checkout policy.
