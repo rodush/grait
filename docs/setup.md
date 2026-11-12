@@ -34,7 +34,9 @@ npm install --global npm@12.2.2 --ignore-scripts --min-release-age=3
 npm ci
 ```
 
-The canonical local Codex profile is `config/codex.toml`, based on [expense-tracker PR #86](https://github.com/rodush/expense-tracker/pull/86). It preserves `gpt-6.1-sol`, high reasoning, on-request approval, workspace-write, and the terminal-title item order. The template includes the matching `.codex/config.toml`; `npm run check` verifies that an installed copy matches the profile. When copying the scaffold into an existing repository, inspect its configuration before installing a missing copy:
+The canonical local Codex profile is `config/codex.toml`. It preserves `gpt-6.1-sol`, high reasoning, on-request approval, workspace-write, and the terminal-title item order. The template includes the matching `.codex/config.toml`; `npm run check` verifies that an installed copy matches the profile.
+
+**Important note!** When copying the scaffold into an existing repository, inspect its configuration before installing a missing copy:
 
 ```sh
 mkdir -p .codex
