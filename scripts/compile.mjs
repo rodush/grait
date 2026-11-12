@@ -183,8 +183,20 @@ if (process.argv.includes("--check")) {
     for (const path of paths) {
       const expected = await readFile(join(temporary, path), "utf8");
       const actual = await readFile(join(root, path), "utf8").catch(() => "");
-      if (expected !== actual)
+      if (expected !== actual) {
+        try {
+          await execute(
+            "git",
+            ["diff", "--no-index", "--", join(root, path), join(temporary, path)],
+            { maxBuffer: 1024 * 1024 },
+          );
+        } catch (difference) {
+          process.stderr.write(
+            (difference.stdout || "").split("\n").slice(0, 160).join("\n") + "\n",
+          );
+        }
         throw new Error(`Generated file is stale: ${path}; run npm run compile`);
+      }
     }
   } finally {
     await rm(temporary, { recursive: true, force: true });
