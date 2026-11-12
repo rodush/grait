@@ -8,6 +8,8 @@
 
 ## Controller and persistence
 
+Compilation removes only redundant action comments that repeat the exact pinned SHA; gh-aw's cache can add those display labels on one machine but omit them on another. The drift check still compares the complete generated code, security manifest, permissions, and action pins.
+
 Canonical skills in `automation/skills/` and role metadata in `automation/agents.json` also generate native Codex, Claude Code, and Copilot adapters. `npm run check` checks those copies for drift. Hosted workflows import the same skill bodies, while their runner-specific input and output contracts remain in `automation/prompts/`. See [skills and agents](agents.md) for the directory map and review-routing boundary.
 
 The deterministic Actions controller polls every five minutes and responds to issue, PR, and workflow-completion events. All instances share a repository-scoped concurrency group. The project description binds the board to one controller repository; a conflicting binding stops execution. This baseline schedules its own repository's stories and counts In Progress stories across the entire project.

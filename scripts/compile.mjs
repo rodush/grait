@@ -7,6 +7,7 @@ import { stringify } from "yaml";
 import { parse as parseToml } from "smol-toml";
 import { validateConfig } from "./lib/policy.mjs";
 import { readSkill } from "./lib/harnesses.mjs";
+import { canonicalizeActionComments } from "./lib/compilation.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const execute = promisify(execFile);
@@ -152,6 +153,13 @@ async function compile(directory) {
     const result = await execute("gh", args, { cwd: directory, maxBuffer: 8 * 1024 * 1024 });
     process.stdout.write(result.stdout);
     process.stderr.write(result.stderr);
+    for (const name of await readdir(join(directory, ".github/workflows"))) {
+      if (!name.endsWith(".lock.yml")) continue;
+      const path = join(directory, ".github/workflows", name);
+      const original = await readFile(path, "utf8");
+      const canonical = canonicalizeActionComments(original);
+      if (canonical !== original) await writeFile(path, canonical);
+    }
   } catch (error) {
     process.stdout.write(error.stdout || "");
     process.stderr.write(error.stderr || "");
