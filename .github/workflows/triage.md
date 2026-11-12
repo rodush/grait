@@ -32,6 +32,7 @@ imports:
   - shared/policy-coding.md
   - shared/policy-workflow.md
   - shared/prompt-triage.md
+  - shared/skill-grait-triage.md
 checkout: false
 tools:
   bash: false

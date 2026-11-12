@@ -1,0 +1,30 @@
+[
+  {
+    "role": "triage",
+    "name": "grait-triage",
+    "description": "Clarify a GitHub issue, its acceptance criteria, and blocking dependencies before implementation.",
+    "skill": "grait-triage",
+    "execution": "local-and-hosted"
+  },
+  {
+    "role": "implement",
+    "name": "grait-implement",
+    "description": "Implement an already claimed project issue and prepare an issue-linked PR with validation evidence.",
+    "skill": "grait-implement",
+    "execution": "local-and-hosted"
+  },
+  {
+    "role": "review",
+    "name": "grait-review",
+    "description": "Run PR evaluation in the authorized GitHub Actions workflow; local invocations request or inspect that hosted review.",
+    "skill": "grait-review",
+    "execution": "hosted-review"
+  },
+  {
+    "role": "fix",
+    "name": "grait-fix",
+    "description": "Address hosted PR findings while honoring the controller's fix budget, pause state, and redesign capacity.",
+    "skill": "grait-fix",
+    "execution": "local-and-hosted"
+  }
+]

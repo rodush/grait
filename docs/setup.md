@@ -22,6 +22,10 @@ If `.codex` is protected by your execution environment, an operator must install
 
 Claude uses `CLAUDE.md`; Copilot uses `.github/copilot-instructions.md`. Both point to the shared guidance. Select `codex`, `claude`, or `copilot` in `workflow.config.json`, then recompile. Set an explicit `AGENT_MODEL` for the chosen engine; Codex defaults to the model from its profile. Add the application stack's commands and network requirements when introducing it. Default automated write scopes are `src/**`, `tests/**`, `assets/**`, and `docs/project/**`; root policy documents and automation remain protected. Configure additional exact file paths or `directory/**` scopes deliberately.
 
+## Shared skills and agents
+
+The template includes four reusable skills and matching agent definitions for Codex, Claude Code, and Copilot. See [the role catalog](agents.md) for invocation and execution boundaries. Edit `automation/skills/` or `automation/agents.json`, then regenerate with `npm run harness:generate`. Models and permissions remain inherited from the selected harness; local review requests route to GitHub Actions.
+
 ## Credentials and identities
 
 Use separate writer and reviewer identities, neither of which is a human operator. GitHub Apps are the default. Create and install a writer app and reviewer app on the derived repository. Do not give either app a branch-ruleset bypass.
@@ -66,6 +70,7 @@ Bootstrap requires GitHub features for rulesets, code-owner approval, and enviro
 
 ```sh
 npm run format
+npm run harness:generate
 npm run check
 npm test
 npm run lint:md

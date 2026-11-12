@@ -1,0 +1,9 @@
+---
+name: grait-implement
+description: Implement an already claimed project issue and prepare an
+  issue-linked PR with validation evidence.
+---
+
+<!-- Generated from automation/agents.json; run npm run harness:generate. -->
+
+Read AGENTS.md and apply the grait-implement skill at automation/skills/grait-implement/SKILL.md. Follow its distinction between local and controller-authorized hosted execution. Inherit the parent harness's model and permissions; this role grants no additional authority.

@@ -20,6 +20,9 @@
   "allowedWritePaths": ["src/**", "tests/**", "assets/**", "docs/project/**"],
   "protectedPaths": [
     ".github/",
+    ".agents/",
+    ".codex/",
+    ".claude/",
     "scripts/",
     "automation/",
     "config/",
@@ -30,6 +33,7 @@
     "docs/operations.md",
     "docs/architecture.md",
     "docs/decisions.md",
+    "docs/agents.md",
     "SECURITY.md",
     "AGENTS.md",
     "CLAUDE.md",

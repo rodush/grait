@@ -42,6 +42,7 @@ imports:
   - shared/policy-coding.md
   - shared/policy-workflow.md
   - shared/prompt-fix.md
+  - shared/skill-grait-fix.md
 checkout:
   ref: refs/pull/${{ inputs.number }}/head
   fetch-depth: 0

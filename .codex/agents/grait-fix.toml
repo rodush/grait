@@ -1,0 +1,4 @@
+# Generated from automation/agents.json; run npm run harness:generate.
+name = "grait-fix"
+description = "Address hosted PR findings while honoring the controller's fix budget, pause state, and redesign capacity."
+developer_instructions = "Read AGENTS.md and apply the grait-fix skill at automation/skills/grait-fix/SKILL.md. Follow its distinction between local and controller-authorized hosted execution. Inherit the parent harness's model and permissions; this role grants no additional authority.\n"

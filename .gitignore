@@ -151,6 +151,10 @@ vite.config.ts.timestamp-*
 # GRAIT template tooling and local credentials
 .codex/*
 !.codex/config.toml
+!.codex/agents/
+.codex/agents/*
+!.codex/agents/grait-*.toml
+.claude/settings.local.json
 coverage/
 *.pem
 *.key

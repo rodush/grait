@@ -4,7 +4,7 @@
 
 ## Project Structure & Module Organization
 
-This is a language-neutral GitHub template for AI-augmented development. Shared policy lives here and in `docs/`; harness adapters must reference it. `automation/prompts/` holds reusable task instructions, `.github/workflows/` holds Actions and gh-aw sources, `scripts/` implements deterministic policy, and `tests/` validates that tooling. Put future application code in explicit source directories and document its stack separately.
+This is a language-neutral GitHub template for AI-augmented development. Shared policy lives here and in `docs/`. `automation/skills/` and `automation/agents.json` define reusable skills and roles; `automation/prompts/` defines hosted task contracts. Native harness adapters are generated from these sources. `.github/workflows/` holds Actions and gh-aw sources, `scripts/` implements deterministic policy, and `tests/` validates that tooling. Document future application code and its stack separately.
 
 ## Work Selection & Agent Responsibilities
 
@@ -12,7 +12,7 @@ Work starts with a GitHub Project issue. Triage establishes scope, acceptance cr
 
 ## Build, Test, and Development Commands
 
-Use Node.js 24 for template tooling: `npm ci` installs locked dependencies; `npm run check` checks configuration and workflow policy; `npm test` runs automation tests. Use `npm run format:check` and `npm run lint:md` for formatting and Markdown. `npm run compile` generates gh-aw components and lockfiles. Edit canonical sources and recompile generated files. Document application-specific commands when adding a stack.
+Use Node.js 24: `npm ci` installs locked dependencies; `npm run check` checks configuration, harness drift, and workflow policy; `npm test` runs automation tests. Use `npm run format:check` and `npm run lint:md` for formatting and Markdown. `npm run harness:generate` generates native adapters; `npm run compile` generates gh-aw components and lockfiles. Edit canonical sources first. Document application-specific commands when adding a stack.
 
 ## Coding Style & Testing Guidelines
 

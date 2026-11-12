@@ -33,6 +33,7 @@ imports:
   - shared/policy-coding.md
   - shared/policy-workflow.md
   - shared/prompt-implement.md
+  - shared/skill-grait-implement.md
 checkout:
   ref: ${{ github.event.repository.default_branch }}
   fetch-depth: 0

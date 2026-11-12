@@ -7,3 +7,7 @@ node_modules/
 .github/workflows/shared/*.md
 !.github/workflows/shared/authorize.md
 package-lock.json
+.claude/skills/grait-*/SKILL.md
+.github/skills/grait-*/SKILL.md
+.claude/agents/grait-*.md
+.github/agents/grait-*.agent.md

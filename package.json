@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/rodush/grait.git"
+    "url": "git+ssh://git@github.com/rodush/grait.git"
   },
   "description": "Language-neutral GitHub template for AI-augmented software development",
   "type": "module",
@@ -13,7 +13,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "check": "node scripts/check.mjs",
+    "check": "node scripts/check.mjs && node scripts/harnesses.mjs --check",
+    "harness:generate": "node scripts/harnesses.mjs",
+    "harness:check": "node scripts/harnesses.mjs --check",
     "check:profiles": "node scripts/check-profiles.mjs",
     "test": "node --test --test-isolation=none tests/*.test.mjs",
     "format": "prettier --write .",

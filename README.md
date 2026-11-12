@@ -1,7 +1,8 @@
 # GRAIT
 
-**GitHub Repository for AI Tooling**
+**GitHub Repository for AI Tooling** <!-- markdownlint-disable-line MD036 -->
 
+<!-- prettier-ignore -->
 *Great engineering, augmented by AI.*
 
 An opinionated, GitHub-native foundation for AI-augmented software engineering.
@@ -29,17 +30,20 @@ GRAIT is built around a few principles:
 
 GRAIT brings together the building blocks of an AI-augmented engineering workflow.
 
-| Component | Purpose |
-|---|---|
-| `AGENTS.md` | Shared instructions, engineering principles, and expectations for coding agents |
-| Agent configurations | Opinionated defaults for agent behavior, models, permissions, and execution |
-| Skills | Reusable instructions for specialized development tasks |
-| Agent definitions | Specialized agents with clearly defined responsibilities |
-| Codex configuration | Defaults for Codex CLI/TUI and agent execution |
-| GitHub Actions | CI/CD checks and repository automation |
-| GitHub Agentic Workflows | AI-powered GitHub automation using `gh-aw` |
+| Component                                                                        | Purpose                                                                                                                                                              |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`AGENTS.md`](AGENTS.md) and [engineering guidelines](docs/coding-guidelines.md) | Shared instructions, engineering principles, and expectations for coding agents                                                                                      |
+| [Agent configurations](workflow.config.json)                                     | Selectable Codex, Claude, or Copilot engine, authentication mode, write scopes, and workflow limits                                                                  |
+| [Skills](docs/agents.md)                                                         | Reusable `grait-triage`, `grait-implement`, `grait-review`, and `grait-fix` skills, generated for each harness from `automation/skills/`                             |
+| [Agent definitions](automation/agents.json)                                      | Matching native roles in `.codex/agents/`, `.claude/agents/`, and `.github/agents/`, inheriting harness models and permissions                                       |
+| [Codex configuration](config/codex.toml)                                         | Matching `.codex/config.toml` with model, reasoning, approval, sandbox, and CLI/TUI defaults                                                                         |
+| [GitHub Actions](.github/workflows/ci.yml)                                       | Node.js 24 template validation, dependency maintenance, and [operator-triggered releases](.github/workflows/release.yml); application deployment is project-specific |
+| [GitHub Agentic Workflows](docs/architecture.md)                                 | Controller-authorized triage, implementation, PR review, and follow-up fixes using `gh-aw`                                                                           |
+| [Project workflow](docs/workflow.md)                                             | Five Kanban statuses, native blocking dependencies, and a project-wide limit of five In Progress stories                                                             |
+| [PR review and fixes](docs/review-guidelines.md)                                 | Reviews run in GitHub Actions and publish inline findings and formal decisions in the PR UI; fixes stop on conflicts, reversals, repeated blockers, or ten rounds    |
+| [Contribution guidance](CONTRIBUTING.md) and [security policy](SECURITY.md)      | Issue/PR templates, human ownership and squash-merge gates, credential boundaries, and setup guidance                                                                |
 
-The configurations are intentionally opinionated but can be adapted to individual project requirements.
+The configurations are intentionally opinionated but can be adapted to individual project requirements. See [setup](docs/setup.md) and [operations](docs/operations.md) before enabling automation.
 
 ## Getting Started
 
@@ -83,7 +87,7 @@ GRAIT intentionally relies on GitHub-native capabilities, including GitHub Actio
 
 **Coding agents:** Initially optimized for OpenAI Codex.
 
-Support for additional coding agents may be introduced without compromising the underlying engineering principles.
+Claude and GitHub Copilot are also selectable engines and have matching skill and agent adapters, sharing the same engineering principles and workflow policies.
 
 ## What GRAIT Is Not
 

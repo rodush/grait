@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { stringify } from "yaml";
 import { parse as parseToml } from "smol-toml";
 import { validateConfig } from "./lib/policy.mjs";
+import { readSkill } from "./lib/harnesses.mjs";
 
 const root = resolve(import.meta.dirname, "..");
 const execute = promisify(execFile);
@@ -104,6 +105,12 @@ const sharedDocuments = {
   "policy-review.md": "docs/review-guidelines.md",
   ...Object.fromEntries(
     ["triage", "implement", "review", "fix"].map((role) => [
+      `skill-grait-${role}.md`,
+      `automation/skills/grait-${role}/SKILL.md`,
+    ]),
+  ),
+  ...Object.fromEntries(
+    ["triage", "implement", "review", "fix"].map((role) => [
       `prompt-${role}.md`,
       `automation/prompts/${role}.md`,
     ]),
@@ -120,9 +127,13 @@ async function compile(directory) {
     );
   }
   for (const [name, source] of Object.entries(sharedDocuments)) {
+    const original = await readFile(join(directory, source), "utf8");
+    const content = source.endsWith("/SKILL.md")
+      ? readSkill(original, source.split("/").at(-2)).body
+      : original;
     await writeFile(
       join(shared, name),
-      `<!-- Generated from ${source}; edit the source and run npm run compile. -->\n\n${await readFile(join(directory, source), "utf8")}`,
+      `<!-- Generated from ${source}; edit the source and run npm run compile. -->\n\n${content}`,
     );
   }
   try {

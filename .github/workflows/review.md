@@ -38,6 +38,7 @@ imports:
   - shared/policy-coding.md
   - shared/policy-review.md
   - shared/prompt-review.md
+  - shared/skill-grait-review.md
 checkout: false
 tools:
   bash: false
