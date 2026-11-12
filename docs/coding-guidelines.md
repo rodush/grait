@@ -7,7 +7,7 @@ These rules apply across programming languages. Add stack-specific rules beside 
 - Implement the issue's acceptance criteria. Raise missing requirements before inventing product behavior.
 - Keep modules focused and interfaces explicit. Prefer the simplest design that handles the known requirements.
 - Reuse existing code and dependencies when appropriate. Introduce an abstraction when it removes real duplication or isolates a meaningful boundary.
-- Keep unrelated refactors out of functional changes. Preserve public behavior unless the issue authorizes changing it.
+- Keep unrelated refactors out of functional changes, unless refactoring is needed to simplify current codebase, or to account for new functionality.  Preserve public behavior unless the issue authorizes changing it.
 - Handle invalid input, empty states, resource lifetimes, concurrency, and failure paths deliberately.
 
 ## Readability and consistency
