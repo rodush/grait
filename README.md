@@ -43,6 +43,8 @@ GRAIT brings together the building blocks of an AI-augmented engineering workflo
 | [PR review and fixes](docs/review-guidelines.md)                                 | Reviews run in GitHub Actions and publish inline findings and formal decisions in the PR UI; fixes stop on conflicts, reversals, repeated blockers, or ten rounds    |
 | [Contribution guidance](CONTRIBUTING.md) and [security policy](SECURITY.md)      | Issue/PR templates, human ownership and squash-merge gates, credential boundaries, and setup guidance                                                                |
 
+GRAIT uses **Node.js 24 and npm for repository automation**: the Project controller, setup/release scripts, tests, formatting, and Markdown linting. GitHub Actions provisions Node.js for hosted workflows. Contributors maintaining this tooling need it locally; the application you build can use any language and its own build tools. See the [tooling guide and command reference](docs/setup.md#repository-tooling-runtime).
+
 The configurations are intentionally opinionated but can be adapted to individual project requirements. See [setup](docs/setup.md) and [operations](docs/operations.md) before enabling automation.
 
 ## Getting Started

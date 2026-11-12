@@ -1,5 +1,27 @@
 # Adopt the template
 
+## Repository tooling runtime
+
+Node.js 24 runs GRAIT's JavaScript scripts under `scripts/`: Project coordination, dependency and review-loop policy, bootstrap, activation, and releases. npm installs their locked dependencies and provides the formatter and Markdown linter. These are development and automation dependencies; application code may use Python, Go, Rust, or any other stack with separate install, build, test, and run commands.
+
+GitHub Actions installs Node.js on hosted runners. Install Node.js 24 and npm locally when adopting the template, changing automation, regenerating workflows, or running template checks. Merely opening issues, reviewing PRs, or using the Project board requires no local Node.js installation. There is no application server or `npm start` command in this template.
+
+Run the following from the repository root after installing the prerequisites below:
+
+| Command                                   | When to use it                                                                                                                                                                  |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm ci`                                  | Install the exact tooling dependencies from `package-lock.json` after cloning or a lockfile update.                                                                             |
+| `npm run check`                           | Validate configuration, workflow boundaries, local documentation links, and generated harness adapters.                                                                         |
+| `npm test`                                | Run deterministic controller, policy, API, and security tests without live GitHub credentials.                                                                                  |
+| `npm run format` / `npm run format:check` | Apply formatting or check it without changing files.                                                                                                                            |
+| `npm run lint:md`                         | Check Markdown conventions.                                                                                                                                                     |
+| `npm run harness:generate`                | Regenerate native skills and agent definitions after editing their canonical sources.                                                                                           |
+| `npm run compile`                         | Regenerate gh-aw workflow lockfiles and shared policy copies after changing workflow sources, imported policies, or engine configuration; requires the pinned `gh aw` compiler. |
+| `npm run compile -- --check`              | Verify generated workflow files match their sources without modifying the checkout.                                                                                             |
+| `npm run check:profiles`                  | Compile all six engine/authentication profiles in temporary directories.                                                                                                        |
+
+The bootstrap and activation commands later in this guide change GitHub configuration and require operator credentials. Normal template tests do not invoke them. Commit source changes together with regenerated files. CI runs the template checks automatically; add your application's own checks when choosing its stack.
+
 ## Prerequisites and local harnesses
 
 Before sharing the starter, its repository owner enables **Template repository** in Settings → General. A derived application repository does not need that setting.
