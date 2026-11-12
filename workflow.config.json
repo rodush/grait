@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "ghAwVersion": "0.88.7",
+  "ghAwActionsSha": "5e508589e03a7757a7e05b26e834292f5445bfb6",
+  "engine": "codex",
+  "authentication": "app",
+  "supportedEngines": ["codex", "claude", "copilot"],
+  "statuses": {
+    "backlog": "Backlog",
+    "ready": "Ready",
+    "inProgress": "In Progress",
+    "review": "Review",
+    "done": "Done"
+  },
+  "maxInProgress": 5,
+  "maxReviewRounds": 10,
+  "maxRepeatedBlockingReviews": 3,
+  "controllerRepository": null,
+  "humanOperators": [],
+  "allowedWritePaths": ["src/**", "tests/**", "assets/**", "docs/project/**"],
+  "protectedPaths": [
+    ".github/",
+    "scripts/",
+    "automation/",
+    "config/",
+    "docs/coding-guidelines.md",
+    "docs/workflow.md",
+    "docs/review-guidelines.md",
+    "docs/setup.md",
+    "docs/operations.md",
+    "docs/architecture.md",
+    "docs/decisions.md",
+    "SECURITY.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "workflow.config.json",
+    "package.json",
+    "package-lock.json"
+  ],
+  "labels": {
+    "automated": "agent:managed",
+    "paused": "agent:paused",
+    "needsHuman": "agent:needs-human"
+  }
+}

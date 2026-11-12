@@ -147,3 +147,11 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# GRAIT template tooling and local credentials
+.codex/*
+!.codex/config.toml
+coverage/
+*.pem
+*.key
+.DS_Store

@@ -1,0 +1,9 @@
+node_modules/
+.git/
+.aws/
+.codex/
+.agents/
+.github/workflows/*.lock.yml
+.github/workflows/shared/*.md
+!.github/workflows/shared/authorize.md
+package-lock.json

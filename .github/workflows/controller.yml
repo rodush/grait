@@ -1,0 +1,59 @@
+name: Project controller
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  issues:
+    types: [opened, edited, reopened, closed]
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, edited]
+  workflow_run:
+    workflows: [Agent triage, Agent implementation, Agent PR review, Agent fixes]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      task:
+        type: choice
+        options: [reconcile, claim-local, resume, triage]
+        default: reconcile
+      number:
+        type: string
+        description: Issue or PR number for an operator task
+permissions:
+  contents: read
+concurrency:
+  group: project-controller-${{ vars.PROJECT_ID || github.repository }}
+  cancel-in-progress: false
+  queue: max
+jobs:
+  coordinate:
+    if: vars.AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Always use trusted default-branch code, including for public fork events.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Read authentication mode
+        id: config
+        run: node -e 'const fs=require("node:fs"); const c=JSON.parse(fs.readFileSync("workflow.config.json")); if (!["app","token"].includes(c.authentication)) process.exit(1); fs.appendFileSync(process.env.GITHUB_OUTPUT, `mode=${c.authentication}\n`);'
+      - uses: ./.github/actions/auth
+        id: auth
+        with:
+          mode: ${{ steps.config.outputs.mode }}
+          client-id: ${{ vars.AUTOMATION_APP_CLIENT_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+          token: ${{ secrets.AUTOMATION_TOKEN }}
+      - name: Reconcile work and review queues
+        env:
+          AUTOMATION_ENABLED: ${{ vars.AUTOMATION_ENABLED }}
+          AUTOMATION_TOKEN: ${{ steps.auth.outputs.token }}
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN || steps.auth.outputs.token }}
+          PROJECT_ID: ${{ vars.PROJECT_ID }}
+          AUTOMATION_LOGIN: ${{ vars.AUTOMATION_LOGIN }}
+          REVIEW_LOGIN: ${{ vars.REVIEW_LOGIN }}
+        run: node scripts/controller.mjs
