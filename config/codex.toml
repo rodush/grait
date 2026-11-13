@@ -1,0 +1,9 @@
+# Reference: https://github.com/rodush/expense-tracker/pull/86
+# Install as .codex/config.toml in a derived repository.
+model = "gpt-6.1-sol"
+model_reasoning_effort = "high"
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
+
+[tui]
+terminal_title = ["activity", "project-name", "run-state", "five-hour-limit", "context-remaining", "model-with-reasoning"]

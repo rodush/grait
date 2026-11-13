@@ -1,0 +1,36 @@
+{
+  "name": "grait",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/rodush/grait.git"
+  },
+  "description": "Language-neutral GitHub template for AI-augmented software development",
+  "type": "module",
+  "engines": {
+    "node": ">=24",
+    "npm": ">=11.10.0"
+  },
+  "scripts": {
+    "check": "node scripts/check.mjs && node scripts/harnesses.mjs --check",
+    "harness:generate": "node scripts/harnesses.mjs",
+    "harness:check": "node scripts/harnesses.mjs --check",
+    "check:profiles": "node scripts/check-profiles.mjs",
+    "test": "node --test --test-isolation=none tests/*.test.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint:md": "markdownlint-cli2",
+    "compile": "node scripts/compile.mjs",
+    "bootstrap": "node scripts/bootstrap.mjs",
+    "activate": "node scripts/activate.mjs"
+  },
+  "devDependencies": {
+    "markdownlint-cli2": "0.24.0",
+    "prettier": "3.9.10",
+    "smol-toml": "1.9.1",
+    "yaml": "2.9.1"
+  },
+  "packageManager": "npm@12.2.2"
+}

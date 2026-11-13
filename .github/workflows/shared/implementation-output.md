@@ -1,0 +1,50 @@
+---
+safe-outputs:
+  create-pull-request:
+    max: 1
+    draft: false
+    branch-prefix: agent/
+    preserve-branch-name: true
+    labels:
+      - agent:managed
+    allowed-files:
+      - src/**
+      - tests/**
+      - assets/**
+      - docs/project/**
+    excluded-files:
+      - tests/**
+      - "**/test_*.py"
+      - "**/*.spec.py"
+      - "**/*.test.*"
+      - .github/**
+      - .agents/**
+      - .codex/**
+      - .claude/**
+      - scripts/**
+      - automation/**
+      - config/**
+      - docs/coding-guidelines.md
+      - docs/workflow.md
+      - docs/review-guidelines.md
+      - docs/setup.md
+      - docs/operations.md
+      - docs/architecture.md
+      - docs/decisions.md
+      - docs/agents.md
+      - SECURITY.md
+      - AGENTS.md
+      - CLAUDE.md
+      - workflow.config.json
+      - package.json
+      - package-lock.json
+      - .npmrc
+      - docs/worktrees.md
+      - docs/tdd.md
+    protected-files: blocked
+    fallback-as-issue: false
+    auto-merge: false
+    github-token-for-extra-empty-commit: app
+---
+
+Generated from workflow.config.json by scripts/compile.mjs.

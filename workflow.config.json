@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "ghAwVersion": "1.2.2",
+  "ghAwActionsSha": "53d0749e19424a918acd82b4d140264ce48f2f14",
+  "engine": "codex",
+  "authentication": "app",
+  "supportedEngines": ["codex", "claude", "copilot"],
+  "statuses": {
+    "backlog": "Backlog",
+    "ready": "Ready",
+    "inProgress": "In Progress",
+    "review": "Review",
+    "done": "Done"
+  },
+  "maxInProgress": 5,
+  "maxReviewRounds": 10,
+  "maxRepeatedBlockingReviews": 3,
+  "controllerRepository": null,
+  "humanOperators": [],
+  "allowedWritePaths": ["src/**", "tests/**", "assets/**", "docs/project/**"],
+  "protectedPaths": [
+    ".github/",
+    ".agents/",
+    ".codex/",
+    ".claude/",
+    "scripts/",
+    "automation/",
+    "config/",
+    "docs/coding-guidelines.md",
+    "docs/workflow.md",
+    "docs/review-guidelines.md",
+    "docs/setup.md",
+    "docs/operations.md",
+    "docs/architecture.md",
+    "docs/decisions.md",
+    "docs/agents.md",
+    "SECURITY.md",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "workflow.config.json",
+    "package.json",
+    "package-lock.json",
+    ".npmrc",
+    "docs/worktrees.md",
+    "docs/tdd.md"
+  ],
+  "labels": {
+    "automated": "agent:managed",
+    "paused": "agent:paused",
+    "needsHuman": "agent:needs-human",
+    "admitted": "agent:admitted"
+  },
+  "engineVersions": {
+    "codex": "0.167.0",
+    "claude": "2.1.319",
+    "copilot": "1.0.107"
+  },
+  "budget": {
+    "maxConcurrent": 5,
+    "dailyCredits": 28000,
+    "agentCredits": 1000,
+    "detectionCredits": 400
+  },
+  "tdd": {
+    "implementationPaths": ["src/**", "tests/**", "assets/**", "docs/project/**"],
+    "profiles": {
+      "tester": {
+        "model": null,
+        "reasoning": null
+      },
+      "implementer": {
+        "model": null,
+        "reasoning": null
+      }
+    },
+    "runner": {
+      "image": "ghcr.io/github/gh-aw-node@sha256:8735428c2d4e602f90781ba0c571c400e8ff93c7ee1508a75d71f87e34e415cc",
+      "install": ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+      "command": ["node", "{nodeAdapter}", "tests/*.test.mjs"]
+    },
+    "testPatterns": ["tests/**", "**/test_*.py", "**/*.spec.py", "**/*.test.*"]
+  }
+}

@@ -1,0 +1,45 @@
+name: Operator release
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        type: string
+        required: true
+        description: Release tag, for example v1.2.3
+permissions:
+  contents: read
+concurrency:
+  group: operator-release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+      - name: Read authentication mode
+        id: config
+        run: node -e 'const fs=require("node:fs"); const c=JSON.parse(fs.readFileSync("workflow.config.json")); if (!["app","token"].includes(c.authentication)) process.exit(1); fs.appendFileSync(process.env.GITHUB_OUTPUT, `mode=${c.authentication}\n`);'
+      - uses: ./.github/actions/auth
+        id: auth
+        with:
+          mode: ${{ steps.config.outputs.mode }}
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          token: ${{ secrets.RELEASE_TOKEN }}
+      - name: Publish the operator-requested version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_CREDENTIAL: ${{ steps.auth.outputs.token }}
+        run: node scripts/release.mjs

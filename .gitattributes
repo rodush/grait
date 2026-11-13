@@ -1,0 +1,11 @@
+* text=auto eol=lf
+.github/workflows/*.lock.yml linguist-generated=true
+.github/workflows/shared/*.md linguist-generated=true
+.github/workflows/shared/authorize.md linguist-generated=false
+package-lock.json linguist-generated=true
+.agents/skills/grait-*/SKILL.md linguist-generated=true
+.claude/skills/grait-*/SKILL.md linguist-generated=true
+.github/skills/grait-*/SKILL.md linguist-generated=true
+.codex/agents/grait-*.toml linguist-generated=true
+.claude/agents/grait-*.md linguist-generated=true
+.github/agents/grait-*.agent.md linguist-generated=true

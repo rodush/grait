@@ -1,0 +1,44 @@
+name: Template CI
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: template-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+env:
+  NPM_CONFIG_MIN_RELEASE_AGE: "3"
+jobs:
+  validate:
+    name: Template validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm install --global npm@12.2.2 --ignore-scripts --min-release-age=3
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npm run check
+      - run: npm test
+      - run: npm run format:check
+      - run: npm run lint:md
+      - name: Install pinned gh-aw compiler
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh extension install github/gh-aw --pin v1.2.2
+      - name: Check compiled workflow drift
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run compile -- --check
+      - name: Compile all engine and authentication profiles
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run check:profiles

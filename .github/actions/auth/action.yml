@@ -1,0 +1,47 @@
+name: Automation authentication
+description: Select a short-lived GitHub App token or an operator-supplied token
+inputs:
+  mode:
+    description: app or token
+    required: true
+  client-id:
+    description: GitHub App client ID
+    required: false
+  private-key:
+    description: GitHub App private key
+    required: false
+  token:
+    description: Supplied token when mode is token
+    required: false
+outputs:
+  token:
+    description: Selected authentication token
+    value: ${{ steps.app.outputs.token || inputs.token }}
+runs:
+  using: composite
+  steps:
+    - name: Validate authentication configuration
+      shell: bash
+      env:
+        AUTH_MODE: ${{ inputs.mode }}
+        APP_CLIENT_ID: ${{ inputs.client-id }}
+        APP_PRIVATE_KEY: ${{ inputs.private-key }}
+        SUPPLIED_TOKEN: ${{ inputs.token }}
+      run: |
+        if [ "$AUTH_MODE" = app ]; then
+          test -n "$APP_CLIENT_ID" && test -n "$APP_PRIVATE_KEY"
+        elif [ "$AUTH_MODE" = token ]; then
+          test -n "$SUPPLIED_TOKEN"
+        else
+          echo 'Select app or token authentication.' >&2
+          exit 1
+        fi
+    - name: Mint installation token
+      id: app
+      if: inputs.mode == 'app'
+      uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
+      with:
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ github.repository_owner }}
+        repositories: ${{ github.event.repository.name }}
