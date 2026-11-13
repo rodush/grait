@@ -1,41 +1,31 @@
 # Architecture
 
-## Shared policy and engine adapters
+## Execution and subscriptions
 
-`AGENTS.md`, `docs/`, and `automation/prompts/` are canonical. Harness adapters reference them. `scripts/compile.mjs` generates shared Markdown under `.github/workflows/shared/` because gh-aw imports are confined to `.github`, then compiles the four agent workflows into executable `.lock.yml` files. The source and generated files are committed together; CI checks drift.
+The user owns the runtime host. A native Codex CLI or Claude Code session acts as the orchestrator and controls specialist sub-agents. Their files, processes, commands, and worktrees remain on that host, or on a user-owned remote host. Inference uses the provider service through the official client's own subscription login. GRAIT does not proxy provider login tokens or call an LLM API itself.
 
-`workflow.config.json` selects the engine, authentication mode, write paths, statuses, and hard limits. `config/codex.toml` supplies the local Codex settings and hosted model/reasoning defaults. The compiler uses CLI configuration arguments for hosted reasoning because the pinned compiler's inline TOML rendering does not produce valid YAML for that setting.
+GitHub stores issues, native blocking relationships, the Project, branches, PRs, formal reviews, and visible state comments. Actions runs deterministic validation and optional operator releases. No model credentials or agent jobs are required there.
 
-## Controller and persistence
+## Canonical policy and adapters
 
-Compilation removes only redundant action comments that repeat the exact pinned SHA; gh-aw's cache can add those display labels on one machine but omit them on another. The drift check still compares the complete generated code, security manifest, permissions, and action pins.
+`AGENTS.md`, `docs/`, `automation/skills/`, and `automation/agents.json` are canonical. `scripts/harnesses.mjs` generates Codex and Claude discovery files. CI checks drift. `workflow.config.json` declares local execution, the selected harness, scoped writes, role profiles, and hard limits. `config/codex.toml` supplies the canonical native Codex defaults. There are no workflow compilation steps or generated Actions locks.
 
-Canonical skills in `automation/skills/` and role metadata in `automation/agents.json` also generate native Codex, Claude Code, and Copilot adapters. `npm run check` checks those copies for drift. Hosted workflows import the same skill bodies, while their runner-specific input and output contracts remain in `automation/prompts/`. See [skills and agents](agents.md) for the directory map and review-routing boundary.
+## Deterministic local operations
 
-The deterministic Actions controller polls every five minutes and responds to issue, PR, and workflow-completion events. All instances share a repository-scoped concurrency group. The project description binds the board to one controller repository; a conflicting binding stops execution. This baseline schedules its own repository's stories and counts In Progress stories across the entire project.
+The orchestrator uses `scripts/orchestrator.mjs` for readiness, claiming, worktree preparation, review publishing, and Project synchronization. These commands call deterministic GitHub helpers; they never make model requests. The native parent session decides how to delegate authorized work.
 
-Controller state is stored in a visible comment on each issue and PR. State includes triage digests, operation IDs, pending work, reviewed head SHAs, stable findings, patch fingerprints, and stop reasons. Only comments from the configured writer identity are accepted. Duplicate ledgers or malformed data stop automatic work.
+Readiness is bound to the current issue digest and native dependency set. Claims count all Project stories, including other repositories and inaccessible active items. Only one designated repository/host coordinates a Project. Local commands acquire an exclusive lock in shared Git metadata before loading/mutating remote state. This does not provide a distributed lock across clones or machines; multi-host scheduling requires a future coordination service.
 
-A claim changes Project Status before dispatch. Dispatch intent is persisted before contacting the API. An uncertain dispatch is paused for inspection rather than retried blindly. Each dispatched workflow independently validates its operation against the ledger before an agent starts. Scheduled reconciliation handles events lost through queue replacement or workflow-chain limits.
+Writer-authenticated issue/PR comments hold accepted readiness, claims, review history, and stop reasons. Duplicate or malformed trusted state fails closed. Intent is persisted before uncertain external writes; retries cannot silently reset a loop. Legacy `controllerRepository`, `[agent-controller:...]`, and ledger markers remain readable so existing identity/binding evidence can be preserved.
 
-## Review and fix boundaries
+## Worktrees and ownership
 
-The reviewer has no shell or contributor checkout. It reads GitHub content with a read-only token and emits inline comments and a formal review through reviewer-authenticated safe outputs. The controller checks metadata against the publisher, operation ID, round, GitHub review state, and commit ID before updating the `Agent review` commit status.
+The parent has its own checkout. Each issue has a worktree/branch. Tester and implementer take sequential exclusive ownership of that same worktree at exact committed handoffs; unrelated work and review use separate worktrees. Independent validation checks Red/Green and role-scoped diffs. Native role prompts constrain test visibility; they are not an OS confidentiality boundary. See [TDD](tdd.md) and [worktrees](worktrees.md).
 
-The writer runs code and tests inside gh-aw's sandbox. Its write credential is used only by safe-output jobs. Allowed paths constrain changes; protected policy and automation files are blocked. Application CI executes PR code with a read-only token and no repository secrets. Public fork PRs use the same API-based hosted review, but their branches are never pushed to automatically.
+## Credentials and human authority
 
-## Human authority
+GitHub Apps separate writer and reviewer publishing identities. Setup's temporary loopback server performs state-checked manifest registration and installation verification. Keys are saved privately in Git metadata on the host; publishing tools mint short-lived repository-scoped tokens. No model or publishing credentials are installed in CI by the default setup. The human's host-side GitHub authorization manages the Project separately.
 
-Two independent rulesets enforce delivery checks and human merge authority. Only named human users may update the default branch through a PR, and they cannot bypass the independent checks and human code-owner approval. There is no agent merge safe output or automatic release path. A release requires a configured human operator, successful default-branch CI, and the release environment's approval.
+Worktrees and local files do not prevent arbitrary processes owned by the same OS user from accessing keys. Keep untrusted execution in isolated users/containers and do not run PR code in the credentialed reviewer session. Deterministic CI runs PR code with read-only GitHub permissions and no publishing secrets.
 
-## Operational limits
-
-The controller cannot prevent a project administrator from manually exceeding WIP. Restrict direct status changes and route all claims through the controller. One controller per project is essential; copying the scheduler into several repositories does not create a cross-repository lock. Scope this baseline to one repository's automatic dispatches, or extend the central controller before automating more repositories on the same board.
-
-Local agents must wait for a confirmed claim and honor pause state. Hosted sandboxing, GitHub rules, and credentials provide technical boundaries; prose instructions alone do not constrain an independently configured local harness.
-
-## Security boundaries
-
-Admission is deterministic and precedes triage/review, including scheduled reconciliation. The controller serializes budget reservations in a dedicated issue ledger before any dispatch. Authorizers check the active reservation and controller identity; generated jobs independently reject reruns so partial reruns cannot reuse a reservation. Uncertain dispatches fail closed. See [operations](operations.md) for recovery.
-
-Release credentials live in a protected environment, separate from writer/reviewer credentials. Default-branch CI is verified with a read-only job token. The release credential creates a new tag only; separate creation and immutable-tag rules prevent writers from planting a tag or anyone from moving it during publication.
+Independent branch rules require passing CI, current agent review, and human code-owner approval. Only configured humans may update the default branch through a PR, without bypassing the delivery rules. Agents never merge or release. Optional release credentials live in a separate protected environment and do not participate in AI execution.

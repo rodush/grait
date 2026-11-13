@@ -1,37 +1,44 @@
 [
   {
+    "role": "orchestrator",
+    "name": "grait-orchestrator",
+    "description": "Manage the local Project queue, delegate specialist sub-agents into worktrees, and coordinate delivery through GitHub PRs.",
+    "skill": "grait-orchestrator",
+    "execution": "local"
+  },
+  {
     "role": "triage",
     "name": "grait-triage",
     "description": "Clarify a GitHub issue, its acceptance criteria, and blocking dependencies before implementation.",
     "skill": "grait-triage",
-    "execution": "local-and-hosted"
+    "execution": "local"
   },
   {
     "role": "test",
     "name": "grait-test",
     "description": "Write acceptance tests first and hand verified Red tests to the implementer without changing implementation.",
     "skill": "grait-test",
-    "execution": "local-and-hosted"
+    "execution": "local"
   },
   {
     "role": "implement",
     "name": "grait-implement",
     "description": "Implement an already claimed project issue and prepare an issue-linked PR with validation evidence.",
     "skill": "grait-implement",
-    "execution": "local-and-hosted"
+    "execution": "local"
   },
   {
     "role": "review",
     "name": "grait-review",
-    "description": "Run PR evaluation in the authorized GitHub Actions workflow; local invocations request or inspect that hosted review.",
+    "description": "Review the exact PR revision in the user harness and publish inline findings and a formal GitHub review with the reviewer identity.",
     "skill": "grait-review",
-    "execution": "hosted-review"
+    "execution": "local"
   },
   {
     "role": "fix",
     "name": "grait-fix",
-    "description": "Address hosted PR findings while honoring the controller's fix budget, pause state, and redesign capacity.",
+    "description": "Address PR findings within the existing issue claim and bounded local review loop.",
     "skill": "grait-fix",
-    "execution": "local-and-hosted"
+    "execution": "local"
   }
 ]

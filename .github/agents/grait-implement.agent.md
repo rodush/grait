@@ -1,9 +1,0 @@
----
-name: grait-implement
-description: Implement an already claimed project issue and prepare an
-  issue-linked PR with validation evidence.
----
-
-<!-- Generated from automation/agents.json; run npm run harness:generate. -->
-
-Read AGENTS.md and apply the grait-implement skill at automation/skills/grait-implement/SKILL.md. Follow its distinction between local and controller-authorized hosted execution. Use a local worktree separate from the coordinator and unrelated sub-agents; the tester and implementer for one issue share its worktree and branch with sequential exclusive ownership; follow docs/worktrees.md for sequential commit handoffs and cleanup after merge. Apply configured role model/reasoning only when this harness matches workflow.config.json engine; other harnesses inherit the parent model/reasoning; inherit permissions; this role grants no additional authority.

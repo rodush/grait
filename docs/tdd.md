@@ -1,72 +1,55 @@
-# Tester-first development
+# Tester-first local development
 
-## Roles and ownership
+## Ownership and evidence
 
-A testable Ready issue starts with the **tester**, followed by an independent hosted Red check, the **implementer**, and an independent hosted Green check. Only then does the controller make the draft PR ready for hosted review. The tester writes acceptance tests and never implementation. The implementer writes implementation and never tests, including deletions and renames. A separate reviewer evaluates the resulting PR; the tester is not the PR reviewer.
+A testable issue follows **tester → independent Red verification → implementer → independent Green verification → reviewer**. Every AI role runs in the user's harness. A deterministic local verifier executes committed snapshots; GitHub CI remains a separate required delivery check.
 
-The coordinator has its own worktree. The tester and implementer for one issue share that issue’s worktree and branch sequentially, with one owner at a time. Hosted runners are ephemeral, so each job instead checks out the exact committed handoff SHA from that same branch. Follow `docs/worktrees.md` for assignment and cleanup.
+The tester alone creates/edits/deletes/renames configured test files. The implementer alone changes production paths and treats test source, fixtures, and assertion internals as a black box. Both use the SAME issue worktree/branch sequentially at exact committed handoffs. The orchestrator owns an independent checkout and authorizes the next role only after verified evidence. See [worktrees](worktrees.md).
 
-## Configure classification and role models
+## Configure the application runner
 
-`workflow.config.json` defines:
+`workflow.config.json` defines `allowedWritePaths`, `protectedPaths`, `tdd.testPatterns`, `tdd.implementationPaths`, and independent `tdd.profiles` for tester/implementer model/reasoning. Glob patterns allow collocated tests and take precedence over production scopes. Renames/deletions are writes to both affected paths; neither role may cross the other's boundary or protected automation policy.
 
-- `tdd.testPatterns`: explicit glob patterns with test precedence, initially `tests/**`, `**/test_*.py`, `**/*.spec.py`, and `**/*.test.*`. Tests may be collocated with implementation.
-- `tdd.implementationPaths`: outer implementation scopes, still bounded by `allowedWritePaths`. A matching test file is excluded even when it lies inside an implementation scope.
-- `tdd.profiles.tester` and `.implementer`: independent `model` and `reasoning` overrides. `null` inherits defaults. The selected engine remains the repository’s engine; use models supported by that engine. Hosted `TESTER_MODEL` and `IMPLEMENTER_MODEL` variables may override the inherited `AGENT_MODEL` when the profile has no explicit model. Codex uses its reasoning setting; Claude/Copilot use the engine’s effort option. Native definitions receive supported model settings only for the selected repository engine; other harness adapters inherit their parent settings, avoiding cross-provider model names; reasoning is enforced by the hosted profile and must be configured in the local harness when that harness does not expose a role-level reasoning field.
+`tdd.runner.install` and `.command` are explicit argument arrays for the application's local test runner. The default is `npm ci --ignore-scripts --no-audit --no-fund`, then `node {nodeAdapter} tests/*.test.mjs`. `{nodeAdapter}` resolves to the trusted Node JSON adapter. Other stacks supply an adapter emitting the same report: `passed` IDs, `failed` entries with stable `id`/`kind`, and `infrastructureErrors`. Use repository-relative identities without temporary paths or line numbers. No container image or hosted model credential is required.
 
-Tester safe-output allowlists intersect patterns with allowed scopes; implementation safe outputs exclude all test patterns. The controller independently validates every handoff diff, including both sides of renames. For safe compilation, a pattern must either start with `**/` or have a literal prefix within an allowed `directory/**` scope. Ambiguous intersections are rejected rather than widening access. Exact allowed files are supported. Protected policy and automation remain outside both roles’ authority.
+The verifier archives baseline and candidate commits into disposable directories, strips process credentials, assigns a disposable HOME, installs dependencies with scripts disabled, and runs the configured command. This is process hygiene, not an OS sandbox: arbitrary test code still runs as the user. Use an isolated user/container/host for untrusted execution. Private dependencies may need a deliberate read-only dependency credential mechanism; do not expose publishing/model credentials to tests.
 
-Run `npm run harness:generate` and `npm run compile -- --approve` after changing role settings or scopes. Commit sources and generated files together. Role model/reasoning settings grant no additional permissions.
+## Red and Green handoff
 
-## Runner contract and evidence
-
-`tdd.runner` selects an immutable digest-pinned container, an optional install command array, and a test command array. No shell interpolation is used. The supplied reference adapter runs Node’s tests and emits JSON; application projects may configure another language’s image and adapter. A missing command or unpinned image stops testable work; it is not grounds for exemption.
-
-The command must emit exactly one JSON object on stdout:
+Prepare the issue worktree using the orchestrator. The initial accepted head is the known baseline. The tester commits acceptance tests and writes the expected failing IDs to a JSON file outside the worktree, for example `/tmp/expected-tests.json`:
 
 ```json
-{
-  "passed": ["stable test identity"],
-  "failed": [{ "id": "new acceptance identity", "kind": "assertion" }],
-  "infrastructureErrors": []
-}
+["tests/acceptance.test.mjs::accepted behavior"]
 ```
 
-IDs must be unique, stable across line movement, and must not occur in both arrays. The Node adapter uses repository-relative file/suite/name identities and excludes skipped or TODO tests from passing evidence. Its `{nodeAdapter}` command argument points at the trusted adapter. `{reporter}` is available for custom Node commands. The install step and test adapter run in a disposable container with only source/trusted read-only mounts, writable temporary storage, restricted capabilities, resource/time bounds, and no GitHub/model credentials or Docker socket.
-
-For **Red**, the baseline suite passes (a successful explicitly empty baseline is allowed before the first tests exist); the candidate fails exactly the tester-named new acceptance tests as assertion failures. Syntax/import/install errors, unrelated regressions, and timeouts stop the handoff. For **Green**, the baseline must reproduce accepted Red, and the candidate must execute and pass the complete suite, including every accepted failing test. The independent verifier validates the baseline’s expected state, not an agent’s claim of success.
-
-A separate publisher job stores bounded proof. The controller checks the exact dispatched workflow, actor, attempt, operation, issue digest, baseline/head SHA, run ID, and unique artifact integrity before transferring ownership. A check name, comment, or locally reported success cannot authorize implementation or review. Agent jobs and verifier jobs reject Actions reruns; request a new controller operation after investigating a failure.
-
-## Test revisions and follow-up fixes
-
-An implementer that finds an incorrect or missing test returns ownership to the tester with `tests-needed` and a concrete reason. It never repairs tests itself. The tester receives the implementer’s committed head; the next Red check compares against the last known Green baseline. A cycle permits at most ten TDD iterations (the initial iteration plus nine handbacks). Review findings start a new tester → Red → implementer → Green cycle on the same PR. Follow-up work stays Review, unless the review explicitly requires a rethink and the controller reserves In Progress capacity. Existing ten-review-round and early-stop rules still apply.
-
-Triage must record `tdd: {required: true, reason: null}` for testable work. It may explicitly exempt untestable work with `required: false` and a concrete reason. That exemption binds the current issue digest and does not permit an implementer to edit tests. Changed requirements invalidate the decision. Protected work still needs human handling.
-
-## Local handoffs
-
-Request `claim-local` through the controller. For a testable issue, the claim assigns the tester first and records the exact starting SHA. Create one `agent/issue-N` branch in the pair’s shared issue worktree at that SHA. The claim’s configured human operator owns local handoffs; the same actor must submit them. Push committed changes to that same branch and create a draft issue-linked PR with the `agent:managed` label before the first handoff.
+From the assigned worktree, independently run:
 
 ```sh
-gh workflow run controller.yml -f task=claim-local -f number=123
-# Tester commits/pushes tests and opens the draft PR, then:
-gh workflow run controller.yml -f task=handoff-local -f number=123 -f action=tests-ready -f head=TEST_COMMIT_SHA -f 'expected=["tests/acceptance.test.mjs::accepted behavior"]'
-# Wait for the controller ledger to assign implementer after hosted Red.
-# Implementer commits/pushes production only, then:
-gh workflow run controller.yml -f task=handoff-local -f number=123 -f action=implemented -f head=IMPLEMENTATION_COMMIT_SHA
+npm run orchestrator -- verify --issue 123 --phase red --expected /tmp/expected-tests.json
 ```
 
-For a test correction, the implementer submits `action=tests-needed` and `reason=...` at its current committed head. For local follow-up review fixes, use `action=start-tests` at the current PR head after the previous cycle completed. Scope checks, exclusive ownership, and hosted verification still apply. Do not start the next role until the controller ledger names it as owner. Local agents do not get an exception to Red/Green evidence or human merge authority.
+Red requires a passing/valid-empty baseline and exactly the named new assertion failures. Syntax/import errors, missing dependencies, unexpected regressions, and infrastructure errors never qualify. The verifier checks the tester-only diff, binds evidence to issue/digest/baseline/head, and transfers ownership to the implementer. It publishes hashes and source-free results in the writer-authenticated issue ledger.
 
-## Recover a partially pushed writer run
+The implementer verifies that accepted SHA and changes production only. It receives acceptance criteria, public interfaces, stable failing IDs, and explicitly public sanitized observations—never test code or raw fixture/stack output. After committing its implementation, the independent verifier runs:
 
-Do not rerun or blindly resume a stopped tester/implementer operation after its branch advanced. The controller leaves it paused. An operator first inspects the exact commit and role-scoped diff, waits for the old run to finish/cancel, and may explicitly adopt it with `gh workflow run controller.yml -f task=adopt-tdd -f number=123 -f head=ADVANCED_SHA`. Adoption validates the entire diff and transfers ownership to that operator for local reconciliation; it does not attest Red or Green. Submit the corresponding `handoff-local` command next to run independent verification. Scope violations require manual reconciliation rather than adoption. A stopped run with an unchanged branch may use normal `resume`.
+```sh
+npm run orchestrator -- verify --issue 123 --phase green
+```
 
-## Black-box implementation and disputes
+Green reruns the accepted Red baseline and the complete candidate suite. It must execute and pass all accepted tests with no infrastructure errors, and the diff must stay in implementer paths. The ledger moves to review ownership only after validation succeeds. Push the exact commit and use `orchestrator ready-pr --pr N` to mark the draft ready; a different head needs fresh evidence.
 
-The implementer treats tests as a black box: it does not inspect test source, fixtures, or assertion internals or hardcode known test identities/inputs. It implements the acceptance criteria and public interface behavior. The runner publishes stable failure IDs and bounded sanitized scalar observations to the issue ledger. The Node adapter publishes expected/observed values only when the tester explicitly opts in through the original assertion error’s `publicObservation` object; ordinary assertion `actual`/`expected` fields remain private. Other language adapters must likewise publish only intentional public contract observations; raw assertion messages, stacks, source snippets, and complex fixture objects are withheld. This is role policy in local/hosted instructions; write scopes remain independently enforced by safe outputs and controller diffs.
+## Test corrections
 
-Tester and implementer may negotiate a failure visibly on the issue. A test-revision handoff must cite the acceptance criterion and explain expected versus observed public behavior. Only the tester inspects or revises tests and records why the contract warrants that revision. If the contract is unclear or disagreement remains, `needs-triage` pauses automated work for triage/operator resolution. Neither side may bypass evidence, change tests to fit an arbitrary implementation, or reset iteration/review limits.
+An implementer with a contract-based test concern commits its allowed production changes and returns ownership:
 
-Implementer diff inspection is restricted to production paths and public interfaces. Full PR diffs, `git show` of tester commits, and repository API reads of test source or fixtures are outside its role. Ask the tester for public behavior clarification instead.
+```sh
+npm run orchestrator -- handoff --issue 123 --reason 'Acceptance criterion, expected behavior, observed behavior, and requested clarification'
+```
+
+The tester independently evaluates that reason. It may revise tests but never production. Unresolved disagreement returns to triage or a human. The next Red uses the known Green baseline and checks only the new owner's changes for scope. Never weaken an assertion to bypass a failure. TDD handoffs are bounded to ten cycles; review rounds retain their separate lifetime limit.
+
+After a published review calls for fixes, `orchestrator next --issue N --pr N` starts a new tester-first cycle at the accepted current PR head. Incremental work remains Review; redesign first reacquires In Progress capacity. Every stage checks pause state and current claim. A reasoned triage exemption can skip testing only when the accepted assessment explicitly declares testing inapplicable.
+
+## Public feedback boundary
+
+The Node adapter withholds raw assertion messages, stacks, source snippets, and complex objects. A tester may opt into a bounded `publicObservation` on the original assertion error, containing `operator`, `expected`, and `observed` scalar values for public behavior. Ordinary assertion `actual`/`expected` remain private. Other adapters must apply the same policy. These rules preserve independent reasoning; local prompts and worktrees are not a technical confidentiality boundary between arbitrary processes owned by the same user.

@@ -23,8 +23,8 @@ if (installedCodex !== null)
   assert(installedCodex === codexText, "Installed .codex/config.toml must match config/codex.toml");
 assert(typeof codex.model === "string" && !!codex.model, "Codex needs an explicit model");
 assert(
-  codex.model_reasoning_effort === "high",
-  "Codex reasoning must match the selected high default",
+  codex.model_reasoning_effort === config.orchestrator.reasoning,
+  "Codex reasoning must match the orchestrator default",
 );
 assert(
   codex.approval_policy === "on-request" && codex.sandbox_mode === "workspace-write",
@@ -78,30 +78,16 @@ for (const path of await files(".")) {
   }
 }
 
-for (const role of ["triage", "test", "develop", "implement", "review", "fix"]) {
-  const text = await readFile(`.github/workflows/${role}.md`, "utf8");
-  const workflow = parse(text.split("\n---")[0].slice(4));
-  assert(workflow.strict === true, `${role}: strict mode is required`);
+for (const name of await readdir(".github/workflows")) {
   assert(
-    workflow.on.workflow_dispatch && Object.keys(workflow.on).length === 1,
-    `${role}: only controller dispatch is allowed`,
+    ["ci.yml", "release.yml"].includes(name),
+    `Only deterministic CI and operator release workflows belong in .github/workflows: ${name}`,
   );
+  if (!/\.ya?ml$/.test(name)) continue;
+  const text = await readFile(`.github/workflows/${name}`, "utf8");
   assert(
-    workflow.imports.includes("shared/authorize.md"),
-    `${role}: controller authorization is required`,
-  );
-  assert(
-    !Object.values(workflow.permissions).includes("write"),
-    `${role}: agent token must remain read-only`,
-  );
-  if (["review", "triage"].includes(role))
-    assert(
-      workflow.checkout === false && workflow.tools.bash === false,
-      `${role}: no code checkout or shell execution`,
-    );
-  assert(
-    !JSON.stringify(workflow["safe-outputs"] || {}).includes("merge-pull-request"),
-    `${role}: agents cannot merge`,
+    !/gh-aw|OPENAI_API_KEY|CODEX_API_KEY|ANTHROPIC_API_KEY|COPILOT_GITHUB_TOKEN/.test(text),
+    `${name}: cloud agent execution and model credentials are not supported`,
   );
 }
 const eventPath = process.env.GITHUB_EVENT_PATH;

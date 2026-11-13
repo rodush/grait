@@ -1,131 +1,62 @@
-# Adopt the template
+# Setup reference
+
+For step-by-step adoption, start with [installation and configuration](installation.md). This page describes maintained configuration and commands.
 
 ## Repository tooling runtime
 
-Node.js 24 runs GRAIT's JavaScript scripts under `scripts/`: Project coordination, dependency and review-loop policy, bootstrap, activation, and releases. npm installs their locked dependencies and provides the formatter and Markdown linter. These are development and automation dependencies; application code may use Python, Go, Rust, or any other stack with separate install, build, test, and run commands.
+Use Node.js 24 and the npm version recorded in `package.json`. `.npmrc` keeps dependency install scripts disabled and requires package maturity. Application code may use any language; add its commands and test adapter when choosing a stack.
 
-GitHub Actions installs Node.js on hosted runners. Install Node.js 24 and npm locally when adopting the template, changing automation, regenerating workflows, or running template checks. Merely opening issues, reviewing PRs, or using the Project board requires no local Node.js installation. There is no application server or `npm start` command in this template.
+| Command                                    | Purpose                                                                      |
+| ------------------------------------------ | ---------------------------------------------------------------------------- |
+| `npm run setup -- --plan`                  | Read-only installation preview                                               |
+| `npm run setup`                            | Guided host and repository configuration                                     |
+| `npm run setup -- --activate`              | Activate after human merge and default-branch CI                             |
+| `npm run orchestrator -- start`            | Start the native local orchestrator session                                  |
+| `npm run orchestrator -- --help`           | Queue, worktree, worker, review, and synchronization commands                |
+| `npm run github -- --help`                 | Scoped writer publishing commands                                            |
+| `npm run bootstrap -- ...`                 | Advanced repository/Project provisioning; plan by default, `--apply` mutates |
+| `npm run harness:generate`                 | Generate installed skills and Codex/Claude roles from canonical sources      |
+| `npm run check`                            | Validate configuration, action pins, documentation links, and adapter drift  |
+| `npm test`                                 | Run deterministic local tooling tests with fake external services            |
+| `npm run format:check` / `npm run lint:md` | Check formatting and Markdown                                                |
 
-Run the following from the repository root after installing the prerequisites below:
+No compiler extension or generated Actions lockfiles are needed. Edit canonical sources first and regenerate native adapters after changing roles, skills, or role profiles.
 
-| Command                                   | When to use it                                                                                                                                                                  |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `npm ci`                                  | Install the exact tooling dependencies from `package-lock.json` after cloning or a lockfile update.                                                                             |
-| `npm run check`                           | Validate configuration, workflow boundaries, local documentation links, and generated harness adapters.                                                                         |
-| `npm test`                                | Run deterministic controller, policy, API, and security tests without live GitHub credentials.                                                                                  |
-| `npm run format` / `npm run format:check` | Apply formatting or check it without changing files.                                                                                                                            |
-| `npm run lint:md`                         | Check Markdown conventions.                                                                                                                                                     |
-| `npm run harness:generate`                | Regenerate native skills and agent definitions after editing their canonical sources.                                                                                           |
-| `npm run compile`                         | Regenerate gh-aw workflow lockfiles and shared policy copies after changing workflow sources, imported policies, or engine configuration; requires the pinned `gh aw` compiler. |
-| `npm run compile -- --check`              | Verify generated workflow files match their sources without modifying the checkout.                                                                                             |
-| `npm run check:profiles`                  | Compile all six engine/authentication profiles in temporary directories.                                                                                                        |
+## Subscription authentication
 
-The bootstrap and activation commands later in this guide change GitHub configuration and require operator credentials. Normal template tests do not invoke them. Commit source changes together with regenerated files. CI runs the template checks automatically; add your application's own checks when choosing its stack.
+Sign in through the official client: `codex login` or `claude auth login`. Setup checks the native login and invokes it when missing. It never reads/copies the provider's stored credentials or uploads model keys to GitHub. If you have configured API billing, switch the client to subscription login before setup. Availability and allowances depend on your plan; all sub-agents share its allowance. GRAIT does not automatically switch to API billing when an allowance runs out.
 
-## Prerequisites and local harnesses
+[Codex supports ChatGPT subscription sign-in](https://learn.chatgpt.com/docs/auth), and [Claude Code supports native Claude sign-in](https://code.claude.com/docs/en/authentication). Keep the unmodified official client responsible for authentication; [Anthropic distinguishes this from third-party applications routing subscription credentials](https://code.claude.com/docs/en/legal-and-compliance).
 
-Before sharing the starter, its repository owner enables **Template repository** in Settings → General. A derived application repository does not need that setting.
+## Harness and model configuration
 
-Create a repository from this template, clone it, and install Node.js 24, npm 12.2.2, GitHub CLI, and the pinned compiler:
+`workflow.config.json` selects `engine: "codex"` or `"claude"` and `execution: "local"`. Its six roles all run on the host. The main session is the orchestrator. `maxConcurrentWorkers` defaults to two, independently of the five-story Project cap. The orchestrator skill applies the worker cap; the Codex project config also caps spawned threads. The provider's native limits still apply.
 
-```sh
-gh extension install github/gh-aw --pin v1.2.2
-npm install --global npm@12.2.2 --ignore-scripts --min-release-age=3
-npm ci
-```
+The default orchestrator uses medium reasoning. The reviewer uses high reasoning. `config/codex.toml` is the canonical Codex project config; its installed `.codex/config.toml` copy is generated. Tester/implementer model and reasoning overrides remain under `tdd.profiles`; `null` inherits the selected harness model/settings. Overrides are emitted only for the matching provider, so a Codex model name does not leak into Claude agents. Select models available on your account. Role settings grant no extra permissions.
 
-The canonical local Codex profile is `config/codex.toml`. It preserves `gpt-6.1-sol`, high reasoning, on-request approval, workspace-write, and the terminal-title item order. The template includes the matching `.codex/config.toml`; `npm run check` verifies that an installed copy matches the profile.
+Claude triage/review roles use native worktree isolation. Tester, implementer, and fix stages use the orchestrator's pre-created issue worktree sequentially; they must not create independent default-branch worktrees. `orchestrator worker` launches a native session in that existing worktree. Native delegation can instead assign its absolute path and exact committed handoff explicitly.
 
-**Important note!** When copying the scaffold into an existing repository, inspect its configuration before installing a missing copy:
+## Publishing identities and Project access
 
-```sh
-mkdir -p .codex
-test ! -e .codex/config.toml && cp config/codex.toml .codex/config.toml
-```
+Setup registers two private, repository-owned GitHub Apps using manifest approvals:
 
-If `.codex` is protected by your execution environment, an operator must install that file. The template's compiler reads `config/codex.toml` directly to reuse the model and reasoning defaults for hosted Codex. Hosted sandboxing and noninteractive permissions are managed by gh-aw rather than the local interactive approval policy. See the [official Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+| App      | Repository permissions                                                      |
+| -------- | --------------------------------------------------------------------------- |
+| Writer   | Contents, issues, pull requests, and commit statuses: write; metadata: read |
+| Reviewer | Contents: read; issues and pull requests: write; metadata: read             |
 
-Claude uses `CLAUDE.md`; Copilot uses `.github/copilot-instructions.md`. Both point to the shared guidance. Select `codex`, `claude`, or `copilot` in `workflow.config.json`, then recompile. Set an explicit `AGENT_MODEL` for the chosen engine; Codex defaults to the model from its profile. Add the application stack's commands and network requirements when introducing it. Default automated write scopes are `src/**`, `tests/**`, `assets/**`, and `docs/project/**`; root policy documents and automation remain protected. Configure additional exact file paths or `directory/**` scopes deliberately.
+The Apps are publishing identities, not execution environments or provider accounts. No webhook server is required after setup. Commands mint short-lived installation tokens scoped to the target repository; private keys remain in private Git metadata. They are not OS-isolated from arbitrary code running as the same user. Reviewers inspect untrusted code without executing it; stronger isolation requires a separate OS user/container.
 
-## Dependency maturity
+Project API access uses the host user's GitHub CLI authorization, or an explicitly supplied `PROJECT_TOKEN` environment variable. Give a personal token only the needed Project scope and store it in your host's secret manager. It is not an LLM credential. Repository variables store non-secret Project and App login metadata; `AUTOMATION_ENABLED` provides a repository-wide pause switch.
 
-The committed `.npmrc` requires releases to be at least **three days old** (`min-release-age=3`, in days), disables install scripts, and saves exact versions. npm 11.10.0 or newer is required for the age gate; CI pins the current stable npm 12.2.2. Use the newest stable release that satisfies the age gate, including for engine CLIs in `workflow.config.json`; do not bypass the gate to install a newer release. Dependency locks remain reproducible, so the age gate primarily protects new resolution, not previously committed lock entries. Dependabot uses a matching three-day cooldown. Regenerate and review lockfiles when updating dependencies. Hosted compiler-managed npm installers also enforce the three-day age gate.
+## Advanced bootstrap
 
-The compiler is gh-aw 1.2.2 with its matching immutable runtime SHA. Do not downgrade below a security-fixed release. Regenerate all workflow lockfiles when upgrading; changing only the local compiler does not update the deployed runtime.
-
-## Shared skills and agents
-
-The template includes five reusable skills and matching agent definitions for Codex, Claude Code, and Copilot. See [the role catalog](agents.md) for invocation and execution boundaries. Edit `automation/skills/` or `automation/agents.json`, then regenerate with `npm run harness:generate`. Models and permissions remain inherited from the selected harness; local review requests route to GitHub Actions.
-
-## Credentials and identities
-
-Use separate writer and reviewer identities, neither of which is a human operator. GitHub Apps are the default. Create and install separate writer, reviewer, and release apps on the derived repository. Do not give any app a branch-ruleset bypass. The release app alone bypasses release-tag creation restrictions, never tag updates/deletions.
-
-| Identity              | Permissions                                                                                                           |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| Writer/controller app | Contents, Issues, Pull requests, Actions, and Commit statuses: read/write; metadata: read                             |
-| Reviewer app          | Contents: read; Issues and Pull requests: read/write                                                                  |
-| Project credential    | Projects: read/write, plus read access to every repository represented on the board and Issues: read for dependencies |
-| Release app           | Contents: read/write; metadata: read. Store its key only in the protected `release` environment                       |
-| Bootstrap operator    | Repository administration, Actions variables, environments, and project administration                                |
-
-For organization-owned Projects, the writer app may also have Organization projects read/write. For user-owned Projects, supply a suitable project token. Project reads must cover every story; inaccessible In Progress items count conservatively, and unknown dependencies block work. See [GitHub's project authentication guidance](https://github.github.com/gh-aw/reference/auth-projects/).
-
-Repository variables:
-
-- `AUTOMATION_APP_CLIENT_ID` and `REVIEW_APP_CLIENT_ID` for app mode.
-- `AUTOMATION_LOGIN` and `REVIEW_LOGIN`: exact publishing identities, such as `my-writer[bot]` and `my-reviewer[bot]`.
-- `PROJECT_ID`, `AGENT_MODEL`, `AUTOMATION_ENABLED`, `AUTOMATION_BUDGET_ISSUE`, and `AUTOMATION_BUDGET_LOGIN`, configured by bootstrap.
-- `RELEASE_APP_CLIENT_ID` for the dedicated release app; bootstrap records its numeric `RELEASE_APP_ID` from `--release-app-id`.
-
-Repository secrets:
-
-- App mode: `AUTOMATION_APP_PRIVATE_KEY` and `REVIEW_APP_PRIVATE_KEY`.
-- Token mode: select `"authentication": "token"` and supply `AUTOMATION_TOKEN` and `REVIEW_TOKEN`. Use distinct dedicated accounts or app tokens; refresh expiring supplied tokens yourself.
-- `PROJECT_TOKEN` when project access is separate from writer authentication; also export it locally for bootstrap and activation if needed.
-- Codex: `CODEX_API_KEY` or `OPENAI_API_KEY`; Claude: `ANTHROPIC_API_KEY`; Copilot: `COPILOT_GITHUB_TOKEN`.
-
-Configure secrets with `gh secret set NAME --repo OWNER/REPO`; enter values interactively. Never put them in configuration files or command examples. The activation tool checks these repository-level secret names. Store **only** the release credential in the protected `release` environment: `gh secret set RELEASE_APP_PRIVATE_KEY --env release --repo OWNER/REPO` for App mode, or `RELEASE_TOKEN` for token mode. The release token must belong to a configured human operator, have Contents write, and must not be an implementation/reviewer token. The release app needs only Contents write; CI verification uses the job’s read-only token.
-
-## Project and repository setup
-
-Inspect the plan first, replacing the example identities:
+The guided setup supplies these details automatically. For a deliberate manual integration, preview before applying:
 
 ```sh
-npm run bootstrap -- --repo OWNER/REPO --project-owner OWNER --maintainers alice,bob --writer-login 'writer[bot]' --reviewer-login 'reviewer[bot]' --release-app-id 123456
+npm run bootstrap -- --repo OWNER/REPOSITORY --maintainers alice --writer-login 'writer-app[bot]' --reviewer-login 'review-app[bot]'
 ```
 
-Add `--apply` to apply that plan. It creates a project, changes its default view to Kanban, configures the five statuses, binds one controller, links the repository, creates labels and a release environment, and stages the two delivery/merge rulesets disabled, and activates two release-tag rulesets immediately. It also creates a dedicated budget issue and an initial ledger authored by the authenticated human operator. Keep that issue and its ledger comment; deleting either blocks dispatch rather than resetting the budget. In token mode omit `--release-app-id`; only configured human operators may create release tags. It writes the local controller identity and human CODEOWNERS. Automation remains disabled during setup. Reusing an existing project requires `--project-number N` and all five Status options already configured; an existing project's views and statuses are preserved.
+Add `--apply` to mutate the repository. Use `--project-owner` and `--project-number` to select an existing Project. Bootstrap preserves existing CODEOWNERS rules and validates an existing Project's statuses rather than resetting them. It records new Project identity before later configuration can fail. Repository rules are staged until activation, except immutable release-tag protections. A release environment is configured only when an optional release App ID is supplied. No credit ledger or provider secrets are created. The `controllerRepository` key remains for compatibility with existing Project bindings.
 
-Bootstrap requires GitHub features for rulesets, code-owner approval, and environment reviewers. If your account or repository plan does not support them, setup stops; decide how to provide equivalent controls before enabling automation. GRAIT's license is recorded in `LICENSE`; bootstrap does not change it.
-
-## Compile, validate, and activate
-
-```sh
-npm run format
-npm run harness:generate
-npm run check
-npm test
-npm run lint:md
-npm run compile -- --approve
-npm run compile -- --check
-```
-
-Use `--approve` only after inspecting the compiler's changes to actions and secret bindings. It records the accepted manifest in each lockfile's header. Commit the sources, generated shared components, lockfiles, CODEOWNERS, and configured JSON to the default branch while the delivery rules are still staged. Run default-branch CI successfully before activation.
-
-```sh
-npm run activate
-gh workflow run controller.yml
-```
-
-Activation checks the committed configuration, identities, credential names, project binding, and ownership before activating all four rulesets and enabling the controller. Confirm that the board groups by Status. For an outsider’s issue or fork PR, a maintainer must first apply `agent:admitted`; repository writers and configured identities are admitted automatically. This admission is separate from agent triage and Ready authorization. Add a small issue and verify triage, claiming, hosted implementation, CI, inline review, follow-up fixes, and human squash merge in GitHub. Repeat with a fork PR to verify the read-only review path. These hosted checks require real credentials and cannot be established by local unit tests.
-
-The rulesets keep human merge authority separate from delivery gates: human operators may bypass only the update restriction through a PR; no identity bypasses the required checks or human code-owner approval. Add project-specific CI checks to the delivery rules once a stack exists.
-
-## Adopt the TDD pipeline
-
-Read [the tester-first protocol](tdd.md), configure `tdd.testPatterns`, implementation scopes, runner image/commands, and optional per-role model/reasoning settings before enabling automation. The Node reference runner verifies the template tests; replace its adapter/image when adopting another stack. New triage attestations must explicitly assess TDD applicability. Existing work without that assessment needs retriage. The independent `TDD verification` workflow is dispatched by the controller and consumes the same global concurrency budget; deterministic verification reserves one credit conservatively. Keep source and generated workflows together.
-
-## CI publisher provenance
-
-Bootstrap and activation resolve the GitHub Actions App ID from the authenticated GitHub API (`apps/github-actions`) before changing repository settings. The required `Template validation` check is bound to that publisher, so another integration cannot satisfy the gate merely by using the same check name. Missing or invalid publisher metadata stops setup without a hardcoded-ID fallback.
+Advanced commands do not replace the host-side credentials and native login that guided setup configures. Follow [activation](installation.md#guided-configuration) before starting the orchestrator.

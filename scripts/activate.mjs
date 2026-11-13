@@ -2,16 +2,21 @@ import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { GitHub } from "./lib/github.mjs";
-import { Ledger } from "./lib/ledger.mjs";
+import { SetupState } from "./lib/setup-state.mjs";
+import { roleToken } from "./lib/local-auth.mjs";
 import { Project } from "./lib/project.mjs";
 import { digest, sameLogin, validateConfig } from "./lib/policy.mjs";
 import { repositoryRules, resolveActionsAppId } from "./lib/bootstrap.mjs";
 
+let store;
 try {
   const localText = await readFile("workflow.config.json", "utf8");
   const config = validateConfig(JSON.parse(localText));
   if (!config.controllerRepository || !config.humanOperators.length)
     throw new Error("Run bootstrap and configure human operators first");
+  const { directory, state } = await SetupState.read(config.controllerRepository);
+  store = new SetupState(directory, state);
+  await store.acquire();
   const token =
     process.env.GH_TOKEN ||
     (await promisify(execFile)("gh", ["auth", "token"], { encoding: "utf8" })).stdout.trim();
@@ -19,6 +24,13 @@ try {
   const actionsAppId = await resolveActionsAppId(api);
   const repo = config.controllerRepository;
   const repository = await api.request(`repos/${repo}`);
+  const operator = await api.request("user");
+  if (
+    operator.type !== "User" ||
+    !config.humanOperators.some((login) => sameLogin(login, operator.login)) ||
+    !repository.permissions?.admin
+  )
+    throw new Error("Activation requires a configured human repository administrator");
   const head = await api.request(
     `repos/${repo}/commits/${encodeURIComponent(repository.default_branch)}`,
   );
@@ -41,15 +53,18 @@ try {
       item.value,
     ]),
   );
-  for (const name of [
-    "PROJECT_ID",
-    "AUTOMATION_LOGIN",
-    "REVIEW_LOGIN",
-    "AGENT_MODEL",
-    "AUTOMATION_BUDGET_ISSUE",
-    "AUTOMATION_BUDGET_LOGIN",
-  ])
+  for (const name of ["PROJECT_ID", "AUTOMATION_LOGIN", "REVIEW_LOGIN"])
     if (!variables.get(name)) throw new Error(`Missing repository variable ${name}`);
+  if (
+    ![
+      ["writer", "AUTOMATION_LOGIN"],
+      ["reviewer", "REVIEW_LOGIN"],
+    ].every(
+      ([role, name]) =>
+        state.apps[role]?.slug && sameLogin(`${state.apps[role].slug}[bot]`, variables.get(name)),
+    )
+  )
+    throw new Error("Host publishing identities differ from the repository's recorded Apps");
   if (
     sameLogin(variables.get("AUTOMATION_LOGIN"), variables.get("REVIEW_LOGIN")) ||
     config.humanOperators.some(
@@ -59,21 +74,9 @@ try {
     )
   )
     throw new Error("Human, implementation, and review identities must be separate");
-  const secrets = new Set(
-    (await api.list(`repos/${repo}/actions/secrets`, "secrets")).map((item) => item.name),
-  );
-  const required =
-    config.authentication === "app"
-      ? ["AUTOMATION_APP_PRIVATE_KEY", "REVIEW_APP_PRIVATE_KEY"]
-      : ["AUTOMATION_TOKEN", "REVIEW_TOKEN"];
-  if (config.authentication === "app")
-    for (const name of ["AUTOMATION_APP_CLIENT_ID", "REVIEW_APP_CLIENT_ID"])
-      if (!variables.get(name)) throw new Error(`Missing repository variable ${name}`);
-  if (config.engine === "codex" && !secrets.has("OPENAI_API_KEY")) required.push("CODEX_API_KEY");
-  if (config.engine === "claude") required.push("ANTHROPIC_API_KEY");
-  if (config.engine === "copilot") required.push("COPILOT_GITHUB_TOKEN");
-  for (const name of required)
-    if (!secrets.has(name)) throw new Error(`Missing repository secret ${name}`);
+  // Credentials stay on the user host. Mint each scoped App token to verify both installations.
+  await roleToken(repo, "writer");
+  await roleToken(repo, "reviewer");
   const projectToken = process.env.PROJECT_TOKEN || token;
   const project = await new Project(
     new GitHub(projectToken),
@@ -81,7 +84,7 @@ try {
     config.statuses,
   ).load();
   if (!sameLogin(project.controller, repo))
-    throw new Error("Project is bound to a different controller");
+    throw new Error("Project is bound to a different orchestrator");
   const owners = await api.request(
     `repos/${repo}/contents/.github/CODEOWNERS?ref=${encodeURIComponent(repository.default_branch)}`,
   );
@@ -104,39 +107,6 @@ try {
   const appId = writer.endsWith("[bot]")
     ? (await api.request(`apps/${writer.replace(/\[bot\]$/, "")}`)).id
     : null;
-  const budgetNumber = Number(variables.get("AUTOMATION_BUDGET_ISSUE"));
-  if (!Number.isSafeInteger(budgetNumber) || budgetNumber < 1)
-    throw new Error("Invalid budget issue");
-  if (
-    !config.humanOperators.some((login) =>
-      sameLogin(login, variables.get("AUTOMATION_BUDGET_LOGIN")),
-    )
-  )
-    throw new Error("Budget ledger must originate from a configured bootstrap operator");
-  const budget = await new Ledger(api, repo, variables.get("AUTOMATION_BUDGET_LOGIN")).load(
-    budgetNumber,
-  );
-  if (!budget.comment || !Array.isArray(budget.state.reservations))
-    throw new Error("Missing initialized budget ledger");
-  const releaseSecrets = new Set(
-    (await api.list(`repos/${repo}/environments/release/secrets`, "secrets")).map(
-      (item) => item.name,
-    ),
-  );
-  if (config.authentication === "app") {
-    if (
-      !variables.get("RELEASE_APP_ID") ||
-      !variables.get("RELEASE_APP_CLIENT_ID") ||
-      !releaseSecrets.has("RELEASE_APP_PRIVATE_KEY")
-    )
-      throw new Error("Configure the dedicated release App and its release-environment secret");
-    const writerApp = await api.request(`apps/${writer.replace(/\[bot\]$/, "")}`);
-    const reviewerLogin = variables.get("REVIEW_LOGIN");
-    const reviewerApp = await api.request(`apps/${reviewerLogin.replace(/\[bot\]$/, "")}`);
-    if ([writerApp.id, reviewerApp.id].includes(Number(variables.get("RELEASE_APP_ID"))))
-      throw new Error("Release App must be separate from implementation and review Apps");
-  } else if (!releaseSecrets.has("RELEASE_TOKEN"))
-    throw new Error("Configure RELEASE_TOKEN in the release environment");
   const rules = await api.list(`repos/${repo}/rulesets`);
   for (const expected of repositoryRules(
     actors,
@@ -152,8 +122,10 @@ try {
     method: "PATCH",
     body: { name: "AUTOMATION_ENABLED", value: "true" },
   });
+  store.state.enabled = true;
+  await store.save();
   console.log(
-    "Delivery rules and human merge authority are active. Project automation is enabled.",
+    "Delivery rules are active. Start the subscription-backed local orchestrator with npm run orchestrator -- start.",
   );
 } catch (error) {
   console.error(error.message);
@@ -161,4 +133,6 @@ try {
     "Activation did not complete. Inspect rulesets and AUTOMATION_ENABLED before retrying.",
   );
   process.exitCode = 1;
+} finally {
+  await store?.release();
 }

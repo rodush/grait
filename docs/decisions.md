@@ -1,30 +1,18 @@
-# Workflow decisions
+# Recorded decisions
 
-| Decision            | Selected policy                                                                      |
-| ------------------- | ------------------------------------------------------------------------------------ |
-| Scope               | Generic template; no application language or framework                               |
-| Shared instructions | `AGENTS.md` and linked policy documents; small harness adapters                      |
-| Engines             | Codex by default; Claude and GitHub Copilot selectable                               |
-| Work location       | Local and GitHub-hosted implementation; hosted PR review                             |
-| Review trigger      | Every ready PR opening and subsequent head update                                    |
-| Review authority    | Formal agent decisions; human approval and final merge                               |
-| Fix loop            | Automatic; ten rounds maximum; interrupt reversals, repeated blockers, and conflicts |
-| Work source         | Triaged GitHub issues in GitHub Projects                                             |
-| Readiness           | Triage agents may authorize Ready                                                    |
-| Board               | Backlog → Ready → In Progress → Review → Done                                        |
-| Capacity            | Five stories In Progress across the project; Review excluded                         |
-| Follow-up fixes     | Stay in Review; redesign returns to In Progress after acquiring capacity             |
-| Contributions       | Public forks and private repositories                                                |
-| Authentication      | GitHub Apps preferred for organizations; supplied tokens also supported              |
-| Git history         | Conventional Commits and human squash merges                                         |
-| Releases            | Explicit operator-triggered release workflow                                         |
-| Ownership           | Configured by the operator when adopting the template                                |
-| License             | MIT, as selected in the GRAIT repository                                             |
+| Area            | Decision                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Execution       | All AI roles run in the user's native Codex CLI or Claude Code harness, locally or on their own host                |
+| Provider access | Use the official harness's subscription login; no LLM API keys or hosted agent workflows in the default setup       |
+| Orchestration   | A parent session delegates specialists; deterministic local tools enforce Project claims and review-loop state      |
+| Concurrency     | Two workers by default; at most five In Progress stories across the Project; one orchestrator host per Project      |
+| Identity        | Two repository-owned GitHub Apps separate writer and reviewer publishing; roles share the user's provider allowance |
+| Validation      | Tester-first local handoffs and independent Red/Green evidence; deterministic GitHub CI remains required            |
+| Review          | Local exact-head evaluation, inline GitHub findings, formal review, and at most ten lifetime rounds                 |
+| Delivery        | Human code-owner approval and squash merge; optional operator-approved releases                                     |
+| Platform        | GitHub issues, native blockers, Projects, PRs, reviews, rulesets, and deterministic Actions                         |
+| Tooling         | Node.js 24 for starter tooling; application language remains unconstrained                                          |
 
-## Implementation boundaries
+The previous hosted-agent design required provider keys, workflow compilation, and generated lockfiles. It was removed to make the opinionated default use the consumer's existing coding subscription and host. No implicit API-billing fallback is provided. GitHub Apps remain because publishing identity is independent of agent execution.
 
-The controller enforces scheduling and review-loop limits in code. Agent prompts explain the policy but do not implement counters or locks. One controller is required per project because GitHub Actions concurrency groups are repository-scoped.
-
-Public fork review reads code through GitHub APIs without executing it. Automatic fixes to arbitrary forks require a separate contribution design and are not part of the initial writer. A fork author remains able to apply fixes and receive a new review.
-
-External configuration is applied by an operator after reviewing the bootstrap plan. This template cannot provide repository identities, account credentials, or hosted execution evidence before a derived repository is configured.
+Compatibility identifiers `controllerRepository`, `[agent-controller:...]`, and existing state markers remain for migration. New user-facing guidance uses **orchestrator**. Existing Project bindings, App identities, application ownership, and review history must not be silently replaced during upgrade. A single host is an explicit current limitation; independent hosts do not share a lock.

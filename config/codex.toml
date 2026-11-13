@@ -1,9 +1,13 @@
 # Reference: https://github.com/rodush/expense-tracker/pull/86
-# Install as .codex/config.toml in a derived repository.
+# Canonical project settings; npm run harness:generate installs .codex/config.toml.
 model = "gpt-6.1-sol"
-model_reasoning_effort = "high"
+model_reasoning_effort = "medium"
 approval_policy = "on-request"
 sandbox_mode = "workspace-write"
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 2
 
 [tui]
 terminal_title = ["activity", "project-name", "run-state", "five-hour-limit", "context-remaining", "model-with-reasoning"]
