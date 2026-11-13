@@ -524,3 +524,107 @@ localTest(
     assert.equal(f.item.status, f.config.statuses.inProgress);
   },
 );
+
+localTest("new claims wait until every unarchived Review story is finished", async () => {
+  const reviewStories = [
+    { content: { __typename: "Issue", number: 20, repository: { nameWithOwner: repo } } },
+    {
+      content: {
+        __typename: "Issue",
+        number: 21,
+        repository: { nameWithOwner: "another/repository" },
+      },
+    },
+    { content: { __typename: "DraftIssue", title: "Draft awaiting review" } },
+    { content: null },
+    {
+      content: {
+        __typename: "Issue",
+        number: 22,
+        labels: [{ name: "agent:paused" }],
+        repository: { nameWithOwner: repo },
+      },
+    },
+    {
+      content: {
+        __typename: "Issue",
+        number: 23,
+        labels: [{ name: "agent:needs-human" }],
+        repository: { nameWithOwner: repo },
+      },
+    },
+  ];
+  for (const story of reviewStories) {
+    const f = fixture();
+    await f.orchestrator.ready(1, f.assessment());
+    f.project.items.push({ id: "review-story", status: f.config.statuses.review, ...story });
+    const before = f.requests.length;
+    const moves = f.moves.length;
+    await assert.rejects(() => f.orchestrator.claim(1), /review/i);
+    assert.equal(f.item.status, f.config.statuses.ready);
+    assert.equal(f.moves.length, moves);
+    assert.ok(
+      !f.requests.slice(before).some(({ method }) => ["POST", "PATCH", "PUT"].includes(method)),
+      "Finish-before-start must reject before recording claim intent or moving the Project item",
+    );
+  }
+});
+
+localTest(
+  "Review work is reported before the capacity guard when a new claim is blocked",
+  async () => {
+    const f = fixture();
+    await f.orchestrator.ready(1, f.assessment());
+    f.project.items.push({ id: "review-story", status: f.config.statuses.review, content: null });
+    f.project.items.push(
+      ...Array.from({ length: 5 }, (_, index) => ({
+        id: `busy-${index}`,
+        status: f.config.statuses.inProgress,
+        content: { __typename: "Issue" },
+      })),
+    );
+    await assert.rejects(() => f.orchestrator.claim(1), /review/i);
+    assert.equal(f.item.status, f.config.statuses.ready);
+  },
+);
+
+localTest(
+  "archived Review stories and explicit PR items do not block a new story claim",
+  async () => {
+    const f = fixture();
+    await f.orchestrator.ready(1, f.assessment());
+    f.project.items.push(
+      {
+        id: "archived-review",
+        status: f.config.statuses.review,
+        isArchived: true,
+        content: { __typename: "Issue", number: 9 },
+      },
+      {
+        id: "pr-review",
+        status: f.config.statuses.review,
+        content: { __typename: "PullRequest", number: 7 },
+      },
+    );
+    assert.ok(await f.orchestrator.claim(1));
+    assert.equal(f.item.status, f.config.statuses.inProgress);
+  },
+);
+
+localTest("accepted claims resume during Review work without starting another story", async () => {
+  for (const ownStatus of ["inProgress", "review"]) {
+    const f = fixture();
+    await f.orchestrator.ready(1, f.assessment());
+    const accepted = await f.orchestrator.claim(1);
+    f.item.status = f.config.statuses[ownStatus];
+    f.project.items.push({
+      id: "another-review",
+      status: f.config.statuses.review,
+      content: { __typename: "Issue", number: 9, repository: { nameWithOwner: "another/repo" } },
+    });
+    const moves = f.moves.length;
+    assert.deepEqual(await f.orchestrator.claim(1), accepted);
+    assert.equal(f.moves.length, moves);
+    assert.equal(f.item.status, f.config.statuses[ownStatus]);
+  }
+});

@@ -6,3 +6,6 @@ node_modules/
 package-lock.json
 .claude/skills/grait-*/SKILL.md
 .claude/agents/grait-*.md
+
+.github/skills/grait-*/SKILL.md
+.github/agents/grait-*.agent.md

@@ -4,6 +4,7 @@ import { resolve, join, dirname } from "node:path";
 import { command, withoutCredentials, requireSubscription } from "./lib/setup-process.mjs";
 import { LocalOrchestrator } from "./lib/orchestrator.mjs";
 import { localContext } from "./lib/local-context.mjs";
+import { harnessArguments } from "./lib/harness-runtime.mjs";
 import {
   createHandoff,
   assertRoleChanges,
@@ -60,14 +61,21 @@ async function main() {
       await context.store.release();
     }
     const config = context.config;
-    const env = withoutCredentials();
+    const env = {
+      ...withoutCredentials(),
+      ...(config.engine === "copilot"
+        ? { COPILOT_SUBAGENT_MAX_CONCURRENT: String(config.maxConcurrentWorkers) }
+        : {}),
+    };
     await requireSubscription(config.engine);
     await command(
       config.engine,
-      [
-        ...(config.engine === "claude" ? ["--effort", config.orchestrator.reasoning] : []),
-        "Apply the grait-orchestrator skill at automation/skills/grait-orchestrator/SKILL.md. Manage this repository's Project queue and delegate specialist sub-agents locally in assigned worktrees. Use the native subscription login. Check pause state before each stage; humans merge and release.",
-      ],
+      harnessArguments(config.engine, {
+        role: "orchestrator",
+        reasoning: config.orchestrator.reasoning,
+        prompt:
+          "Apply the grait-orchestrator skill at automation/skills/grait-orchestrator/SKILL.md. Manage this repository's Project queue and delegate specialist sub-agents locally in assigned worktrees. Finish existing Review work before admitting new stories. Use the native subscription login. Check pause state before each stage; humans merge and release.",
+      }),
       { interactive: true, env },
     );
     return;
@@ -293,24 +301,21 @@ async function main() {
   if (launch) {
     await requireSubscription(context.config.engine);
     const profile = context.config.tdd.profiles[values.role === "test" ? "tester" : "implementer"];
-    const args = [
-      ...(context.config.engine === "claude"
-        ? [
-            "--agent",
-            `grait-${values.role}`,
-            "--effort",
-            profile.reasoning || context.config.orchestrator.reasoning,
-          ]
-        : profile.reasoning
-          ? ["-c", `model_reasoning_effort=${JSON.stringify(profile.reasoning)}`]
-          : []),
-      ...(profile.model ? ["--model", profile.model] : []),
-      launch.prompt,
-    ];
+    const args = harnessArguments(context.config.engine, {
+      prompt: launch.prompt,
+      role: values.role,
+      profile,
+      reasoning: context.config.orchestrator.reasoning,
+    });
     await command(context.config.engine, args, {
       cwd: launch.cwd,
       interactive: true,
-      env: withoutCredentials(),
+      env: {
+        ...withoutCredentials(),
+        ...(context.config.engine === "copilot"
+          ? { COPILOT_SUBAGENT_MAX_CONCURRENT: String(context.config.maxConcurrentWorkers) }
+          : {}),
+      },
     });
   }
 }

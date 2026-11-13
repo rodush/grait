@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
+import { issueDigest } from "../scripts/lib/policy.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { setupFixture } from "./helpers/setup-fixture.mjs";
@@ -362,4 +363,176 @@ test("existing integration publishes its original head as human before the App c
       .includes(".github/workflows/imported.yml"),
   );
   assert.equal(f.git(["status", "--porcelain"]), "");
+});
+
+test("Copilot native preflight uses installation version and optional OAuth login without fake auth status", async (t) => {
+  for (const login of [false, true]) {
+    const f = await fixture(t);
+    await writeFile(
+      join(f.directory, ".git/copilot-preflight.mjs"),
+      `import {requireSubscription} from '../scripts/lib/setup-process.mjs';\ntry { await requireSubscription('copilot', {login:${login}}); console.log('native preflight complete'); } catch(error) { console.error(error.message); process.exitCode=1; }`,
+    );
+    const result = await f.run("../.git/copilot-preflight.mjs", [], {
+      env: {
+        COPILOT_GITHUB_TOKEN: "synthetic-publishing-token",
+        COPILOT_PROVIDER_API_KEY: "synthetic-provider-key",
+        COPILOT_PROVIDERS_CONFIG: "synthetic-provider-config",
+        COPILOT_MODEL: "synthetic-inherited-model",
+        COPILOT_OFFLINE: "1",
+      },
+    });
+    assert.equal(result.status, 0);
+    const state = await f.state();
+    const native = state.commands.filter(({ command }) => command === "copilot");
+    assert.deepEqual(
+      native.map(({ args }) => args),
+      login ? [["--version"], ["login"]] : [["--version"]],
+    );
+    assert.ok(native.every(({ credentialNames }) => credentialNames.length === 0));
+    assert.equal(state.nativeLoginCount || 0, login ? 1 : 0);
+    assert.deepEqual(state.calls, []);
+    assert.doesNotMatch(result.output, /synthetic-publishing-token|synthetic-provider-key/);
+  }
+});
+
+test("Copilot setup uses its native login and preserves local publishing identity separation", async (t) => {
+  const f = await fixture(t);
+  const result = await f.run("setup.mjs", [
+    "--repo",
+    "acme/service",
+    "--harness",
+    "copilot",
+    "--yes",
+    "--no-browser",
+  ]);
+  assert.equal(result.status, 0);
+  const state = await f.state();
+  noCloudProvisioning(state);
+  assert.equal(state.pullRequests[0].user.login, "grait-writer[bot]");
+  const native = state.commands.filter(({ command }) => command === "copilot");
+  assert.deepEqual(
+    native.map(({ args }) => args),
+    [["--version"], ["login"]],
+  );
+  assert.ok(native.every(({ credentialNames }) => credentialNames.length === 0));
+  const configured = JSON.parse(await f.read("workflow.config.json"));
+  assert.equal(configured.engine, "copilot");
+  assert.deepEqual(configured.supportedEngines, ["codex", "claude", "copilot"]);
+});
+
+async function selectCopilot(f, { implementationProfile = false } = {}) {
+  const configured = structuredClone(f.config);
+  configured.engine = "copilot";
+  configured.supportedEngines = ["codex", "claude", "copilot"];
+  if (implementationProfile)
+    configured.tdd.profiles.implementer = { model: "gpt-5", reasoning: "high" };
+  await writeFile(join(f.directory, "workflow.config.json"), JSON.stringify(configured));
+  f.git(["add", "workflow.config.json"]);
+  f.git(["commit", "-m", "test: select native Copilot harness"]);
+}
+
+const nativeValue = (args, flag) => args[args.indexOf(flag) + 1];
+
+test("the orchestrator starts a scrubbed local Copilot session with the orchestrator role", async (t) => {
+  const f = await fixture(t, {
+    localEnabled: true,
+    variables: variables.map((entry) =>
+      entry.name === "AUTOMATION_ENABLED" ? { ...entry, value: "true" } : entry,
+    ),
+  });
+  await selectCopilot(f);
+  const result = await f.run("orchestrator.mjs", ["start"], {
+    env: {
+      COPILOT_PROVIDER_API_KEY: "synthetic-provider-key",
+      COPILOT_MODEL: "synthetic-inherited-model",
+    },
+  });
+  assert.equal(result.status, 0);
+  const state = await f.state();
+  const native = state.commands.filter(({ command }) => command === "copilot");
+  assert.deepEqual(native[0].args, ["--version"]);
+  const launch = native.find(({ args }) => args.includes("--interactive"));
+  assert.ok(launch);
+  assert.equal(nativeValue(launch.args, "--agent"), "grait-orchestrator");
+  assert.equal(nativeValue(launch.args, "--model"), "auto");
+  assert.equal(nativeValue(launch.args, "--effort"), "medium");
+  assert.match(nativeValue(launch.args, "--interactive"), /grait-orchestrator/);
+  assert.equal(launch.cwd, f.directory);
+  assert.ok(native.every(({ credentialNames }) => credentialNames.length === 0));
+  assert.ok(!state.calls.some(({ path }) => /app-manifests|dispatches/.test(path)));
+});
+
+test("Copilot implementation launches in the accepted shared issue worktree with its selected profile", async (t) => {
+  const f = await fixture(t, {
+    localEnabled: true,
+    variables: variables.map((entry) =>
+      entry.name === "AUTOMATION_ENABLED" ? { ...entry, value: "true" } : entry,
+    ),
+  });
+  await selectCopilot(f, { implementationProfile: true });
+  const acceptedHead = f.git(["rev-parse", "HEAD"]);
+  const worktree = join(f.directory, ".git/accepted-issue-worktree");
+  f.git(["worktree", "add", "-b", "agent/issue-1", worktree, acceptedHead]);
+  const issue = {
+    number: 1,
+    node_id: "issue-1",
+    title: "Implement the accepted local outcome",
+    body: "Accepted public behavior",
+    state: "open",
+    user: { login: "operator" },
+    labels: [],
+  };
+  const digest = issueDigest(issue);
+  const recorded = {
+    version: 1,
+    number: 1,
+    triagedDigest: digest,
+    triage: { ready: true, blockers: [] },
+    claim: { issue: 1, branch: "agent/issue-1", digest },
+    tdd: {
+      version: 1,
+      issue: 1,
+      branch: "agent/issue-1",
+      head: acceptedHead,
+      baseline: acceptedHead,
+      acceptanceDigest: digest,
+      owner: "implementer",
+      phase: "implementation",
+      evidence: ["accepted-red"],
+    },
+  };
+  await f.update({
+    issue,
+    issueComments: [
+      {
+        id: 701,
+        user: { login: "grait-writer[bot]" },
+        body: "<!-- workflow-state:v1 -->\n\n```json\n" + JSON.stringify(recorded) + "\n```",
+      },
+    ],
+    projectItems: [
+      {
+        id: "project-issue-1",
+        isArchived: false,
+        fieldValueByName: { name: "In Progress" },
+        content: { __typename: "Issue", number: 1, repository: { nameWithOwner: "acme/service" } },
+      },
+    ],
+  });
+  const result = await f.run("orchestrator.mjs", ["worker", "--issue", "1", "--role", "implement"]);
+  assert.equal(result.status, 0);
+  const state = await f.state();
+  const launch = state.commands.find(
+    ({ command, args }) => command === "copilot" && args.includes("--interactive"),
+  );
+  assert.ok(launch);
+  assert.equal(launch.cwd, worktree);
+  assert.equal(nativeValue(launch.args, "--agent"), "grait-implement");
+  assert.equal(nativeValue(launch.args, "--model"), "gpt-5");
+  assert.equal(nativeValue(launch.args, "--effort"), "high");
+  assert.match(nativeValue(launch.args, "--interactive"), /claimed issue #1/);
+  assert.equal(launch.credentialNames.length, 0);
+  assert.ok(
+    !state.commands.some(({ command, args }) => command === "git" && args.includes("fetch")),
+  );
 });

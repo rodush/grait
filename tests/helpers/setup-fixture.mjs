@@ -34,6 +34,9 @@ export async function setupFixture(overrides = {}) {
     ".agents/skills",
     ".claude/agents",
     ".claude/skills",
+    ".github/agents",
+    ".github/skills",
+    ".github/copilot-instructions.md",
     ".codex/agents",
     ".codex/config.toml",
   ]) {
@@ -75,7 +78,7 @@ export async function setupFixture(overrides = {}) {
   await writeFile(statePath, JSON.stringify(state));
   await writeFile(join(directory, "preload.mjs"), preload);
   await writeFile(join(directory, "bin/gh"), commandStub, { mode: 0o755 });
-  for (const name of ["npm", "git", "codex", "claude"])
+  for (const name of ["npm", "git", "codex", "claude", "copilot"])
     await writeFile(join(directory, "bin", name), commandStub, { mode: 0o755 });
   spawnSync("git", ["config", "user.name", "GRAIT Acceptance"], { cwd: directory });
   spawnSync("git", ["config", "user.email", "acceptance@example.invalid"], { cwd: directory });
@@ -202,6 +205,9 @@ globalThis.fetch = async (url, options = {}) => {
     value = login === "acme" ? state.repository.owner : { login, id: 42, type: "User", node_id: "human-node" };
   }
   else if (method === "GET" && path === "repos/acme/service") value = state.repository;
+  else if (method === "GET" && path === "repos/acme/service/issues/1") value = state.issue;
+  else if (method === "GET" && path === "repos/acme/service/issues/1/comments") value = state.issueComments || [];
+  else if (method === "GET" && path === "repos/acme/service/issues/1/dependencies/blocked_by") value = [];
   else if (method === "GET" && path === "repos/acme/service/actions/variables") value = { variables: state.variables };
   else if (method === "GET" && path === "repos/acme/service/actions/secrets") value = { secrets: state.secrets || [] };
   else if (method === "GET" && path.endsWith("/environments/release/secrets")) value = { secrets: state.releaseSecrets || [] };
@@ -235,7 +241,7 @@ globalThis.fetch = async (url, options = {}) => {
     if (query.includes("createProjectV2(")) {
       state.createdProjects += 1;
       value = { data: { createProjectV2: { projectV2: project } } };
-    } else if (query.includes("items(first:")) value = { data: { node: { items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] } } } };
+    } else if (query.includes("items(first:")) value = { data: { node: { items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: state.projectItems || [] } } } };
     else if (query.includes("fields(first:")) {
       if (state.failProjectDetails) {
         status = 503;
@@ -284,14 +290,21 @@ const args = process.argv.slice(2);
 const statePath = process.env.GRAIT_SETUP_FIXTURE_STATE;
 const state = JSON.parse(readFileSync(statePath, "utf8"));
 const command = basename(process.argv[1]);
-state.commands.push({ command, args, identity: process.env.GH_TOKEN === "synthetic-writer-installation" ? "writer" : "human", credentialNames: ["GH_TOKEN", "GITHUB_TOKEN", "PROJECT_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"].filter(name => process.env[name]) });
+state.commands.push({ command, args, cwd: process.cwd(), identity: process.env.GH_TOKEN === "synthetic-writer-installation" ? "writer" : "human", credentialNames: ["GH_TOKEN", "GITHUB_TOKEN", "PROJECT_TOKEN", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "COPILOT_GITHUB_TOKEN", "COPILOT_PROVIDER_API_KEY", "COPILOT_PROVIDER_BASE_URL", "COPILOT_PROVIDERS_CONFIG", "COPILOT_MODEL", "COPILOT_OFFLINE"].filter(name => process.env[name]) });
 writeFileSync(statePath, JSON.stringify(state));
 if (command === "git") {
+  if (args.includes("fetch") || args.includes("clone")) { process.stderr.write("External Git network is disabled in the fixture\\n"); process.exit(2); }
   if (args.includes("push")) { if (state.failPush) process.exit(9); process.stdout.write("Synthetic branch push completed\\n"); process.exit(0); }
   const result = spawnSync(process.env.GRAIT_FIXTURE_REAL_GIT, args, { env: process.env, encoding: "utf8" });
   process.stdout.write(result.stdout || ""); process.stderr.write(result.stderr || ""); process.exit(result.status === null ? 1 : result.status);
 }
 if (command === "npm") { if (state.failTooling === args.join(" ")) process.exit(9); process.stdout.write("Local tooling check completed\\n"); process.exit(0); }
+if (command === "copilot") {
+  if (args[0] === "--version") { process.stdout.write("GitHub Copilot CLI 1.0.107\\n"); process.exit(0); }
+  if (args[0] === "login") { state.nativeLoginCount = (state.nativeLoginCount || 0) + 1; writeFileSync(statePath, JSON.stringify(state)); process.exit(0); }
+  if (args.includes("--interactive")) { process.stdout.write("Synthetic interactive Copilot session\\n"); process.exit(0); }
+  process.stderr.write("Unsupported Copilot command in fake native session\\n"); process.exit(2);
+}
 if (["codex", "claude"].includes(command)) {
   if ((command === "codex" && args[0] === "login" && args.length === 1) || (command === "claude" && args[1] === "login")) {
     state.nativeLoginCount = (state.nativeLoginCount || 0) + 1;

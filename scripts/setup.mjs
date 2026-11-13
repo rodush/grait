@@ -81,7 +81,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "GRAIT local setup\n\nnpm run setup -- [--plan] [--repo OWNER/REPO] [--harness codex|claude]\n  --yes              Accept the displayed configuration plan\n  --no-browser       Print approval URLs (forward the localhost callback port over SSH)\n  --project-owner LOGIN --project-number NUMBER   Bind an existing Project\n  --maintainers LOGIN,LOGIN   Human code owners (default: signed-in GitHub user)\n  --writer-key PATH --reviewer-key PATH   Import private keys for existing Apps\n  --publish          Retry only the saved configuration push/PR after a failure\n  --activate         Activate after human merge and successful default-branch CI\n\nAll AI runs in your native harness using its own login. No provider API keys are requested. See docs/installation.md.",
+      "GRAIT local setup\n\nnpm run setup -- [--plan] [--repo OWNER/REPO] [--harness codex|claude|copilot]\n  --yes              Accept the displayed configuration plan\n  --no-browser       Print approval URLs (forward the localhost callback port over SSH)\n  --project-owner LOGIN --project-number NUMBER   Bind an existing Project\n  --maintainers LOGIN,LOGIN   Human code owners (default: signed-in GitHub user)\n  --writer-key PATH --reviewer-key PATH   Import private keys for existing Apps\n  --publish          Retry only the saved configuration push/PR after a failure\n  --activate         Activate after human merge and successful default-branch CI\n\nAll AI runs in your native harness using its own login. No provider API keys are requested. See docs/installation.md.",
     );
     return;
   }
@@ -93,8 +93,8 @@ async function main() {
       .nameWithOwner;
   const harness = values.harness || config.engine;
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo || "")) throw new Error("Provide --repo OWNER/REPO");
-  if (!["codex", "claude"].includes(harness))
-    throw new Error("Choose --harness codex or --harness claude");
+  if (!["codex", "claude", "copilot"].includes(harness))
+    throw new Error("Choose --harness codex, --harness claude, or --harness copilot");
   if (
     config.controllerRepository &&
     config.controllerRepository.toLowerCase() !== repo.toLowerCase()
@@ -266,7 +266,7 @@ async function main() {
     config.engine = harness;
     config.schemaVersion = 2;
     config.execution = "local";
-    config.supportedEngines = ["codex", "claude"];
+    config.supportedEngines = ["codex", "claude", "copilot"];
     config.maxConcurrentWorkers ||= 2;
     config.orchestrator ||= { reasoning: "medium" };
     for (const key of ["ghAwVersion", "ghAwActionsSha", "engineVersions", "budget"])
@@ -338,6 +338,9 @@ async function main() {
       ".agents/skills",
       ".claude/skills",
       ".claude/agents",
+      ".github/skills",
+      ".github/agents",
+      ".github/copilot-instructions.md",
     ]);
     await command("git", ["add", "--force", ".codex/config.toml", ".codex/agents"]);
     await command("git", ["commit", "-m", "chore: configure local GRAIT harness"]);

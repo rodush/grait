@@ -42,6 +42,8 @@ npm run orchestrator -- claim --issue 123
 npm run orchestrator -- worktree --issue 123
 ```
 
+Any unarchived Project story in Review blocks admission of a new story, including Review work awaiting humans or external dependencies. Finish or resolve that work first; existing claims, review/fix stages, and redesign under an existing claim may continue. The five-story limit is a ceiling, not a target to fill.
+
 The command reserves In Progress before work. Repeated accepted claims return the same issue branch. Fresh scope/dependencies and the five-story cap are checked; inaccessible active items count against capacity. The worktree command prints the assigned absolute path and head. Give that path, acceptance digest, committed SHA, scope, and next owner to each specialist.
 
 ## Tester-first implementation and publishing
@@ -99,7 +101,7 @@ Use APPROVE with no blockers/rethink/conflicts for a complete clean review; COMM
 npm run orchestrator -- review --pr 456 --file /tmp/review.json
 ```
 
-For a setup/migration PR that must satisfy existing active agent-review rules before the new host is activated, a configured human operator can explicitly publish its locally evaluated review with `review --setup-review --pr N --file PATH`. This permits only the reviewer publishing operation during staged setup; it never enables claims, implementation, or a fix loop. Existing issue/PR pause state and lifetime limits still apply. Use ordinary review publication after activation.
+For a setup/migration PR that must satisfy existing active agent-review rules before the new host is activated, a configured human operator can explicitly publish its locally evaluated review with `npm run orchestrator -- review --setup-review --pr N --file PATH`. This permits only the reviewer publishing operation during staged setup; it never enables claims, implementation, or a fix loop. Existing issue/PR pause state and lifetime limits still apply. Use ordinary review publication after activation.
 
 The publisher uses the reviewer App, verifies the actual GitHub review identity/head/decision, and records lifetime history. Only a valid approval makes the writer's `Agent review` status succeed for that exact SHA. A new head needs a new review. Humans still approve and squash merge.
 

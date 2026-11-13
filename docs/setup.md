@@ -6,35 +6,37 @@ For step-by-step adoption, start with [installation and configuration](installat
 
 Use Node.js 24 and the npm version recorded in `package.json`. `.npmrc` keeps dependency install scripts disabled and requires package maturity. Application code may use any language; add its commands and test adapter when choosing a stack.
 
-| Command                                    | Purpose                                                                      |
-| ------------------------------------------ | ---------------------------------------------------------------------------- |
-| `npm run setup -- --plan`                  | Read-only installation preview                                               |
-| `npm run setup`                            | Guided host and repository configuration                                     |
-| `npm run setup -- --activate`              | Activate after human merge and default-branch CI                             |
-| `npm run orchestrator -- start`            | Start the native local orchestrator session                                  |
-| `npm run orchestrator -- --help`           | Queue, worktree, worker, review, and synchronization commands                |
-| `npm run github -- --help`                 | Scoped writer publishing commands                                            |
-| `npm run bootstrap -- ...`                 | Advanced repository/Project provisioning; plan by default, `--apply` mutates |
-| `npm run harness:generate`                 | Generate installed skills and Codex/Claude roles from canonical sources      |
-| `npm run check`                            | Validate configuration, action pins, documentation links, and adapter drift  |
-| `npm test`                                 | Run deterministic local tooling tests with fake external services            |
-| `npm run format:check` / `npm run lint:md` | Check formatting and Markdown                                                |
+| Command                                    | Purpose                                                                         |
+| ------------------------------------------ | ------------------------------------------------------------------------------- |
+| `npm run setup -- --plan`                  | Read-only installation preview                                                  |
+| `npm run setup`                            | Guided host and repository configuration                                        |
+| `npm run setup -- --activate`              | Activate after human merge and default-branch CI                                |
+| `npm run orchestrator -- start`            | Start the native local orchestrator session                                     |
+| `npm run orchestrator -- --help`           | Queue, worktree, worker, review, and synchronization commands                   |
+| `npm run github -- --help`                 | Scoped writer publishing commands                                               |
+| `npm run bootstrap -- ...`                 | Advanced repository/Project provisioning; plan by default, `--apply` mutates    |
+| `npm run harness:generate`                 | Generate installed skills and Codex/Claude/Copilot roles from canonical sources |
+| `npm run check`                            | Validate configuration, action pins, documentation links, and adapter drift     |
+| `npm test`                                 | Run deterministic local tooling tests with fake external services               |
+| `npm run format:check` / `npm run lint:md` | Check formatting and Markdown                                                   |
 
 No compiler extension or generated Actions lockfiles are needed. Edit canonical sources first and regenerate native adapters after changing roles, skills, or role profiles.
 
 ## Subscription authentication
 
-Sign in through the official client: `codex login` or `claude auth login`. Setup checks the native login and invokes it when missing. It never reads/copies the provider's stored credentials or uploads model keys to GitHub. If you have configured API billing, switch the client to subscription login before setup. Availability and allowances depend on your plan; all sub-agents share its allowance. GRAIT does not automatically switch to API billing when an allowance runs out.
+Sign in through the official client: `codex login`, `claude auth login`, or `copilot login`. Setup checks the native Codex/Claude login and invokes it when missing. Copilot has no documented non-interactive login-status command: setup verifies the CLI is installed and invokes its native OAuth login; the interactive client validates account access and plan entitlement when the session starts. It never reads/copies the provider's stored credentials or uploads model keys to GitHub. If you have configured API billing, switch the client to subscription login before setup. Availability and allowances depend on your plan; all sub-agents share its allowance. GRAIT does not automatically switch to API billing when an allowance runs out.
 
 [Codex supports ChatGPT subscription sign-in](https://learn.chatgpt.com/docs/auth), and [Claude Code supports native Claude sign-in](https://code.claude.com/docs/en/authentication). Keep the unmodified official client responsible for authentication; [Anthropic distinguishes this from third-party applications routing subscription credentials](https://code.claude.com/docs/en/legal-and-compliance).
 
+Copilot uses local CLI sub-agents; its `/delegate` cloud-agent flow is outside this setup. Copilot uses its own user login, separate from the writer/reviewer GitHub Apps. Its built-in GitHub CLI login fallback belongs to that user; publishing App tokens are stripped before harness launch. Avoid configuring BYOK providers in the native client for this subscription-backed setup. See [Copilot CLI authentication](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli) and [native CLI flags](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference). GRAIT does not probe Copilot entitlement by making a model request or invent an authentication-status command.
+
 ## Harness and model configuration
 
-`workflow.config.json` selects `engine: "codex"` or `"claude"` and `execution: "local"`. Its six roles all run on the host. The main session is the orchestrator. `maxConcurrentWorkers` defaults to two, independently of the five-story Project cap. The orchestrator skill applies the worker cap; the Codex project config also caps spawned threads. The provider's native limits still apply.
+`workflow.config.json` selects `engine: "codex"`, `"claude"`, or `"copilot"` and `execution: "local"`. Its six roles all run on the host. The main session is the orchestrator. `maxConcurrentWorkers` defaults to two, independently of the five-story Project cap. The orchestrator skill applies the worker cap; the Codex project config also caps spawned threads. The provider's native limits still apply.
 
-The default orchestrator uses medium reasoning. The reviewer uses high reasoning. `config/codex.toml` is the canonical Codex project config; its installed `.codex/config.toml` copy is generated. Tester/implementer model and reasoning overrides remain under `tdd.profiles`; `null` inherits the selected harness model/settings. Overrides are emitted only for the matching provider, so a Codex model name does not leak into Claude agents. Select models available on your account. Role settings grant no extra permissions.
+The default orchestrator uses medium reasoning. The reviewer uses high reasoning. `config/codex.toml` is the canonical Codex project config; its installed `.codex/config.toml` copy is generated. Tester/implementer model and reasoning overrides remain under `tdd.profiles`; `null` inherits the selected harness model/settings. Overrides are emitted only for the matching provider, so a Codex model name does not leak into Claude agents. Select models available on your account. Role settings grant no extra permissions. Copilot uses its native `--effort` setting and custom-agent `reasoningEffort`; worker profiles must name Copilot-served models rather than provider-qualified BYOK models. The default launcher explicitly selects Copilot Auto and strips provider override variables instead of passing an LLM API key. When a Copilot parent uses Auto, native sub-agents inherit the resolved parent model regardless of their authored model preference; use an explicit `npm run orchestrator -- worker --issue N --role implement` session when a role profile must select a particular model. That session passes the profile through the native `--model` option.
 
-Claude triage/review roles use native worktree isolation. Tester, implementer, and fix stages use the orchestrator's pre-created issue worktree sequentially; they must not create independent default-branch worktrees. `orchestrator worker` launches a native session in that existing worktree. Native delegation can instead assign its absolute path and exact committed handoff explicitly.
+Claude triage/review roles use native worktree isolation. Tester, implementer, and fix stages use the orchestrator's pre-created issue worktree sequentially; they must not create independent default-branch worktrees. `npm run orchestrator -- worker --issue N --role implement` launches a native session in that existing worktree. Native delegation can instead assign its absolute path and exact committed handoff explicitly.
 
 ## Publishing identities and Project access
 

@@ -151,6 +151,17 @@ export class LocalOrchestrator {
     }
     if (item.status !== this.config.statuses.ready)
       throw new Error("Only Ready issues can be claimed");
+    if (
+      this.project.items.some(
+        (entry) =>
+          !entry.isArchived &&
+          entry.content?.__typename !== "PullRequest" &&
+          entry.status === this.config.statuses.review,
+      )
+    )
+      throw new Error(
+        "Finish existing Review stories before claiming new work; resolve pending reviews, fixes, or human/external waits first",
+      );
     if (!availableSlots(this.project.items, this.config))
       throw new Error("The five-story In Progress capacity is exhausted");
     if (state.pendingClaim)

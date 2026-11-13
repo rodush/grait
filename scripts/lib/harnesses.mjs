@@ -4,7 +4,7 @@ import { parse, stringify } from "yaml";
 import { stringify as stringifyToml } from "smol-toml";
 
 const roles = ["orchestrator", "triage", "test", "implement", "review", "fix"];
-const skillRoots = [".agents/skills", ".claude/skills"];
+const skillRoots = [".agents/skills", ".claude/skills", ".github/skills"];
 
 export function validateAgentDefinitions(definitions) {
   if (!Array.isArray(definitions) || definitions.length !== roles.length)
@@ -56,6 +56,10 @@ export async function generateHarnessFiles(root) {
   const config = JSON.parse(await readFile(join(root, "workflow.config.json"), "utf8"));
   const files = new Map();
   files.set(".codex/config.toml", await readFile(join(root, "config/codex.toml"), "utf8"));
+  files.set(
+    ".github/copilot-instructions.md",
+    "# Shared repository instructions\n\nRead `AGENTS.md`, `docs/coding-guidelines.md`, and `docs/workflow.md` before working. The shared skill and role catalog is in `docs/agents.md`; native adapters are generated from `automation/skills/` and `automation/agents.json`. All agents run in this user-owned harness.\n\nFor PR review, also read `docs/review-guidelines.md`. Evaluate the exact PR head locally without executing untrusted code in the credentialed session; publish findings and formal decisions through the separate GitHub reviewer identity. Humans merge and release.\n",
+  );
   for (const agent of definitions) {
     const source = `automation/skills/${agent.skill}/SKILL.md`;
     const text = await readFile(join(root, source), "utf8");
@@ -78,6 +82,10 @@ export async function generateHarnessFiles(root) {
     files.set(
       `.claude/agents/${agent.name}.md`,
       `---\n${stringify({ name: agent.name, description: agent.description, ...(["triage", "review"].includes(agent.role) ? { isolation: "worktree" } : {}), ...(config.engine === "claude" && profile.model ? { model: profile.model } : {}), effort: config.engine === "claude" && profile.reasoning ? profile.reasoning : agent.role === "review" ? "high" : config.orchestrator.reasoning })}---\n\n${body}`,
+    );
+    files.set(
+      `.github/agents/${agent.name}.agent.md`,
+      `---\n${stringify({ name: agent.name, description: agent.description, "include-custom-instructions": true, ...(config.engine === "copilot" && profile.model ? { model: profile.model } : {}), reasoningEffort: config.engine === "copilot" && profile.reasoning ? profile.reasoning : agent.role === "review" ? "high" : config.orchestrator.reasoning })}---\n\n${body}`,
     );
   }
   return files;

@@ -190,3 +190,22 @@ test("bootstrap reuses the recorded bound Project without creating paid-automati
   assert.equal(variables.has("AUTOMATION_BUDGET_LOGIN"), false);
   assert.equal(variables.get("AUTOMATION_ENABLED"), "false");
 });
+
+test("explicit Copilot setup planning is read-only and needs no login or provider credentials", async (t) => {
+  const f = await fixture(t);
+  const before = await f.read("workflow.config.json");
+  const result = await f.run(
+    "setup.mjs",
+    ["--plan", "--repo", "acme/service", "--harness", "copilot"],
+    { env: { GH_TOKEN: "", GITHUB_TOKEN: "", PROJECT_TOKEN: "" } },
+  );
+  assert.equal(result.status, 0);
+  const plan = JSON.parse(result.output);
+  assert.equal(plan.harness, "copilot");
+  assert.equal(plan.execution, "local");
+  assert.equal(plan.providerApiKeys, false);
+  const state = await f.state();
+  assert.deepEqual(state.calls, []);
+  assert.deepEqual(state.commands, []);
+  assert.equal(await f.read("workflow.config.json"), before);
+});

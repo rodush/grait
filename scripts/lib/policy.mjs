@@ -28,11 +28,11 @@ export function validateConfig(config) {
     throw new Error("Distinct admission and control labels are required");
   if (
     !Array.isArray(config.supportedEngines) ||
-    config.supportedEngines.length !== 2 ||
-    !["codex", "claude"].every((engine) => config.supportedEngines.includes(engine)) ||
+    config.supportedEngines.length !== 3 ||
+    !["codex", "claude", "copilot"].every((engine) => config.supportedEngines.includes(engine)) ||
     !config.supportedEngines.includes(config.engine)
   )
-    throw new Error("Choose the Codex or Claude Code local harness");
+    throw new Error("Choose the Codex, Claude Code, or GitHub Copilot CLI local harness");
   if (
     !Number.isInteger(config.maxConcurrentWorkers) ||
     config.maxConcurrentWorkers < 1 ||
@@ -74,7 +74,16 @@ export function validateConfig(config) {
       }
     }
   }
-  if (config.tdd) validateTddConfig(config);
+  if (config.tdd) {
+    validateTddConfig(config);
+    if (
+      config.engine === "copilot" &&
+      Object.values(config.tdd.profiles).some((profile) => profile.model?.includes("/"))
+    )
+      throw new Error(
+        "Copilot profiles must select Copilot-served models, not provider-qualified BYOK models",
+      );
+  }
   return config;
 }
 

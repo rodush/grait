@@ -502,3 +502,30 @@ test("native model and test processes receive subscription context without GitHu
     (error) => !error.message.includes("synthetic-private-error"),
   );
 });
+
+test("native Copilot launches cannot inherit publishing tokens custom providers or offline routing", () => {
+  const providerVariables = [
+    "COPILOT_PROVIDER_API_KEY",
+    "COPILOT_PROVIDER_BASE_URL",
+    "COPILOT_PROVIDER_COMMAND",
+    "COPILOT_PROVIDER_HEADERS",
+    "COPILOT_PROVIDER_FUTURE_SETTING",
+    "COPILOT_PROVIDERS_CONFIG",
+    "COPILOT_MODEL",
+    "COPILOT_OFFLINE",
+  ];
+  const environment = {
+    PATH: "/native/bin",
+    HOME: "/native/profile",
+    GH_TOKEN: "synthetic-app-token",
+    GITHUB_TOKEN: "synthetic-job-token",
+    COPILOT_GITHUB_TOKEN: "synthetic-token",
+    ...Object.fromEntries(providerVariables.map((name) => [name, "synthetic-provider-setting"])),
+  };
+  const sanitized = withoutCredentials(environment);
+  for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "COPILOT_GITHUB_TOKEN", ...providerVariables])
+    assert.equal(sanitized[name], undefined);
+  assert.equal(sanitized.PATH, environment.PATH);
+  assert.equal(sanitized.HOME, environment.HOME);
+  assert.equal(environment.COPILOT_MODEL, "synthetic-provider-setting");
+});

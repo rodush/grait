@@ -1,10 +1,10 @@
 # Installation and configuration
 
-Choose your repository path first, then follow [guided configuration](#guided-configuration). The target is one user-owned host running Codex CLI or Claude Code, with GitHub providing issues, a Project, PRs, reviews, and deterministic CI.
+Choose your repository path first, then follow [guided configuration](#guided-configuration). The target is one user-owned host running Codex CLI, Claude Code, or GitHub Copilot CLI, with GitHub providing issues, a Project, PRs, reviews, and deterministic CI.
 
 ## Prerequisites
 
-Install Git, Node.js 24, npm (the version in `package.json`), GitHub CLI, and your chosen official harness: [Codex CLI](https://developers.openai.com/codex/cli) or [Claude Code](https://code.claude.com/docs/en/quickstart). Use an eligible provider subscription. No LLM API key is required.
+Install Git, Node.js 24, npm (the version in `package.json`), GitHub CLI, and your chosen official harness: [Codex CLI](https://developers.openai.com/codex/cli), [Claude Code](https://code.claude.com/docs/en/quickstart), or [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli). Use an eligible provider subscription. No LLM API key is required.
 
 Authenticate GitHub and configure Git authentication:
 
@@ -60,7 +60,7 @@ For an owner handoff, attach the output of `npm run setup -- --plan --repo UPSTR
    npm run setup -- --plan
    ```
 
-   Use `--repo OWNER/REPOSITORY` to pin the target, `--harness claude` to choose Claude Code, and `--maintainers alice,bob` to choose human owners. A plan with an explicit target needs no credentials or network access. An inferred target uses read-only GitHub CLI discovery.
+   Use `--repo OWNER/REPOSITORY` to pin the target, `--harness claude` to choose Claude Code, `--harness copilot` for Copilot CLI, and `--maintainers alice,bob` to choose human owners. A plan with an explicit target needs no credentials or network access. An inferred target uses read-only GitHub CLI discovery.
 
 2. **Run setup.** It displays one plan for acceptance, checks administrator access, guides native harness sign-in when needed, installs tooling, and opens the App registration flow:
 
@@ -99,8 +99,8 @@ For an owner handoff, attach the output of `npm run setup -- --plan --repo UPSTR
 ## Upgrade an existing GRAIT installation
 
 1. Stop active agents at committed handoffs. In the old installation set `AUTOMATION_ENABLED=false`, disable `controller.yml`, and cancel/wait for old agent workflows before enabling the local runtime. Preserve issue/PR ledgers and their writer identity so review history and lifetime limits survive migration. Resolve any in-flight or ambiguous external operation with a human.
-2. Integrate this version on a branch, preserving application changes and Project identity. Remove the old agent `.md`/`.lock.yml` files and `shared/` under `.github/workflows/`, `controller.yml`, `tdd-verify.yml`, `automation/prompts/`, and the old compiler/dispatch/authorizer scripts. Remove their npm scripts and CI compiler steps. The maintained workflows are `ci.yml` and optional `release.yml`. Remove Copilot adapters, which this subscription path does not support.
-3. Migrate `workflow.config.json` to schema version 2 using this version's configuration: keep your repository binding, humans, scopes, statuses, and TDD profiles; select `execution: "local"`, `engine: "codex"` or `"claude"`, two workers, and medium orchestrator reasoning. Remove compiler pins, hosted engine pins, credit budgets, and the old runner image; retain/adapt explicit local test install/command arrays under `tdd.runner`. Keep the legacy `controllerRepository` key and `[agent-controller:OWNER/REPOSITORY]` Project marker: they preserve existing bindings. Add the new orchestrator canonical skill and regenerate adapters.
+2. Integrate this version on a branch, preserving application changes and Project identity. Remove the old agent `.md`/`.lock.yml` files and `shared/` under `.github/workflows/`, `controller.yml`, `tdd-verify.yml`, `automation/prompts/`, and the old compiler/dispatch/authorizer scripts. Remove their npm scripts and CI compiler steps. The maintained workflows are `ci.yml` and optional `release.yml`. Keep the local Copilot skill, agent, and instruction adapters; Copilot CLI remains a supported subscription-backed harness.
+3. Migrate `workflow.config.json` to schema version 2 using this version's configuration: keep your repository binding, humans, scopes, statuses, and TDD profiles; select `execution: "local"`, `engine: "codex"`, `"claude"`, or `"copilot"`, two workers, and medium orchestrator reasoning. Remove compiler pins, hosted engine pins, credit budgets, and the old runner image; retain/adapt explicit local test install/command arrays under `tdd.runner`. Keep the legacy `controllerRepository` key and `[agent-controller:OWNER/REPOSITORY]` Project marker: they preserve existing bindings. Add the new orchestrator canonical skill and regenerate adapters.
 4. Reuse the existing publishing Apps. Their old private keys cannot be downloaded from GitHub Secrets. Recover your original keys or generate/download replacement keys **on the existing Apps**. Remove obsolete Actions permission from the writer App, keeping contents/issues/pull requests/statuses write and metadata read; reviewer keeps contents read, issues/pull requests write, metadata read. Approve permission changes on the installation. Local Project writes use the human's Project authorization rather than an App organization-Project grant.
 5. Import private key files on the runtime host during setup:
 

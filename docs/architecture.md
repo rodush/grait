@@ -2,13 +2,13 @@
 
 ## Execution and subscriptions
 
-The user owns the runtime host. A native Codex CLI or Claude Code session acts as the orchestrator and controls specialist sub-agents. Their files, processes, commands, and worktrees remain on that host, or on a user-owned remote host. Inference uses the provider service through the official client's own subscription login. GRAIT does not proxy provider login tokens or call an LLM API itself.
+The user owns the runtime host. A native Codex CLI, Claude Code, or GitHub Copilot CLI session acts as the orchestrator and controls specialist sub-agents. Their files, processes, commands, and worktrees remain on that host, or on a user-owned remote host. Inference uses the provider service through the official client's own subscription login. GRAIT does not proxy provider login tokens or call an LLM API itself.
 
 GitHub stores issues, native blocking relationships, the Project, branches, PRs, formal reviews, and visible state comments. Actions runs deterministic validation and optional operator releases. No model credentials or agent jobs are required there.
 
 ## Canonical policy and adapters
 
-`AGENTS.md`, `docs/`, `automation/skills/`, and `automation/agents.json` are canonical. `scripts/harnesses.mjs` generates Codex and Claude discovery files. CI checks drift. `workflow.config.json` declares local execution, the selected harness, scoped writes, role profiles, and hard limits. `config/codex.toml` supplies the canonical native Codex defaults. There are no workflow compilation steps or generated Actions locks.
+`AGENTS.md`, `docs/`, `automation/skills/`, and `automation/agents.json` are canonical. `scripts/harnesses.mjs` generates Codex, Claude, and Copilot discovery files. CI checks drift. `workflow.config.json` declares local execution, the selected harness, scoped writes, role profiles, and hard limits. `config/codex.toml` supplies the canonical native Codex defaults. There are no workflow compilation steps or generated Actions locks.
 
 ## Deterministic local operations
 

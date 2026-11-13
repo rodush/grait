@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "engine": "codex",
   "authentication": "app",
-  "supportedEngines": ["codex", "claude"],
+  "supportedEngines": ["codex", "claude", "copilot"],
   "statuses": {
     "backlog": "Backlog",
     "ready": "Ready",

@@ -20,7 +20,7 @@ Each handoff records issue, role, shared worktree path, branch, base SHA, result
 
 ## Native harness execution
 
-All roles run on the user host. Native triage/review may use temporary independent worktrees. Tester and implementer instead use the existing shared issue worktree at its recorded head; a fresh default-branch worktree is not an implementation handoff. `npm run orchestrator -- worktree --issue N` prepares/reuses the branch; `worker --issue N --role test|implement|fix` launches an official native session there. The orchestrator may delegate natively with the same explicit absolute path and ownership contract.
+All roles run on the user host. Native triage/review may use temporary independent worktrees. Tester and implementer instead use the existing shared issue worktree at its recorded head; a fresh default-branch worktree is not an implementation handoff. `npm run orchestrator -- worktree --issue N` prepares/reuses the branch; `npm run orchestrator -- worker --issue N --role test|implement|fix` launches an official native session there. The orchestrator may delegate natively with the same explicit absolute path and ownership contract.
 
 The worker command refuses a dirty handoff but cannot identify every independently started process editing the same files. The orchestrator must wait for the old role to release ownership before starting the next. Worktrees and prompts are not OS security boundaries. Keep one coordinating host per Project; separate hosts have independent locks.
 

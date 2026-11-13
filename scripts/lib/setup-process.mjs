@@ -96,11 +96,27 @@ export function withoutCredentials(environment = process.env) {
     "RELEASE_TOKEN",
   ])
     delete result[name];
+  for (const name of Object.keys(result))
+    if (
+      name.startsWith("COPILOT_PROVIDER_") ||
+      ["COPILOT_PROVIDERS_CONFIG", "COPILOT_MODEL", "COPILOT_OFFLINE"].includes(name)
+    )
+      delete result[name];
   return result;
 }
 
 export async function requireSubscription(harness, { login = false } = {}) {
-  if (!["codex", "claude"].includes(harness)) throw new Error("Choose Codex or Claude Code");
+  if (!["codex", "claude", "copilot"].includes(harness))
+    throw new Error("Choose Codex, Claude Code, or GitHub Copilot CLI");
+  if (harness === "copilot") {
+    // Copilot exposes native OAuth login, but no documented auth-status command.
+    // Its interactive client owns account/plan validation; a version is not proof
+    // of entitlement and no model request is made to probe one here.
+    await command("copilot", ["--version"], { env: withoutCredentials() });
+    if (login)
+      await command("copilot", ["login"], { interactive: true, env: withoutCredentials() });
+    return;
+  }
   const statusArgs = harness === "codex" ? ["login", "status"] : ["auth", "status"];
   let status = await command(harness, statusArgs, {
     allowFailure: true,
