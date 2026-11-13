@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { stringify as stringifyToml } from "smol-toml";
 
-const roles = ["triage", "implement", "review", "fix"];
+const roles = ["triage", "test", "implement", "review", "fix"];
 const skillRoots = [".agents/skills", ".claude/skills", ".github/skills"];
 
 export function validateAgentDefinitions(definitions) {
@@ -53,25 +53,34 @@ export async function generateHarnessFiles(root) {
   const definitions = validateAgentDefinitions(
     JSON.parse(await readFile(join(root, "automation/agents.json"), "utf8")),
   );
+  const config = JSON.parse(await readFile(join(root, "workflow.config.json"), "utf8"));
   const files = new Map();
   for (const agent of definitions) {
     const source = `automation/skills/${agent.skill}/SKILL.md`;
     const text = await readFile(join(root, source), "utf8");
     readSkill(text, agent.skill);
     for (const directory of skillRoots) files.set(`${directory}/${agent.skill}/SKILL.md`, text);
-    const instructions = `Read AGENTS.md and apply the ${agent.skill} skill at ${source}. Follow its distinction between local and controller-authorized hosted execution. Use a local worktree separate from the coordinator and unrelated sub-agents; the tester and implementer for one issue share its worktree and branch with sequential exclusive ownership; follow docs/worktrees.md for sequential commit handoffs and cleanup after merge. Inherit the parent harness's model and permissions; this role grants no additional authority.\n`;
+    const profile =
+      config.tdd?.profiles?.[
+        agent.role === "test"
+          ? "tester"
+          : ["implement", "fix"].includes(agent.role)
+            ? "implementer"
+            : ""
+      ] || {};
+    const instructions = `Read AGENTS.md and apply the ${agent.skill} skill at ${source}. Follow its distinction between local and controller-authorized hosted execution. Use a local worktree separate from the coordinator and unrelated sub-agents; the tester and implementer for one issue share its worktree and branch with sequential exclusive ownership; follow docs/worktrees.md for sequential commit handoffs and cleanup after merge. Apply configured role model/reasoning only when this harness matches workflow.config.json engine; other harnesses inherit the parent model/reasoning; inherit permissions; this role grants no additional authority.\n`;
     files.set(
       `.codex/agents/${agent.name}.toml`,
-      `# Generated from automation/agents.json; run npm run harness:generate.\n${stringifyToml({ name: agent.name, description: agent.description, developer_instructions: instructions })}`,
+      `# Generated from automation/agents.json; run npm run harness:generate.\n${stringifyToml({ name: agent.name, description: agent.description, developer_instructions: instructions, ...(config.engine === "codex" && profile.model ? { model: profile.model } : {}), ...(config.engine === "codex" && profile.reasoning ? { model_reasoning_effort: profile.reasoning } : {}) })}`,
     );
     const body = `<!-- Generated from automation/agents.json; run npm run harness:generate. -->\n\n${instructions}`;
     files.set(
       `.claude/agents/${agent.name}.md`,
-      `---\n${stringify({ name: agent.name, description: agent.description })}---\n\n${body}`,
+      `---\n${stringify({ name: agent.name, description: agent.description, ...(config.engine === "claude" && profile.model ? { model: profile.model } : {}) })}---\n\n${body}`,
     );
     files.set(
       `.github/agents/${agent.name}.agent.md`,
-      `---\n${stringify({ name: agent.name, description: agent.description })}---\n\n${body}`,
+      `---\n${stringify({ name: agent.name, description: agent.description, ...(config.engine === "copilot" && profile.model ? { model: profile.model } : {}) })}---\n\n${body}`,
     );
   }
   return files;

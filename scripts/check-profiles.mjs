@@ -39,7 +39,7 @@ try {
           `${engine}/${authentication} compilation failed:\n${error.stdout || ""}\n${error.stderr || error.message}`,
         );
       }
-      for (const role of ["triage", "implement", "review", "fix"]) {
+      for (const role of ["triage", "test", "develop", "implement", "review", "fix"]) {
         const workflow = parse(
           await readFile(join(temporary, `.github/workflows/${role}.lock.yml`), "utf8"),
         );
@@ -70,7 +70,7 @@ try {
             `${engine}/${authentication}/${role}: concurrency would serialize unrelated stories`,
           );
       }
-      console.log(`Compiled and checked ${engine}/${authentication}: 4 workflows`);
+      console.log(`Compiled and checked ${engine}/${authentication}: 6 workflows`);
     }
   }
 } finally {

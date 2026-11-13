@@ -55,7 +55,7 @@ The compiler is gh-aw 1.2.2 with its matching immutable runtime SHA. Do not down
 
 ## Shared skills and agents
 
-The template includes four reusable skills and matching agent definitions for Codex, Claude Code, and Copilot. See [the role catalog](agents.md) for invocation and execution boundaries. Edit `automation/skills/` or `automation/agents.json`, then regenerate with `npm run harness:generate`. Models and permissions remain inherited from the selected harness; local review requests route to GitHub Actions.
+The template includes five reusable skills and matching agent definitions for Codex, Claude Code, and Copilot. See [the role catalog](agents.md) for invocation and execution boundaries. Edit `automation/skills/` or `automation/agents.json`, then regenerate with `npm run harness:generate`. Models and permissions remain inherited from the selected harness; local review requests route to GitHub Actions.
 
 ## Credentials and identities
 
@@ -121,3 +121,7 @@ gh workflow run controller.yml
 Activation checks the committed configuration, identities, credential names, project binding, and ownership before activating all four rulesets and enabling the controller. Confirm that the board groups by Status. For an outsider’s issue or fork PR, a maintainer must first apply `agent:admitted`; repository writers and configured identities are admitted automatically. This admission is separate from agent triage and Ready authorization. Add a small issue and verify triage, claiming, hosted implementation, CI, inline review, follow-up fixes, and human squash merge in GitHub. Repeat with a fork PR to verify the read-only review path. These hosted checks require real credentials and cannot be established by local unit tests.
 
 The rulesets keep human merge authority separate from delivery gates: human operators may bypass only the update restriction through a PR; no identity bypasses the required checks or human code-owner approval. Add project-specific CI checks to the delivery rules once a stack exists.
+
+## Adopt the TDD pipeline
+
+Read [the tester-first protocol](tdd.md), configure `tdd.testPatterns`, implementation scopes, runner image/commands, and optional per-role model/reasoning settings before enabling automation. The Node reference runner verifies the template tests; replace its adapter/image when adopting another stack. New triage attestations must explicitly assess TDD applicability. Existing work without that assessment needs retriage. The independent `TDD verification` workflow is dispatched by the controller and consumes the same global concurrency budget; deterministic verification reserves one credit conservatively. Keep source and generated workflows together.

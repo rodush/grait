@@ -9,7 +9,7 @@ export class GitHub {
     this.apiUrl = apiUrl.replace(/\/$/, "");
   }
 
-  async request(path, { method = "GET", body } = {}) {
+  async request(path, { method = "GET", body, binary = false } = {}) {
     const response = await this.fetcher(`${this.apiUrl}/${path.replace(/^\//, "")}`, {
       method,
       headers: {
@@ -27,7 +27,11 @@ export class GitHub {
       error.status = response.status;
       throw error;
     }
-    return response.status === 204 ? null : response.json();
+    return binary
+      ? Buffer.from(await response.arrayBuffer())
+      : response.status === 204
+        ? null
+        : response.json();
   }
 
   async list(path, key) {

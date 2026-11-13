@@ -1,12 +1,5 @@
 ---
 inlined-imports: true
-engine:
-  id: codex
-  version: 0.167.0
-  args:
-    - --config
-    - model_reasoning_effort="high"
-model: ${{ vars.AGENT_MODEL || 'gpt-6.1-sol' }}
 max-turns: 60
 max-ai-credits: 1000
 env:

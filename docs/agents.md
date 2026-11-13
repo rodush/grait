@@ -35,3 +35,7 @@ Native formats follow the [Codex agent reference](https://learn.chatgpt.com/docs
 ## Coordinator responsibilities
 
 The coordinator keeps its checkout isolated and assigns separate worktrees to unrelated sub-agents. The tester and implementer for the same issue share one worktree and branch, handing over exclusive ownership sequentially. It records the role, scope, base SHA, and handoff evidence, serializes tester/implementer ownership of the shared issue branch, and verifies commits before integration. See [the worktree protocol](worktrees.md), including cleanup after human merge.
+
+## Tester and implementer
+
+`grait-test` starts testable issues and owns test-pattern files exclusively. `grait-implement` and `grait-fix` own implementation only; they hand back test revisions rather than editing tests. Role model/reasoning overrides live in `workflow.config.json` and inherit defaults when unset. See [the TDD protocol](tdd.md) for hosted proof gates and local sequential ownership.

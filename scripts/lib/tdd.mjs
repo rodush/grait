@@ -1,3 +1,4 @@
+import { matchesGlob } from "node:path";
 import { digest } from "./policy.mjs";
 
 export const TDD_ROLES = ["tester", "implementer"];
@@ -24,20 +25,75 @@ export function matchesPath(path, pattern) {
   return path === prefix || (pattern.endsWith("/**") && path.startsWith(prefix + "/"));
 }
 
+export function testerWritePatterns(config) {
+  const patterns = config.tdd.testPatterns || config.tdd.testPaths;
+  const result = [];
+  for (const scope of config.allowedWritePaths) {
+    const prefix = root(scope);
+    for (const pattern of patterns) {
+      if (!scope.endsWith("/**")) {
+        if (matchesGlob(scope, pattern)) result.push(scope);
+        continue;
+      }
+      if (pattern.startsWith("**/")) result.push(`${prefix}/${pattern}`);
+      else {
+        const literal = pattern.split(/[?*[{]/)[0];
+        if (literal.startsWith(prefix + "/")) result.push(pattern);
+        else if (prefix.startsWith(literal) && pattern.includes("*"))
+          throw new Error(
+            `Ambiguous test pattern ${pattern} inside ${scope}; use a global **/ pattern`,
+          );
+      }
+    }
+  }
+  return [...new Set(result)];
+}
+
+export function isTestPath(path, config) {
+  return (
+    !!path &&
+    !path.startsWith("/") &&
+    !path.split("/").some((part) => !part || part === "." || part === "..") &&
+    (config.tdd.testPatterns || config.tdd.testPaths).some((pattern) => matchesGlob(path, pattern))
+  );
+}
+
 export function validateTddConfig(config) {
   const tdd = config.tdd;
   if (
     !tdd ||
-    !Array.isArray(tdd.testPaths) ||
-    !tdd.testPaths.length ||
+    !Array.isArray(tdd.testPatterns || tdd.testPaths) ||
+    !(tdd.testPatterns || tdd.testPaths).length ||
     !Array.isArray(tdd.implementationPaths) ||
     !tdd.implementationPaths.length
   )
     throw new Error("Configure explicit tester and implementer write scopes");
-  for (const group of [tdd.testPaths, tdd.implementationPaths])
+  if (tdd.testPatterns) {
+    if (
+      tdd.testPatterns.some(
+        (pattern) =>
+          typeof pattern !== "string" ||
+          !pattern ||
+          pattern.startsWith("/") ||
+          pattern.includes("..") ||
+          pattern.includes("\\") ||
+          !/^[\w./*?{}\[\],-]+$/.test(pattern),
+      )
+    )
+      throw new Error("Invalid testPatterns glob");
+    if (!testerWritePatterns(config).length)
+      throw new Error("No test patterns intersect the write allowlist");
+  }
+  for (const group of [tdd.testPatterns ? [] : tdd.testPaths, tdd.implementationPaths])
     for (const pattern of group) {
       root(pattern);
-      if (!config.allowedWritePaths.some((scope) => matchesPath(root(pattern), scope)))
+      if (
+        !config.allowedWritePaths.some(
+          (scope) =>
+            matchesPath(root(pattern), scope) &&
+            (!pattern.endsWith("/**") || scope.endsWith("/**")),
+        )
+      )
         throw new Error("TDD scopes must stay inside the repository write allowlist");
       if (
         config.protectedPaths.some(
@@ -48,7 +104,7 @@ export function validateTddConfig(config) {
       )
         throw new Error("TDD scopes cannot include protected policy");
     }
-  for (const test of tdd.testPaths)
+  for (const test of tdd.testPatterns ? [] : tdd.testPaths)
     for (const code of tdd.implementationPaths)
       if (matchesPath(root(test), code) || matchesPath(root(code), test))
         throw new Error("Tester and implementer write scopes must be disjoint");
@@ -66,14 +122,24 @@ export function validateTddConfig(config) {
 export function assertRoleChanges(files, role, config) {
   const tdd = validateTddConfig(config);
   const scopes =
-    role === "tester" ? tdd.testPaths : role === "implementer" ? tdd.implementationPaths : null;
+    role === "tester"
+      ? config.allowedWritePaths
+      : role === "implementer"
+        ? tdd.implementationPaths
+        : null;
   if (!scopes) throw new Error("Unknown TDD role");
   for (const file of files) {
     if (!file.filename) throw new Error("Missing changed filename");
     // Both sides of a rename must belong to the same role. Deleting or moving
     // another role's file is a write to that file too.
     for (const path of [file.filename, file.previous_filename].filter(Boolean))
-      if (!scopes.some((scope) => matchesPath(path, scope)))
+      if (
+        !scopes.some((scope) => matchesPath(path, scope)) ||
+        config.protectedPaths.some((scope) =>
+          matchesPath(path, scope.endsWith("/") ? scope + "**" : scope),
+        ) ||
+        (role === "tester" ? !isTestPath(path, config) : isTestPath(path, config))
+      )
         throw new Error(`${role} cannot change ${path}`);
   }
 }
@@ -148,6 +214,8 @@ export function validateEvidence(
       throw new Error("Red requires exactly the expected assertion failures");
   } else if (phase !== "green" || report.failed.length)
     throw new Error("Green requires the complete suite to pass");
+  if (phase === "green" && expectedFailures?.some((id) => !report.passed.includes(id)))
+    throw new Error("Green must execute and pass every accepted test");
   return digest(JSON.stringify(report));
 }
 
@@ -194,6 +262,7 @@ export function completeImplementation(state, report) {
     head: state.head,
     baseline: state.redHead,
     phase: "green",
+    expectedFailures: state.expectedFailures,
   });
   return { ...state, owner: null, phase: "review", evidence: [...state.evidence, evidence] };
 }

@@ -62,7 +62,8 @@ export class DispatchBudget {
     const spent = state.reservations
       .filter((entry) => now - Date.parse(entry.at) < 86_400_000)
       .reduce((total, entry) => total + entry.credits, 0);
-    const credits = this.limits.agentCredits + this.limits.detectionCredits;
+    const credits =
+      pending.kind === "verify" ? 1 : this.limits.agentCredits + this.limits.detectionCredits;
     await this.ledger.save(this.number);
     if (active >= this.limits.maxConcurrent || spent + credits > this.limits.dailyCredits)
       return false;

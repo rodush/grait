@@ -29,6 +29,9 @@ try {
     "Agent implementation": "implement",
     "Agent PR review": "review",
     "Agent fixes": "fix",
+    "Agent tester": "test",
+    "Agent developer": "develop",
+    "TDD verification": "verify",
   };
   const kind = names[process.env.GITHUB_WORKFLOW];
   if (!kind) throw new Error("Unknown agent workflow");
@@ -71,7 +74,41 @@ try {
     )
   )
     throw new Error("Work was paused");
-  if (["triage", "implement"].includes(kind)) {
+  if (["test", "develop", "verify"].includes(kind)) {
+    const tdd = state.tdd;
+    if (
+      !tdd ||
+      tdd.head !== inputs.head ||
+      tdd.acceptanceDigest !== inputs.digest ||
+      Number(inputs.cycle) !== tdd.cycle ||
+      issue.state !== "open" ||
+      issueDigest(issue) !== inputs.digest
+    )
+      throw new Error("Stale TDD handoff");
+    const owner = kind === "test" ? "tester" : kind === "develop" ? "implementer" : tdd.owner;
+    if (
+      tdd.owner !== owner ||
+      (kind === "test" && tdd.stage !== "test") ||
+      (kind === "develop" && tdd.stage !== "develop")
+    )
+      throw new Error("TDD role does not own this handoff");
+    if (Number(inputs.pr)) {
+      const pr = await api.request(`repos/${repo}/pulls/${inputs.pr}`);
+      if (
+        pr.state !== "open" ||
+        pr.head.sha !== inputs.head ||
+        !(
+          sameLogin(pr.user.login, process.env.AUTOMATION_LOGIN) ||
+          sameLogin(pr.user.login, tdd.localActor)
+        ) ||
+        pr.head.repo?.full_name !== repo ||
+        pr.head.ref !== tdd.branch
+      )
+        throw new Error("Managed TDD branch changed");
+    }
+    if (kind === "verify" && !["verify-red", "verify-green"].includes(tdd.stage))
+      throw new Error("Unexpected TDD verification phase");
+  } else if (["triage", "implement"].includes(kind)) {
     if (issue.state !== "open" || inputs.digest !== issueDigest(issue))
       throw new Error("Issue changed or closed since dispatch");
   } else {

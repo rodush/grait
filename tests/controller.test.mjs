@@ -28,7 +28,14 @@ function fixture() {
   controller.repository = { default_branch: "main", owner: { login: "org" } };
   controller.ledger = {
     load: async (number) => {
-      if (!records.has(number)) records.set(number, { state: { version: 1, number } });
+      if (!records.has(number))
+        records.set(number, {
+          state: {
+            version: 1,
+            number,
+            tddPolicy: { required: false, reason: "Legacy policy fixture" },
+          },
+        });
       return records.get(number);
     },
     save: async (number) => saves.push(structuredClone(records.get(number).state)),

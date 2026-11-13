@@ -13,6 +13,7 @@ Post exactly one issue comment using `add_comment`, addressed to the requested i
   "digest": "the exact digest input",
   "operation": "the exact operation_id input",
   "ready": false,
+  "tdd": { "required": true, "reason": null },
   "checklist": {
     "scope": false,
     "acceptance": false,
@@ -27,3 +28,5 @@ Post exactly one issue comment using `add_comment`, addressed to the requested i
 ```
 
 Use the real issue number, `${{ inputs.digest }}` for the digest, and `${{ inputs.operation_id }}` for operation. Mark each checklist item honestly. The controller validates and records native blocking relationships before authorizing Ready. Do not omit known existing blockers. If tools or necessary context are unavailable, report the task incomplete rather than attesting readiness.
+
+Assess TDD applicability explicitly. Use `tdd.required: true` for testable behavior. For prose-only or otherwise untestable work, you may set `required: false` only with a concrete nonempty reason; missing runner configuration is not an exemption. Exemptions bind the current issue digest.

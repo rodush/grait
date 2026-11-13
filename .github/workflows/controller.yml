@@ -7,17 +7,38 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed, edited]
   workflow_run:
-    workflows: [Agent triage, Agent implementation, Agent PR review, Agent fixes]
+    workflows:
+      [
+        Agent triage,
+        Agent implementation,
+        Agent PR review,
+        Agent fixes,
+        Agent tester,
+        Agent developer,
+        TDD verification,
+      ]
     types: [completed]
   workflow_dispatch:
     inputs:
       task:
         type: choice
-        options: [reconcile, claim-local, resume, triage]
+        options: [reconcile, claim-local, handoff-local, adopt-tdd, resume, triage]
         default: reconcile
       number:
         type: string
         description: Issue or PR number for an operator task
+      head:
+        type: string
+        description: Exact committed local handoff SHA
+      action:
+        type: choice
+        options: [tests-ready, implemented, tests-needed, start-tests]
+      expected:
+        type: string
+        description: JSON array of expected assertion-failing test IDs
+      reason:
+        type: string
+        description: Concrete reason for a test revision
 permissions:
   contents: read
 concurrency:

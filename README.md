@@ -34,7 +34,7 @@ GRAIT brings together the building blocks of an AI-augmented engineering workflo
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`AGENTS.md`](AGENTS.md) and [engineering guidelines](docs/coding-guidelines.md) | Shared instructions, engineering principles, and expectations for coding agents                                                                                      |
 | [Agent configurations](workflow.config.json)                                     | Selectable Codex, Claude, or Copilot engine, authentication mode, write scopes, and workflow limits                                                                  |
-| [Skills](docs/agents.md)                                                         | Reusable `grait-triage`, `grait-implement`, `grait-review`, and `grait-fix` skills, generated for each harness from `automation/skills/`                             |
+| [Skills](docs/agents.md)                                                         | Reusable `grait-triage`, `grait-test`, `grait-implement`, `grait-review`, and `grait-fix` skills, generated for each harness from `automation/skills/`               |
 | [Agent definitions](automation/agents.json)                                      | Matching native roles in `.codex/agents/`, `.claude/agents/`, and `.github/agents/`, inheriting harness models and permissions                                       |
 | [Codex configuration](config/codex.toml)                                         | Matching `.codex/config.toml` with model, reasoning, approval, sandbox, and CLI/TUI defaults                                                                         |
 | [GitHub Actions](.github/workflows/ci.yml)                                       | Node.js 24 template validation, dependency maintenance, and [operator-triggered releases](.github/workflows/release.yml); application deployment is project-specific |
@@ -44,6 +44,8 @@ GRAIT brings together the building blocks of an AI-augmented engineering workflo
 | [Contribution guidance](CONTRIBUTING.md) and [security policy](SECURITY.md)      | Issue/PR templates, human ownership and squash-merge gates, credential boundaries, and setup guidance                                                                |
 
 GRAIT uses **Node.js 24 and npm for repository automation**: the Project controller, setup/release scripts, tests, formatting, and Markdown linting. GitHub Actions provisions Node.js for hosted workflows. Contributors maintaining this tooling need it locally; the application you build can use any language and its own build tools. See the [tooling guide and command reference](docs/setup.md#repository-tooling-runtime).
+
+[Tester-first development](docs/tdd.md) separates test ownership from implementation, supports collocated test patterns and independent role models, and requires hosted Red/Green proof before review.
 
 The configurations are intentionally opinionated but can be adapted to individual project requirements. See [setup](docs/setup.md) and [operations](docs/operations.md) before enabling automation.
 

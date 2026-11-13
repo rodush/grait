@@ -7,6 +7,13 @@
     "execution": "local-and-hosted"
   },
   {
+    "role": "test",
+    "name": "grait-test",
+    "description": "Write acceptance tests first and hand verified Red tests to the implementer without changing implementation.",
+    "skill": "grait-test",
+    "execution": "local-and-hosted"
+  },
+  {
     "role": "implement",
     "name": "grait-implement",
     "description": "Implement an already claimed project issue and prepare an issue-linked PR with validation evidence.",

@@ -32,6 +32,7 @@ on:
         required: true
 imports:
   - shared/runtime.md
+  - shared/runtime-default.md
   - shared/reviewer-auth.md
   - shared/authorize.md
   - shared/policy-agents.md

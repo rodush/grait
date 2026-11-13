@@ -1,3 +1,5 @@
+import { TddCoordinator } from "./tdd-controller.mjs";
+import { validateTddExemption } from "./tdd.mjs";
 import { admitted, DispatchBudget } from "./admission.mjs";
 import { randomUUID } from "node:crypto";
 import { Ledger } from "./ledger.mjs";
@@ -20,6 +22,9 @@ import {
 
 const WORKFLOWS = {
   triage: "triage.lock.yml",
+  test: "test.lock.yml",
+  develop: "develop.lock.yml",
+  verify: "tdd-verify.yml",
   implement: "implement.lock.yml",
   review: "review.lock.yml",
   fix: "fix.lock.yml",
@@ -50,6 +55,7 @@ export class Controller {
     this.ledger = new Ledger(api, repo, writer);
     this.project = new Project(projectApi, projectId, config.statuses);
     this.dependencies = new Map();
+    this.tdd = new TddCoordinator(this);
     this.budgetIssue = Number(budgetIssue);
     this.budget = new DispatchBudget(
       new Ledger(api, repo, budgetLogin),
@@ -215,7 +221,7 @@ export class Controller {
     return blockers.every(dependencyComplete);
   }
 
-  async claim(item, state, local = false) {
+  async claim(item, state, local = false, actor = null) {
     const current = await this.api.request(`repos/${this.repo}/issues/${item.content.number}`);
     if (!(await admitted(this.api, this.repo, current, this.config, this.writer))) return false;
     if (issueDigest(current) !== state.triagedDigest) return false;
@@ -232,13 +238,35 @@ export class Controller {
       state.phase = local ? "local" : "implementing";
       state.claimedAt = this.now().toISOString();
       state.reason = local
-        ? "Local claim granted; implementation may start"
+        ? "Local claim granted; tester owns testable work first"
         : "Hosted claim granted";
     };
     if (local) {
+      if (this.config.tdd && state.tddPolicy?.required !== false)
+        await this.tdd.start(item, state, { persist: false });
+      if (state.tdd) state.tdd.localActor = actor;
       await reserveSlot();
       await this.ledger.save(item.content.number);
       return true;
+    }
+    if (this.config.tdd && state.tddPolicy?.required !== false) {
+      const draft = { ...state };
+      if (!(await this.tdd.start(item, draft, { persist: false }))) return false;
+      return this.dispatch(
+        item.content.number,
+        state,
+        "test",
+        {
+          digest: draft.tdd.acceptanceDigest,
+          head: draft.tdd.head,
+          pr: draft.tdd.pr,
+          cycle: draft.tdd.cycle,
+        },
+        async () => {
+          state.tdd = draft.tdd;
+          await reserveSlot();
+        },
+      );
     }
     return this.dispatch(
       item.content.number,
@@ -295,6 +323,10 @@ export class Controller {
       );
       return;
     }
+    if (state.tdd && state.tdd.stage !== "done") {
+      await this.tdd.reconcile(item, state);
+      return;
+    }
     const pending = await this.completed(number, state);
     if (state.paused) return;
     if (!state.pending && state.retry === "implement") {
@@ -340,6 +372,7 @@ export class Controller {
       await this.materializeBlockers(issue, triage.blockers);
       state.pending = null;
       state.triagedDigest = issueDigest(issue);
+      if (this.config.tdd) state.tddPolicy = validateTddExemption(triage.tdd);
       state.dependencyRefs = (await this.blockers(this.repo, number)).map(issueRef).sort();
       state.phase = triage.ready ? (state.pr ? "review" : "ready") : "backlog";
       state.reason = triage.ready
@@ -440,6 +473,14 @@ export class Controller {
     if (
       item &&
       ((issueState.pr && issueState.pr !== pr.number) ||
+        (issueState.tdd &&
+          issueState.tdd.stage !== "done" &&
+          !(
+            pr.head.repo?.full_name === this.repo &&
+            pr.head.ref === issueState.tdd.branch &&
+            (sameLogin(pr.user.login, this.writer) ||
+              sameLogin(pr.user.login, issueState.tdd.localActor))
+          )) ||
         (issueState.pending?.kind === "implement" &&
           !(
             sameLogin(pr.user.login, this.writer) &&
@@ -465,6 +506,17 @@ export class Controller {
     if (issueState?.paused) {
       await this.pause(pr.number, state, "Linked issue requires human reconciliation");
       await this.check(pr, state, "failure", state.reason);
+      return;
+    }
+    if (issueState?.tdd && issueState.tdd.stage !== "done") return;
+    if (
+      this.config.tdd &&
+      issueState &&
+      sameLogin(pr.user.login, this.writer) &&
+      issueState?.tddPolicy?.required !== false &&
+      (!issueState?.tdd || issueState.tdd.head !== pr.head.sha)
+    ) {
+      await this.check(pr, state, "failure", "TDD Green evidence for the current head is required");
       return;
     }
     if (pr.draft) return;
@@ -577,6 +629,20 @@ export class Controller {
       return;
     }
     if (decision.action === "human-merge") {
+      if (
+        this.config.tdd &&
+        issueState &&
+        issueState.tddPolicy?.required !== false &&
+        (!issueState.tdd || issueState.tdd.stage !== "done" || issueState.tdd.head !== pr.head.sha)
+      ) {
+        await this.check(
+          pr,
+          state,
+          "failure",
+          "Delivery requires accepted TDD Green evidence or an explicit current triage exemption",
+        );
+        return;
+      }
       if (!conventionalTitle(pr.title)) {
         await this.check(
           pr,
@@ -636,6 +702,11 @@ export class Controller {
       await this.ledger.save(item.content.number);
     }
     if (!managed) return; // Fork authors and human authors receive reviews, but their branches are never changed automatically.
+    if (this.config.tdd && issueState.tddPolicy?.required !== false) {
+      await this.tdd.start(item, issueState, { pr, rethink: decision.action === "rethink" });
+      await this.tdd.reconcile(item, issueState);
+      return;
+    }
     await this.dispatch(pr.number, state, "fix", {
       head: pr.head.sha,
       issue: item.content.number,
@@ -644,7 +715,7 @@ export class Controller {
     });
   }
 
-  async operatorTask(task, number, actor) {
+  async operatorTask(task, number, actor, inputs = {}) {
     if (!positiveInteger(number))
       throw new Error("This task requires a positive issue or PR number");
     const user = await this.api.request(`users/${encodeURIComponent(actor)}`);
@@ -660,7 +731,105 @@ export class Controller {
         "Operator tasks require a configured human operator with repository write access",
       );
     const { state } = await this.ledger.load(number);
-    if (task === "resume") {
+    if (task === "adopt-tdd") {
+      const stopped = state.lastStoppedOperation;
+      if (!state.paused || !state.tdd || !["test", "develop"].includes(stopped?.kind))
+        throw new Error("Only a stopped TDD writer may be explicitly adopted");
+      const run = await this.findRun(stopped);
+      if (run && run.status !== "completed")
+        throw new Error("Finish or cancel the stopped run before adoption");
+      const pr = await this.tdd.pr(state.tdd);
+      if (pr.head.sha !== inputs.head || pr.head.sha === stopped.head)
+        throw new Error("Adoption requires the exact advanced shared-branch SHA");
+      await this.tdd.changed(
+        stopped.head,
+        pr.head.sha,
+        stopped.kind === "test" ? "tester" : "implementer",
+      );
+      state.tdd.localActor = actor;
+      state.phase = "local";
+      state.paused = false;
+      state.pending = null;
+      state.resumedOperation = stopped;
+      state.lastStoppedOperation = null;
+      state.reason = `Partially pushed TDD work adopted by ${actor}; submit handoff-local for independent verification`;
+      for (const label of [this.config.labels.needsHuman, this.config.labels.paused]) {
+        try {
+          await this.api.request(
+            `repos/${this.repo}/issues/${number}/labels/${encodeURIComponent(label)}`,
+            { method: "DELETE" },
+          );
+        } catch (error) {
+          if (error.status !== 404) throw error;
+        }
+      }
+      await this.ledger.save(number);
+    } else if (task === "handoff-local") {
+      const item = this.project.find(this.repo, number);
+      if (!item || state.pending || state.paused || !state.tdd || state.tdd.localActor !== actor)
+        throw new Error(
+          "Local handoff requires the active local TDD claim and no running operation",
+        );
+      if (state.tdd.acceptanceDigest !== issueDigest(item.content))
+        throw new Error("Local issue scope changed");
+      const pr = await this.tdd.pr(state.tdd);
+      if (pr.head.sha !== inputs.head)
+        throw new Error("Local handoff SHA does not match the shared issue branch");
+      if (inputs.action === "start-tests") {
+        if (state.tdd.stage !== "done")
+          throw new Error("Finish the current TDD cycle before starting another");
+        const reviewState = (await this.ledger.load(pr.number)).state;
+        const latest = reviewState.history?.at(-1);
+        if (
+          reviewState.paused ||
+          !latest ||
+          latest.head !== pr.head.sha ||
+          reviewState.history.length >= this.config.maxReviewRounds
+        )
+          throw new Error(
+            "Local follow-up requires an accepted current-head review within the review budget",
+          );
+        const decision = loopDecision(
+          reviewState.history.slice(reviewState.resumeIndex || 0),
+          this.config,
+        );
+        if (!["fix", "rethink"].includes(decision.action))
+          throw new Error("Review does not authorize a new local fix cycle");
+        if (decision.action === "rethink" && item.status !== this.config.statuses.inProgress) {
+          if (!availableSlots(this.project.items, this.config))
+            throw new Error("Rethink is waiting for an In Progress slot");
+          await this.project.move(item, this.config.statuses.inProgress);
+        }
+        await this.tdd.start(item, state, { pr });
+        state.tdd.localActor = actor;
+        state.phase = "local";
+      } else {
+        const role =
+          state.tdd.stage === "test"
+            ? "tester"
+            : state.tdd.stage === "develop"
+              ? "implementer"
+              : null;
+        if (!role) throw new Error("Local agent does not own an editable TDD phase");
+        if (pr.head.sha !== state.tdd.head)
+          await this.tdd.changed(state.tdd.head, pr.head.sha, role);
+        state.tdd.head = pr.head.sha;
+        if (role === "tester") {
+          if (inputs.action !== "tests-ready")
+            throw new Error("Tester must hand off tests-ready evidence");
+          state.tdd.expectedFailures = JSON.parse(inputs.expected || "[]");
+          if (!state.tdd.expectedFailures.length)
+            throw new Error("Name the expected failing tests");
+          state.tdd.stage = "verify-red";
+        } else if (inputs.action === "tests-needed") {
+          const { returnToTester } = await import("./tdd.mjs");
+          Object.assign(state.tdd, returnToTester(state.tdd, inputs.reason), { stage: "test" });
+        } else if (inputs.action === "implemented") state.tdd.stage = "verify-green";
+        else throw new Error("Unknown local implementer handoff");
+      }
+      await this.ledger.save(number);
+      await this.tdd.reconcile(item, state);
+    } else if (task === "resume") {
       if (!state.paused) throw new Error("Only paused work may be resumed");
       if (state.history?.length >= this.config.maxReviewRounds)
         throw new Error("The ten-round lifetime limit cannot be reset");
@@ -669,6 +838,31 @@ export class Controller {
         const run = await this.findRun(stopped);
         if (run && run.status !== "completed")
           throw new Error("Wait for the previous workflow to finish or cancel before resuming");
+      }
+      if (state.tdd && ["test", "develop"].includes(stopped?.kind)) {
+        let current;
+        if (state.tdd.pr) current = (await this.tdd.pr(state.tdd)).head.sha;
+        else {
+          const prs = await this.api.list(
+            `repos/${this.repo}/pulls?state=open&head=${encodeURIComponent(this.repository.owner.login + ":" + state.tdd.branch)}`,
+          );
+          if (prs.length) current = (await this.tdd.pr(state.tdd)).head.sha;
+          else {
+            try {
+              current = (
+                await this.api.request(
+                  `repos/${this.repo}/git/ref/heads/${encodeURIComponent(state.tdd.branch)}`,
+                )
+              ).object.sha;
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+          }
+        }
+        if (current && current !== stopped.head)
+          throw new Error(
+            "Stopped TDD writer already changed the branch; inspect scope and use adopt-tdd for explicit operator reconciliation",
+          );
       }
       state.paused = false;
       state.pending = null;
@@ -696,10 +890,14 @@ export class Controller {
       await this.ledger.save(number);
     } else if (task === "claim-local") {
       const item = this.project.find(this.repo, number);
-      if (!item || !(await this.claim(item, state, true)))
+      if (!item || !(await this.claim(item, state, true, actor)))
         throw new Error(
           "Issue cannot be claimed: check readiness, dependencies, pause state, and capacity",
         );
+      if (state.tdd) {
+        state.tdd.localActor = actor;
+        await this.ledger.save(number);
+      }
     } else if (task === "triage") {
       if (state.pending)
         throw new Error("Pause and finish the active workflow before requesting new triage");
@@ -730,7 +928,8 @@ export class Controller {
   }
 
   async run({ task = "reconcile", number, actor, event = {} } = {}) {
-    if (task !== "reconcile") await this.operatorTask(task, Number(number), actor);
+    if (task !== "reconcile")
+      await this.operatorTask(task, Number(number), actor, event.inputs || {});
     if (
       event.issue &&
       !event.issue.pull_request &&

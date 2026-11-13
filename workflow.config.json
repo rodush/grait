@@ -41,7 +41,8 @@
     "package.json",
     "package-lock.json",
     ".npmrc",
-    "docs/worktrees.md"
+    "docs/worktrees.md",
+    "docs/tdd.md"
   ],
   "labels": {
     "automated": "agent:managed",
@@ -59,5 +60,24 @@
     "dailyCredits": 28000,
     "agentCredits": 1000,
     "detectionCredits": 400
+  },
+  "tdd": {
+    "implementationPaths": ["src/**", "tests/**", "assets/**", "docs/project/**"],
+    "profiles": {
+      "tester": {
+        "model": null,
+        "reasoning": null
+      },
+      "implementer": {
+        "model": null,
+        "reasoning": null
+      }
+    },
+    "runner": {
+      "image": "ghcr.io/github/gh-aw-node@sha256:8735428c2d4e602f90781ba0c571c400e8ff93c7ee1508a75d71f87e34e415cc",
+      "install": ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
+      "command": ["node", "{nodeAdapter}", "tests/*.test.mjs"]
+    },
+    "testPatterns": ["tests/**", "**/test_*.py", "**/*.spec.py", "**/*.test.*"]
   }
 }

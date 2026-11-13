@@ -1,3 +1,4 @@
+import { validateTddConfig, validateTddExemption } from "./tdd.mjs";
 import { createHash } from "node:crypto";
 
 export const digest = (value) => createHash("sha256").update(value).digest("hex");
@@ -66,6 +67,7 @@ export function validateConfig(config) {
       }
     }
   }
+  if (config.tdd) validateTddConfig(config);
   return config;
 }
 
@@ -82,6 +84,7 @@ export function validateTriage(data, issue) {
     if (typeof ref !== "string" || !/^[\w.-]+\/[\w.-]+#[1-9]\d*$/.test(ref))
       throw new Error("Invalid blocker reference");
   }
+  if (issue && data.ready && data.tdd !== undefined) validateTddExemption(data.tdd);
   const checklist = ["scope", "acceptance", "validation", "dependencies", "alignment"];
   if (
     data.ready &&

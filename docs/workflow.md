@@ -16,9 +16,9 @@ Triage agents may authorize Ready. The controller verifies the triage attestatio
 
 ## Claiming and delivery
 
-One designated controller repository schedules each project. Its serialized controller reserves a slot by moving the issue to In Progress before dispatching implementation. It counts all project stories, including stories from other repositories; it picks work only for its own repository. To automate several repositories in one project, extend the single controller rather than enabling competing schedulers.
+One designated controller repository schedules each project. Its serialized controller reserves a slot by moving the issue to In Progress before dispatching the tester for testable work. It counts all project stories, including stories from other repositories; it picks work only for its own repository. To automate several repositories in one project, extend the single controller rather than enabling competing schedulers.
 
-Hosted agents open a PR linked to the issue. Local agents request `claim-local` and wait for the claim comment. Both implement the same acceptance criteria. A PR that is ready for review moves the issue to Review. Draft PRs stay In Progress.
+Hosted agents open a PR linked to the issue. Local agents request `claim-local` and wait for the claim comment. Both follow the same acceptance criteria and the tester-first protocol in `docs/tdd.md`. A PR that is ready for review moves the issue to Review. Draft PRs stay In Progress.
 
 ## Review and fixes
 
@@ -43,3 +43,7 @@ Maintainers apply `agent:admitted` to outside submissions before paid triage/rev
 ## Coordinator and delegated work
 
 The coordinator has a separate worktree from delegated work. Tester and implementer for the same issue share one worktree and branch, handing over exclusive write ownership sequentially. Unrelated sub-agents use separate worktrees. Follow `docs/worktrees.md` for isolation, ownership, integration, and cleanup after merge. Hosted jobs have separate ephemeral checkouts; API-only review does not check out PR code.
+
+## TDD gates
+
+Testable work follows tester → independent hosted Red verification → implementer → independent hosted Green verification before review. Tester and implementer have exclusive sequential ownership of the same issue branch; only the tester edits test-matching files. Triage may explicitly exempt untestable work with a reason bound to the issue digest. Every follow-up fix repeats the same gates. See `docs/tdd.md` for configuration, local handoffs, and evidence provenance.

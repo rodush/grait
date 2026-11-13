@@ -78,7 +78,7 @@ for (const path of await files(".")) {
   }
 }
 
-for (const role of ["triage", "implement", "review", "fix"]) {
+for (const role of ["triage", "test", "develop", "implement", "review", "fix"]) {
   const text = await readFile(`.github/workflows/${role}.md`, "utf8");
   const workflow = parse(text.split("\n---")[0].slice(4));
   assert(workflow.strict === true, `${role}: strict mode is required`);

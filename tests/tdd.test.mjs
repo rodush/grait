@@ -10,7 +10,7 @@ function config() {
     allowedWritePaths: ["tests/**", "src/**", "assets/**"],
     protectedPaths: [".github/", "src/security-policy.json"],
     tdd: {
-      testPaths: ["tests/**"],
+      testPatterns: ["tests/**", "**/test_*.py", "**/*.spec.py"],
       implementationPaths: ["src/application/**", "assets/**"],
       profiles: {
         tester: { model: "test-model", reasoning: "high" },
@@ -62,13 +62,17 @@ test("tester and implementer may use independent model/reasoning settings", () =
 
 test("write scopes reject intersections, including a protected descendant inside a broad scope", () => {
   const overlap = config();
-  overlap.tdd.implementationPaths = ["tests/nested/**"];
-  assert.throws(() => tdd.validateTddConfig(overlap), /disjoint|overlap/i);
+  overlap.tdd.implementationPaths = ["tests/**", "src/application/**"];
+  assert.doesNotThrow(() => tdd.validateTddConfig(overlap));
+  assert.throws(
+    () => tdd.assertRoleChanges([{ filename: "tests/case.py" }], "implementer", overlap),
+    /cannot change/,
+  );
   const ancestor = config();
   ancestor.tdd.implementationPaths = ["src/**"];
   assert.throws(() => tdd.validateTddConfig(ancestor), /protected/i);
   const outside = config();
-  outside.tdd.testPaths = ["other-tests/**"];
+  outside.tdd.testPatterns = ["other-tests/**"];
   assert.throws(() => tdd.validateTddConfig(outside), /allowlist|scope/i);
 });
 
@@ -233,4 +237,61 @@ test("triage exemptions must explicitly declare inapplicability and a concrete r
     { required: "false", reason: "prose" },
   ])
     assert.throws(() => tdd.validateTddExemption(invalid), /exemption|reason|required/i);
+});
+
+test("glob classification gives collocated tests precedence over overlapping production scopes", () => {
+  const value = config();
+  value.tdd.implementationPaths = ["src/application/**", "tests/**", "assets/**"];
+  for (const path of [
+    "tests/direct.py",
+    "src/application/test_behavior.py",
+    "src/application/behavior.spec.py",
+  ]) {
+    assert.equal(tdd.isTestPath(path, value), true);
+    assert.doesNotThrow(() => tdd.assertRoleChanges([{ filename: path }], "tester", value));
+    assert.throws(
+      () => tdd.assertRoleChanges([{ filename: path }], "implementer", value),
+      /cannot change/,
+    );
+  }
+  assert.equal(tdd.isTestPath("src/application/behavior.py", value), false);
+  assert.throws(
+    () => tdd.assertRoleChanges([{ filename: "src/application/behavior.py" }], "tester", value),
+    /cannot change/,
+  );
+  for (const role of ["tester", "implementer"])
+    assert.throws(
+      () =>
+        tdd.assertRoleChanges(
+          [
+            {
+              filename: "src/application/behavior.spec.py",
+              previous_filename: "src/application/behavior.py",
+            },
+          ],
+          role,
+          value,
+        ),
+      /cannot change/,
+    );
+  assert.throws(
+    () => tdd.assertRoleChanges([{ filename: "elsewhere/behavior.spec.py" }], "tester", value),
+    /cannot change/,
+  );
+});
+
+test("test globs cannot escape the repository or grant writes to protected tests", () => {
+  for (const pattern of ["../*.py", "/tests/**", "tests\\*.py", "tests/../../*.py"]) {
+    const value = config();
+    value.tdd.testPatterns = [pattern];
+    assert.throws(() => tdd.validateTddConfig(value), /glob|pattern/i);
+  }
+  const value = config();
+  value.tdd.implementationPaths = ["assets/**"];
+  value.protectedPaths = ["src/application/security.spec.py"];
+  assert.throws(
+    () =>
+      tdd.assertRoleChanges([{ filename: "src/application/security.spec.py" }], "tester", value),
+    /protected|cannot change/i,
+  );
 });

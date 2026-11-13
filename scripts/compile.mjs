@@ -1,3 +1,4 @@
+import { testerWritePatterns } from "./lib/tdd.mjs";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readFile, writeFile, mkdir, mkdtemp, cp, rm, readdir } from "node:fs/promises";
@@ -36,7 +37,7 @@ function auth(prefix) {
 }
 
 export function generatedComponents() {
-  return {
+  const components = {
     "runtime.md": {
       "inlined-imports": true,
       engine:
@@ -69,6 +70,82 @@ export function generatedComponents() {
         "report-failure-as-issue": false,
       },
     },
+    ...Object.fromEntries(
+      ["tester", "implementer"].map((role) => {
+        const profile = config.tdd.profiles[role];
+        const reasoning = profile.reasoning || codex.model_reasoning_effort;
+        const engine = { id: config.engine, version: config.engineVersions[config.engine] };
+        if (config.engine === "codex")
+          engine.args = ["--config", `model_reasoning_effort=${JSON.stringify(reasoning)}`];
+        else if (profile.reasoning)
+          engine.args =
+            config.engine === "claude"
+              ? ["--effort", profile.reasoning]
+              : ["--reasoning-effort", profile.reasoning];
+        const model = profile.model;
+        const inherited =
+          config.engine === "codex"
+            ? `\${{ vars.${role.toUpperCase()}_MODEL || vars.AGENT_MODEL || '${codex.model}' }}`
+            : `\${{ vars.${role.toUpperCase()}_MODEL || vars.AGENT_MODEL }}`;
+        return [
+          `runtime-${role}.md`,
+          { "inlined-imports": true, engine, model: model || inherited },
+        ];
+      }),
+    ),
+    "tester-output.md": {
+      "safe-outputs": {
+        "create-pull-request": {
+          max: 1,
+          draft: true,
+          "branch-prefix": "agent/",
+          "preserve-branch-name": true,
+          labels: [config.labels.automated],
+          "allowed-files": testerWritePatterns(config),
+          "excluded-files": config.protectedPaths.map((path) =>
+            path.endsWith("/") ? path + "**" : path,
+          ),
+          "protected-files": "blocked",
+          "fallback-as-issue": false,
+          "auto-merge": false,
+          "github-token-for-extra-empty-commit":
+            config.authentication === "app" ? "app" : "${{ secrets.AUTOMATION_TOKEN }}",
+        },
+        "push-to-pull-request-branch": {
+          max: 1,
+          target: "${{ inputs.pr }}",
+          "required-labels": [config.labels.automated],
+          "allowed-files": testerWritePatterns(config),
+          "excluded-files": config.protectedPaths.map((path) =>
+            path.endsWith("/") ? path + "**" : path,
+          ),
+          "protected-files": "blocked",
+          "fallback-as-pull-request": false,
+          "check-branch-protection": false,
+          "github-token-for-extra-empty-commit":
+            config.authentication === "app" ? "app" : "${{ secrets.AUTOMATION_TOKEN }}",
+        },
+      },
+    },
+    "developer-output.md": {
+      "safe-outputs": {
+        "push-to-pull-request-branch": {
+          max: 1,
+          target: "${{ inputs.pr }}",
+          "required-labels": [config.labels.automated],
+          "allowed-files": config.tdd.implementationPaths,
+          "excluded-files": [
+            ...(config.tdd.testPatterns || config.tdd.testPaths),
+            ...config.protectedPaths.map((path) => (path.endsWith("/") ? path + "**" : path)),
+          ],
+          "protected-files": "blocked",
+          "fallback-as-pull-request": false,
+          "check-branch-protection": false,
+          "github-token-for-extra-empty-commit":
+            config.authentication === "app" ? "app" : "${{ secrets.AUTOMATION_TOKEN }}",
+        },
+      },
+    },
     "writer-auth.md": { "safe-outputs": auth("AUTOMATION") },
     "reviewer-auth.md": { "safe-outputs": auth("REVIEW") },
     "implementation-output.md": {
@@ -79,7 +156,11 @@ export function generatedComponents() {
           "branch-prefix": "agent/",
           "preserve-branch-name": true,
           labels: [config.labels.automated],
-          "allowed-files": config.allowedWritePaths,
+          "allowed-files": config.tdd.implementationPaths,
+          "excluded-files": [
+            ...(config.tdd.testPatterns || config.tdd.testPaths),
+            ...config.protectedPaths.map((path) => (path.endsWith("/") ? path + "**" : path)),
+          ],
           "protected-files": "blocked",
           "fallback-as-issue": false,
           "auto-merge": false,
@@ -94,7 +175,11 @@ export function generatedComponents() {
           max: 1,
           target: "${{ inputs.number }}",
           "required-labels": [config.labels.automated],
-          "allowed-files": config.allowedWritePaths,
+          "allowed-files": config.tdd.implementationPaths,
+          "excluded-files": [
+            ...(config.tdd.testPatterns || config.tdd.testPaths),
+            ...config.protectedPaths.map((path) => (path.endsWith("/") ? path + "**" : path)),
+          ],
           "protected-files": "blocked",
           "fallback-as-pull-request": false,
           "check-branch-protection": false,
@@ -104,6 +189,13 @@ export function generatedComponents() {
       },
     },
   };
+  components["runtime-default.md"] = {
+    engine: components["runtime.md"].engine,
+    model: components["runtime.md"].model,
+  };
+  delete components["runtime.md"].engine;
+  delete components["runtime.md"].model;
+  return components;
 }
 
 const sharedDocuments = {
@@ -112,13 +204,13 @@ const sharedDocuments = {
   "policy-workflow.md": "docs/workflow.md",
   "policy-review.md": "docs/review-guidelines.md",
   ...Object.fromEntries(
-    ["triage", "implement", "review", "fix"].map((role) => [
+    ["triage", "test", "develop", "implement", "review", "fix"].map((role) => [
       `skill-grait-${role}.md`,
-      `automation/skills/grait-${role}/SKILL.md`,
+      `automation/skills/grait-${role === "develop" ? "implement" : role}/SKILL.md`,
     ]),
   ),
   ...Object.fromEntries(
-    ["triage", "implement", "review", "fix"].map((role) => [
+    ["triage", "test", "develop", "implement", "review", "fix"].map((role) => [
       `prompt-${role}.md`,
       `automation/prompts/${role}.md`,
     ]),
