@@ -163,7 +163,7 @@ function releaseFixture({
   protectedTags = true,
 } = {}) {
   const calls = [];
-  const rule = repositoryRules([{ id: 42 }], 123, 456).find(
+  const rule = repositoryRules([{ id: 42 }], 123, 456, 98765).find(
     (item) => item.name === "Immutable release tags",
   );
   const api = {
@@ -220,7 +220,7 @@ test("release creates a fresh validated tag and rejects races or missing protect
 });
 
 test("release identity may create tags but no identity can bypass tag immutability", () => {
-  const rules = repositoryRules([{ id: 42 }], 123, 456);
+  const rules = repositoryRules([{ id: 42 }], 123, 456, 98765);
   const creation = rules.find((rule) => rule.name === "Release tag creation");
   assert.deepEqual(creation.bypass_actors, [
     { actor_id: 456, actor_type: "Integration", bypass_mode: "always" },

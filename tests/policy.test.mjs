@@ -181,7 +181,7 @@ test("duplicate metadata blocks cannot hide contradictory decisions", () => {
 });
 
 test("human merge authority does not bypass delivery requirements", () => {
-  const [gates, authority] = repositoryRules([{ id: 42 }], 1234);
+  const [gates, authority] = repositoryRules([{ id: 42 }], 1234, null, 98765);
   assert.deepEqual(gates.bypass_actors, []);
   assert.deepEqual(authority.bypass_actors, [
     { actor_id: 42, actor_type: "User", bypass_mode: "pull_request" },

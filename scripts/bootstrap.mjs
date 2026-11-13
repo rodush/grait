@@ -4,7 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { parse as parseToml } from "smol-toml";
 import { Ledger } from "./lib/ledger.mjs";
 import { GitHub } from "./lib/github.mjs";
-import { repositoryRules, repositorySettings } from "./lib/bootstrap.mjs";
+import { repositoryRules, repositorySettings, resolveActionsAppId } from "./lib/bootstrap.mjs";
 import { sameLogin } from "./lib/policy.mjs";
 
 const { values } = parseArgs({
@@ -87,6 +87,7 @@ if (!values.apply) {
         "App mode requires a dedicated --release-app-id (numeric App ID, not client ID)",
       );
     const api = new GitHub(token);
+    const actionsAppId = await resolveActionsAppId(api);
     const projectApi = new GitHub(process.env.PROJECT_TOKEN || token);
     const actors = [];
     for (const login of maintainers) {
@@ -206,7 +207,12 @@ if (!values.apply) {
       if ([Number(statusAppId), reviewerApp.id].includes(Number(values["release-app-id"])))
         throw new Error("Release App must be separate from implementation and review Apps");
     }
-    for (const rule of repositoryRules(actors, statusAppId, values["release-app-id"])) {
+    for (const rule of repositoryRules(
+      actors,
+      statusAppId,
+      values["release-app-id"],
+      actionsAppId,
+    )) {
       const existing = existingRules.find(
         (item) => item.name === rule.name && sameLogin(item.source, repo),
       );

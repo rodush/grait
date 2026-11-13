@@ -1,4 +1,22 @@
-export function repositoryRules(actors, statusAppId, releaseAppId) {
+export async function resolveActionsAppId(api) {
+  const app = await api.request("apps/github-actions");
+  if (
+    app?.slug !== "github-actions" ||
+    typeof app.id !== "number" ||
+    !Number.isSafeInteger(app.id) ||
+    app.id <= 0
+  )
+    throw new Error(
+      "Invalid GitHub Actions publisher metadata: expected github-actions and a positive safe integer App ID",
+    );
+  return app.id;
+}
+
+export function repositoryRules(actors, statusAppId, releaseAppId, actionsAppId) {
+  if (typeof actionsAppId !== "number" || !Number.isSafeInteger(actionsAppId) || actionsAppId <= 0)
+    throw new Error(
+      "A resolved positive safe integer GitHub Actions App ID is required for the CI publisher binding",
+    );
   const conditions = { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } };
   return [
     {
@@ -27,7 +45,7 @@ export function repositoryRules(actors, statusAppId, releaseAppId) {
           parameters: {
             strict_required_status_checks_policy: true,
             required_status_checks: [
-              { context: "Template validation", integration_id: 15368 },
+              { context: "Template validation", integration_id: actionsAppId },
               {
                 context: "Agent review",
                 ...(statusAppId ? { integration_id: Number(statusAppId) } : {}),

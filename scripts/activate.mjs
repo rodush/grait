@@ -5,7 +5,7 @@ import { GitHub } from "./lib/github.mjs";
 import { Ledger } from "./lib/ledger.mjs";
 import { Project } from "./lib/project.mjs";
 import { digest, sameLogin, validateConfig } from "./lib/policy.mjs";
-import { repositoryRules } from "./lib/bootstrap.mjs";
+import { repositoryRules, resolveActionsAppId } from "./lib/bootstrap.mjs";
 
 try {
   const localText = await readFile("workflow.config.json", "utf8");
@@ -16,6 +16,7 @@ try {
     process.env.GH_TOKEN ||
     (await promisify(execFile)("gh", ["auth", "token"], { encoding: "utf8" })).stdout.trim();
   const api = new GitHub(token);
+  const actionsAppId = await resolveActionsAppId(api);
   const repo = config.controllerRepository;
   const repository = await api.request(`repos/${repo}`);
   const head = await api.request(
@@ -137,7 +138,12 @@ try {
   } else if (!releaseSecrets.has("RELEASE_TOKEN"))
     throw new Error("Configure RELEASE_TOKEN in the release environment");
   const rules = await api.list(`repos/${repo}/rulesets`);
-  for (const expected of repositoryRules(actors, appId, variables.get("RELEASE_APP_ID"))) {
+  for (const expected of repositoryRules(
+    actors,
+    appId,
+    variables.get("RELEASE_APP_ID"),
+    actionsAppId,
+  )) {
     const rule = rules.find((item) => item.name === expected.name && sameLogin(item.source, repo));
     if (!rule) throw new Error(`Missing staged ruleset ${expected.name}`);
     await api.request(`repos/${repo}/rulesets/${rule.id}`, { method: "PUT", body: expected });

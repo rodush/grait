@@ -125,3 +125,7 @@ The rulesets keep human merge authority separate from delivery gates: human oper
 ## Adopt the TDD pipeline
 
 Read [the tester-first protocol](tdd.md), configure `tdd.testPatterns`, implementation scopes, runner image/commands, and optional per-role model/reasoning settings before enabling automation. The Node reference runner verifies the template tests; replace its adapter/image when adopting another stack. New triage attestations must explicitly assess TDD applicability. Existing work without that assessment needs retriage. The independent `TDD verification` workflow is dispatched by the controller and consumes the same global concurrency budget; deterministic verification reserves one credit conservatively. Keep source and generated workflows together.
+
+## CI publisher provenance
+
+Bootstrap and activation resolve the GitHub Actions App ID from the authenticated GitHub API (`apps/github-actions`) before changing repository settings. The required `Template validation` check is bound to that publisher, so another integration cannot satisfy the gate merely by using the same check name. Missing or invalid publisher metadata stops setup without a hardcoded-ID fallback.
