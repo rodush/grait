@@ -106,6 +106,9 @@ export async function configureRepositoryRules({
     log(
       "Human approval and merge remain mandatory: agents must never merge PRs or release. Continuing does not verify server-side enforcement; some rules may already have been applied.",
     );
+    log(
+      "To deliberately continue without verified rulesets in a noninteractive session, rerun the same command with --acknowledge-unenforced-rules. The overall setup --yes flag only accepts the original plan and does not acknowledge unenforced rules.",
+    );
   };
   explain(failure);
   if (!acknowledgeUnenforced) {
