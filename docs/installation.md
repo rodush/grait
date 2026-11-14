@@ -110,7 +110,7 @@ On GitHub Free private repositories, manual configuration cannot enable the unav
 For a noninteractive run, read the printed configuration and explicitly acknowledge unenforced rules with:
 
 ```sh
-npm run setup -- --acknowledge-unenforced-rules
+npm run setup -- --yes --acknowledge-unenforced-rules
 ```
 
 Repeat your original target, harness, and Project flags as needed. `--yes` accepts the ordinary setup plan only; it does not acknowledge unenforced rules. A ruleset pause restores setup's own preliminary configuration edit when it is unchanged, allowing you to rerun from a clean checkout. If other partial tracked changes remain, review and commit them before rerunning. Recorded Apps and Project bindings are reused. An interrupted process releases its local lock on normal exit; inspect any stale lock before removing it.
