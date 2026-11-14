@@ -71,7 +71,7 @@ This marks it ready and synchronizes the Project. Publishing is limited to the c
 
 ## Review publication
 
-Assign the exact PR head and trusted policy to the separate local reviewer. It returns JSON such as:
+Assign the exact PR head and trusted policy to the separate local reviewer. GitHub is the shared review record: the reviewer must publish a readable formal decision and inline findings on the remote PR, not merely return a local report. The parent passes a structured payload to the identity-scoped publisher, for example:
 
 ```json
 {
@@ -98,12 +98,25 @@ Assign the exact PR head and trusted policy to the separate local reviewer. It r
 Use APPROVE with no blockers/rethink/conflicts for a complete clean review; COMMENT for incomplete evidence or human judgment. Inline comments must reference actual diff lines; `LEFT` is for deletions, `RIGHT` for additions/current code. The review skill defines severity and stable IDs.
 
 ```sh
-npm run orchestrator -- review --pr 456 --file /tmp/review.json
+npm run orchestrator -- review --pr 456 --file /dev/stdin
 ```
+
+Supply the JSON payload above on standard input and close the input stream. Hosts without `/dev/stdin` can use `--file PATH` with a temporary transport file. The JSON carries exact-head/round metadata for validation; testers and fixers read the published GitHub conversation directly and do not need that file.
 
 For a setup/migration PR that must satisfy existing active agent-review rules before the new host is activated, a configured human operator can explicitly publish its locally evaluated review with `npm run orchestrator -- review --setup-review --pr N --file PATH`. This permits only the reviewer publishing operation during staged setup; it never enables claims, implementation, or a fix loop. Existing issue/PR pause state and lifetime limits still apply. Use ordinary review publication after activation.
 
 The publisher uses the reviewer App, verifies the actual GitHub review identity/head/decision, and records lifetime history. Only a valid approval makes the writer's `Agent review` status succeed for that exact SHA. A new head needs a new review. Humans still approve and squash merge.
+
+### Follow-up conversation and resolution
+
+Read reviews and inline comments from GitHub, for example:
+
+```sh
+gh pr view 456 --repo OWNER/REPOSITORY --json reviews,comments
+gh api --paginate repos/OWNER/REPOSITORY/pulls/456/comments
+```
+
+Use the PR UI or GitHub's GraphQL review-thread API to inspect thread resolution state; the REST comments list alone does not show whether a thread is resolved. Keep corrections and verification in the original threads, with stable finding IDs, fix commits, and test evidence. Publish fix replies through the configured writer identity. After the independent reviewer verifies the current head, record that verification and mark the agent's thread Resolved using an authorized reviewer session in the PR UI/API. Leave human objections for their author or a maintainer to resolve. Never treat a push or an outdated diff as resolution, delete earlier findings, or claim a thread is resolved when the remote state remains open. If the current publishing tool cannot perform a reply or resolution, leave that action pending for an authorized session and report it explicitly; do not borrow another identity or broaden publishing permissions.
 
 A `fix` decision starts another tester-first cycle in the same issue worktree. A `rethink` decision first needs an In Progress slot:
 
