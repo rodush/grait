@@ -67,6 +67,7 @@ async function main() {
       help: { type: "boolean" },
       plan: { type: "boolean" },
       yes: { type: "boolean" },
+      "acknowledge-unenforced-rules": { type: "boolean" },
       "no-browser": { type: "boolean" },
       activate: { type: "boolean" },
       publish: { type: "boolean" },
@@ -81,11 +82,12 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "GRAIT local setup\n\nnpm run setup -- [--plan] [--repo OWNER/REPO] [--harness codex|claude|copilot]\n  --yes              Accept the displayed configuration plan\n  --no-browser       Print approval URLs (forward the localhost callback port over SSH)\n  --project-owner LOGIN --project-number NUMBER   Bind an existing Project\n  --maintainers LOGIN,LOGIN   Human code owners (default: signed-in GitHub user)\n  --writer-key PATH --reviewer-key PATH   Import private keys for existing Apps\n  --publish          Retry only the saved configuration push/PR after a failure\n  --activate         Activate after human merge and successful default-branch CI\n\nAll AI runs in your native harness using its own login. No provider API keys are requested. See docs/installation.md.",
+      "GRAIT local setup\n\nnpm run setup -- [--plan] [--repo OWNER/REPO] [--harness codex|claude|copilot]\n  --yes              Accept the displayed configuration plan\n  --acknowledge-unenforced-rules   Explicitly continue if GitHub rulesets cannot be configured\n  --no-browser       Print approval URLs (forward the localhost callback port over SSH)\n  --project-owner LOGIN --project-number NUMBER   Bind an existing Project\n  --maintainers LOGIN,LOGIN   Human code owners (default: signed-in GitHub user)\n  --writer-key PATH --reviewer-key PATH   Import private keys for existing Apps\n  --publish          Retry only the saved configuration push/PR after a failure\n  --activate         Activate after human merge and successful default-branch CI\n\nAll AI runs in your native harness using its own login. No provider API keys are requested. See docs/installation.md.",
     );
     return;
   }
-  const config = JSON.parse(await readFile("workflow.config.json", "utf8"));
+  const originalConfigText = await readFile("workflow.config.json", "utf8");
+  const config = JSON.parse(originalConfigText);
   const repo =
     values.repo ||
     config.controllerRepository ||
@@ -121,11 +123,19 @@ async function main() {
     maxConcurrentWorkers: config.maxConcurrentWorkers || 2,
     providerApiKeys: false,
     activate: Boolean(values.activate),
+    acknowledgeUnenforcedRules: Boolean(values["acknowledge-unenforced-rules"]),
   };
   console.log(JSON.stringify(plan, null, 2));
   if (values.plan) return;
   if (values.activate) {
-    await command(process.execPath, ["scripts/activate.mjs"], { interactive: true });
+    await command(
+      process.execPath,
+      [
+        "scripts/activate.mjs",
+        ...(values["acknowledge-unenforced-rules"] ? ["--acknowledge-unenforced-rules"] : []),
+      ],
+      { interactive: true },
+    );
     return;
   }
   if (values.publish) {
@@ -272,7 +282,8 @@ async function main() {
     for (const key of ["ghAwVersion", "ghAwActionsSha", "engineVersions", "budget"])
       delete config[key];
     if (config.tdd?.runner) delete config.tdd.runner.image;
-    await writeFile("workflow.config.json", `${JSON.stringify(config, null, 2)}\n`);
+    const preparedConfigText = `${JSON.stringify(config, null, 2)}\n`;
+    await writeFile("workflow.config.json", preparedConfigText);
     const args = [
       "scripts/bootstrap.mjs",
       "--apply",
@@ -287,7 +298,25 @@ async function main() {
     ];
     for (const option of ["project-owner", "project-number"])
       if (values[option]) args.push(`--${option}`, values[option]);
-    await command(process.execPath, args, { interactive: true });
+    if (values["acknowledge-unenforced-rules"]) args.push("--acknowledge-unenforced-rules");
+    const bootstrap = await command(process.execPath, args, {
+      interactive: true,
+      allowFailure: true,
+    });
+    if (bootstrap.code !== 0) {
+      // Before bootstrap completes, only setup's own config write needs undoing.
+      // Never overwrite concurrent edits; App and Project checkpoints are preserved.
+      if (
+        bootstrap.code === 2 &&
+        (await readFile("workflow.config.json", "utf8")) === preparedConfigText
+      )
+        await writeFile("workflow.config.json", originalConfigText);
+      throw new Error(
+        bootstrap.code === 2
+          ? "Ruleset configuration is pending. Rerun this setup command after manual configuration, or add --acknowledge-unenforced-rules to explicitly continue without verified GitHub enforcement. Saved Apps and Project will be reused."
+          : `Bootstrap command failed (exit ${bootstrap.code ?? "signal"}); resolve the reported step and rerun`,
+      );
+    }
     await command("npm", ["exec", "--", "prettier", "--write", "workflow.config.json"], {
       interactive: true,
     });
