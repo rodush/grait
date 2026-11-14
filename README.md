@@ -100,7 +100,7 @@ Use your configured coding agents and GitHub workflows to develop software while
 
 ## Maintain the starter
 
-GRAIT's automation uses Node.js 24; your application may use any language. Edit canonical roles under `automation/`, then run:
+Follow [GRAIT development](docs/grait-development.md) when changing the starter tooling, including inside an adopting project. GRAIT's automation uses Node.js 24; your application may use any language. Edit canonical roles under `automation/`, then run:
 
 ```sh
 npm ci

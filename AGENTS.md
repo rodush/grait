@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-This is a language-neutral GitHub template for AI-augmented development. Shared policy lives here and in `docs/`. `automation/skills/` and `automation/agents.json` define reusable skills and roles; Native harness adapters are generated from these sources. `.github/workflows/` holds deterministic CI and optional operator releases, `scripts/` implements deterministic policy, and `tests/` validates that tooling. Document future application code and its stack separately.
+GRAIT provides language-neutral policy and automation for AI-augmented development. This checkout may be the template itself or a project adopting it. Shared policy lives here and in `docs/`. `automation/skills/` and `automation/agents.json` define reusable skills and roles; native harness adapters are generated from these sources. `.github/workflows/` holds deterministic CI and optional operator releases, `scripts/` implements deterministic policy, and the template's `tests/*.test.mjs` validate that tooling. Document application code and its stack separately.
 
 ## Work Selection & Agent Responsibilities
 
@@ -10,11 +10,15 @@ Work starts with a GitHub Project issue. Triage establishes scope, acceptance cr
 
 ## Build, Test, and Development Commands
 
-Use Node.js 24: `npm ci` installs locked dependencies; `npm run check` checks configuration, harness drift, and workflow policy; `npm test` runs automation tests. Use `npm run format:check` and `npm run lint:md` for formatting and Markdown. `npm run harness:generate` generates native adapters. Edit canonical sources first. Document application-specific commands when adding a stack.
+Choose commands by the scope of the change. GRAIT tooling can be maintained in both the template repository and projects created from it; repository origin alone does not determine the application stack. The inherited `package.json` describes GRAIT tooling and does not establish a Node.js application requirement.
+
+- **Application work:** Follow the project's documented stack, scoped agent instructions, manifests, and CI for install, build, test, lint, and local-run commands. When introducing a stack, record its runtime versions, working directories, and exact commands in `docs/project/` and link them here. If no application stack is documented yet, establish it from the issue's requirements before choosing commands. GRAIT's automation checks do not validate application behavior.
+- **GRAIT tooling work:** Follow [GRAIT development](docs/grait-development.md) for tooling runtimes, commands, and regeneration rules. These apply to the automation in this template and in adopting projects.
+- **Changes touching both:** Run the relevant tooling checks and application checks, and report their results separately. Preserve required repository-wide CI checks.
 
 ## Coding Style & Testing Guidelines
 
-Follow `docs/coding-guidelines.md`, `.editorconfig`, and the chosen language's formatter. Template JavaScript uses ESM and Prettier. Prefer descriptive names, focused modules, explicit failure handling, and meaningful behavioral tests under `tests/*.test.mjs`. Test observable outcomes and important failure modes. Report commands actually run and any missing validation.
+Follow `docs/coding-guidelines.md`, `.editorconfig`, and the chosen language's formatter. GRAIT tooling JavaScript uses ESM and Prettier, with behavioral tests under `tests/*.test.mjs`; application code follows its documented language conventions and test layout. Prefer descriptive names, focused modules, explicit failure handling, and meaningful behavioral tests. Test observable outcomes and important failure modes. Report commands actually run and any missing validation.
 
 ## Commit, Review & Pull Request Guidelines
 

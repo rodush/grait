@@ -25,7 +25,8 @@ The target GitHub plan must support the required branch rules and human code-own
    ```
 
 2. Replace `OWNER/REPOSITORY` and choose your intended visibility. A repository created from a template starts with an unconfigured Project binding.
-3. Continue with [guided configuration](#guided-configuration).
+3. Adapt `AGENTS.md` to describe the application layout and link its stack and command reference under `docs/project/` when a stack is chosen. Keep GRAIT tooling instructions scoped separately; the inherited npm package is automation infrastructure, not an application stack choice. Configure the TDD runner for the application's tests before starting application implementation.
+4. Continue with [guided configuration](#guided-configuration).
 
 ## Existing repository
 
@@ -38,7 +39,7 @@ The target GitHub plan must support the required branch rules and human code-own
    ```
 
 2. Obtain a separate clone of this starter. Bring in `automation/`, `scripts/`, `config/`, `workflow.config.json`, and the engineering docs. Merge `AGENTS.md`, `CLAUDE.md`, `.github/`, `.agents/`, `.claude/`, `.codex/`, and the tooling configuration deliberately. In particular, merge npm scripts/dependencies, lint/format settings, CODEOWNERS, CI, and ignore files into existing equivalents. Do not replace the application's package manifest, lockfile, workflows, or ownership rules wholesale.
-3. Keep this starter's `ci.yml` and **Template validation** job alongside application CI, or adjust the required-check rule in `scripts/lib/bootstrap.mjs` to your chosen equivalent. Record application commands and configure `allowedWritePaths`, `protectedPaths`, and `tdd` for the actual stack. The default writable paths are `src/`, `tests/`, `assets/`, and `docs/project/`.
+3. Keep this starter's `ci.yml` and **Template validation** job alongside application CI, or adjust the required-check rule in `scripts/lib/bootstrap.mjs` to your chosen equivalent. Link the application's stack and command reference from `AGENTS.md`; record working directories and distinguish application checks from GRAIT tooling checks, including any renamed npm scripts. Configure `allowedWritePaths`, `protectedPaths`, and `tdd` for the actual stack. The default writable paths are `src/`, `tests/`, `assets/`, and `docs/project/`.
 4. Merge any existing Codex project settings into canonical `config/codex.toml`; generation maintains its installed `.codex/config.toml` copy. Review shared role model overrides when changing providers.
 5. Commit the integration before running setup; the wizard refuses a dirty checkout. After validation, setup publishes those original integration commits with the administrator's GitHub identity before the App publishes its configuration commit; this supports workflow-file changes without granting the writer App workflow-write permission. The administrator's GitHub authorization must allow those workflow changes (`gh auth refresh -s workflow` when needed). If you lack admin access, follow [the owner handoff](#ownership-and-access). Otherwise continue with guided configuration on this branch.
 

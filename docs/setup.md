@@ -4,7 +4,7 @@ For step-by-step adoption, start with [installation and configuration](installat
 
 ## Repository tooling runtime
 
-Use Node.js 24 and the npm version recorded in `package.json`. `.npmrc` keeps dependency install scripts disabled and requires package maturity. Application code may use any language; add its commands and test adapter when choosing a stack.
+GRAIT's repository automation uses Node.js 24 and the npm version recorded in its tooling `package.json`. These requirements apply when running GRAIT in the template itself and in adopting projects. Application code may use any language. See [GRAIT development](grait-development.md) when modifying tooling, and use the application's own command reference for application development. The commands below operate and validate GRAIT.
 
 | Command                                    | Purpose                                                                         |
 | ------------------------------------------ | ------------------------------------------------------------------------------- |
