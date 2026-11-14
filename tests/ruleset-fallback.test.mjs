@@ -117,6 +117,10 @@ test("bootstrap ruleset errors display canonical manual configuration and requir
     assertGuidance(result.output);
     const state = await f.state();
     assert.equal(state.variables.find(({ name }) => name === "AUTOMATION_ENABLED").value, "false");
+    assert.equal(
+      state.variables.find(({ name }) => name === "RULESET_ENFORCEMENT").value,
+      "pending",
+    );
     assertNoProvisioningDuplicates(state);
   }
 });
@@ -138,6 +142,10 @@ test("bootstrap can continue explicitly without rulesets after a failed list or 
     assert.equal(
       JSON.parse(await f.read("workflow.config.json")).controllerRepository,
       "acme/service",
+    );
+    assert.equal(
+      state.variables.find(({ name }) => name === "RULESET_ENFORCEMENT").value,
+      "unenforced",
     );
     assertNoProvisioningDuplicates(state);
   }
@@ -168,6 +176,7 @@ test("activation ruleset failure leaves automation disabled until acknowledged",
   assert.notEqual(pending.status, 0);
   assertGuidance(pending.output);
   assert.equal((await f.localState()).enabled, false);
+  assert.equal((await f.localState()).rulesetEnforcement, "pending");
   assert.equal(
     (await f.state()).variables.find(({ name }) => name === "AUTOMATION_ENABLED").value,
     "false",
@@ -175,6 +184,11 @@ test("activation ruleset failure leaves automation disabled until acknowledged",
   const resumed = await f.run("activate.mjs", ["--acknowledge-unenforced-rules"]);
   assert.equal(resumed.status, 0, "Acknowledged unenforced operation must permit activation");
   assert.equal((await f.localState()).enabled, true);
+  assert.equal((await f.localState()).rulesetEnforcement, "unenforced");
+  assert.equal(
+    (await f.state()).variables.find(({ name }) => name === "RULESET_ENFORCEMENT").value,
+    "unenforced",
+  );
   assert.equal(
     (await f.state()).variables.find(({ name }) => name === "AUTOMATION_ENABLED").value,
     "true",
