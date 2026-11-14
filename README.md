@@ -39,16 +39,9 @@ npm run setup -- --plan
 npm run setup
 ```
 
-Setup guides native harness login and the two GitHub App approvals, creates or reuses a Project, preserves application ownership rules, installs native roles, and prepares a validated configuration PR. The App keys stay in private Git metadata on your host. After a human merges the PR and default-branch CI passes:
+Setup guides native harness login and the two GitHub App approvals, creates or reuses a Project, preserves application ownership rules, installs native roles, and prepares a configuration PR for your target repository. The App keys stay in private Git metadata on your host.
 
-```sh
-git switch main
-git pull --ff-only
-npm run setup -- --activate
-npm run orchestrator -- start
-```
-
-Use your repository's actual default branch if it differs from `main`. Choose Claude with `npm run setup -- --harness claude` or Copilot with `npm run setup -- --harness copilot`; Codex is the default. The [guide](docs/installation.md) explains administrator access, existing identities, remote hosts, and interrupted setup.
+Choose Claude with `npm run setup -- --harness claude` or Copilot with `npm run setup -- --harness copilot`; Codex is the default. Follow [installation and activation](docs/installation.md#guided-configuration) to complete setup and start the orchestrator. The guide also covers administrator access, existing identities, remote hosts, and interrupted setup.
 
 ## What you get
 
