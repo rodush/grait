@@ -1,4 +1,5 @@
 import { sanitizeObservation } from "./test-observation.mjs";
+import { isAbsolute, relative } from "node:path";
 // Emit stable repository-relative identities. A test name must be unique within
 // its file/suite; line numbers deliberately do not enter handoff identities.
 export default async function* reporter(source) {
@@ -9,7 +10,10 @@ export default async function* reporter(source) {
   for await (const event of source) {
     const data = event.data;
     if (!data?.file) continue;
-    const file = data.file.replaceAll("\\", "/").replace(/^\/work\/project\//, "");
+    const normalized = data.file.replaceAll("\\", "/").replace(/^\/work\/project\//, "");
+    const file = (
+      isAbsolute(normalized) ? relative(process.cwd(), normalized) : normalized
+    ).replaceAll("\\", "/");
     const stack = parents.get(file) || [];
     if (event.type === "test:start") {
       stack[data.nesting || 0] = data.name;

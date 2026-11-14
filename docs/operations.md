@@ -1,68 +1,157 @@
-# Operating the workflow
+# Operations
 
-## Observe work
+Complete [installation and activation](installation.md) first. Use one host per Project. The parent runs in the official harness; deterministic commands coordinate GitHub state and do not call models.
 
-Use the GitHub Project for status, issue comments for triage and claims, and PR inline reviews for findings. Controller state comments include pending operation IDs, previous rounds, and stop reasons. Actions logs provide execution details; do not use them as the only place to record a review finding.
-
-The schedule is a recovery path, so transitions may take several minutes. GitHub may delay scheduled runs. Capacity is released when an issue moves from In Progress to Review; ordinary follow-up fixes stay in Review. A redesign waits for an available In Progress slot.
-
-## Local work
+## Start and inspect
 
 ```sh
-gh workflow run controller.yml -f task=claim-local -f number=123
+npm run orchestrator -- start
+npm run orchestrator -- status
 ```
 
-Only configured human operators may request a local claim. A local agent starts after the controller publishes a successful claim. Keep the issue's acceptance criteria current and open a PR with `Closes #123`. A local agent may work autonomously within that claim; hosted review still happens through GitHub Actions.
+The default is two concurrent workers. Native harness sessions are not an unlimited background service: subscription limits, permission prompts, or human/CI waits may stop progress. Save committed handoffs and continue from the recorded state rather than starting duplicate work. There is no automatic API-billing fallback.
 
-## Pause and resume
+## Triage and claim
 
-Add `agent:paused` to the issue or PR to stop scheduling work. The controller requests cancellation of an active run when it observes the pause; cancellation can race an already-running safe output. For an immediate incident response, disable the agent workflows or revoke credentials as well.
+Create the issue with its problem, acceptance criteria, validation, and native blocked-by relationships. The triage role returns a JSON assessment:
 
-Inspect the latest findings, operation, and commits when `agent:needs-human` appears. After resolving the cause:
+```json
+{
+  "version": 1,
+  "issue": 123,
+  "digest": "SHA256_OF_CURRENT_TITLE_AND_BODY",
+  "ready": true,
+  "blockers": [],
+  "questions": [],
+  "checklist": {
+    "scope": true,
+    "acceptance": true,
+    "validation": true,
+    "dependencies": true,
+    "alignment": true
+  },
+  "tdd": { "required": true }
+}
+```
+
+Compute the digest with `issueDigest` from `scripts/lib/policy.mjs` using the current API issue object (`number`, `title`, `body`); never guess it from copied text. Blocker references use `owner/repository#N` and must exactly match native GitHub blockers. An exemption uses `"tdd": {"required": false, "reason": "Concrete reason testing is inapplicable"}`. An outsider needs maintainer admission via `agent:admitted` unless current write access or configured identity makes them trusted.
 
 ```sh
-gh workflow run controller.yml -f task=resume -f number=456
+npm run orchestrator -- ready --issue 123 --file /tmp/triage.json
+npm run orchestrator -- claim --issue 123
+npm run orchestrator -- worktree --issue 123
 ```
 
-Resume preserves the lifetime round count and starts a new oscillation-detection window. Apply a new revision before asking for another review. If both the issue and PR are paused, reconcile and resume each explicitly. Ten completed reviews remain the maximum: additional changes need human review rather than resetting automation state.
+Any unarchived Project story in Review blocks admission of a new story, including Review work awaiting humans or external dependencies. Finish or resolve that work first; existing claims, review/fix stages, and redesign under an existing claim may continue. The five-story limit is a ceiling, not a target to fill.
 
-If the issue's scope or blockers changed, update its description, then request fresh triage:
+The command reserves In Progress before work. Repeated accepted claims return the same issue branch. Fresh scope/dependencies and the five-story cap are checked; inaccessible active items count against capacity. The worktree command prints the assigned absolute path and head. Give that path, acceptance digest, committed SHA, scope, and next owner to each specialist.
+
+## Tester-first implementation and publishing
+
+Follow [TDD](tdd.md) for the committed Red/Green handoffs. The parent may delegate natively using the assigned worktree, or start a native specialist session there:
 
 ```sh
-gh workflow run controller.yml -f task=triage -f number=123
+npm run orchestrator -- worker --issue 123 --role test
 ```
 
-Pause or finish any active workflow first. Existing native dependencies are preserved; remove an obsolete blocker explicitly in GitHub before retriage. A dependency closed as not planned does not unblock implementation automatically.
+Run verification/publishing from the assigned issue worktree. Only one role may own it at a time. After accepted implementation and Green:
 
-## Failure recovery
+```sh
+npm run github -- push --issue 123
+npm run github -- pr --issue 123 --title 'feat: implement accepted behavior' --body-file /tmp/pr-body.md
+```
 
-- **Dispatch uncertain:** inspect Actions for the operation ID before resuming. Avoid duplicate implementation.
-- **Implementation without a PR:** inspect protected-file restrictions, allowed paths, and engine output. The issue retains its slot until reconciled.
-- **Expired credentials:** refresh the corresponding secret and resume after confirming no run is still active.
-- **Malformed or stale review metadata:** inspect the formal review and recorded head. Never treat an old-head approval as evidence for new changes.
-- **PR closed without merge:** re-triage or decide its disposition manually; automation does not mark it Done.
-- **Local claim abandoned:** confirm the agent has stopped, then re-triage the issue. A claim does not expire silently while an agent could still be working.
+The PR starts as a draft with `Closes #123`. Include actual validation evidence and risks in its body. After the exact PR head has accepted Green (or a reasoned triage exemption):
 
-Never delete ledgers to reset a stopped loop. They provide the durable budget and audit trail.
+```sh
+npm run orchestrator -- ready-pr --pr 456
+```
 
-## Releases and maintenance
+This marks it ready and synchronizes the Project. Publishing is limited to the claimed issue branch and configured writable paths; no force-push, merge, or release command is supplied to agents.
 
-After a human squash merge and successful default-branch CI:
+## Review publication
+
+Assign the exact PR head and trusted policy to the separate local reviewer. GitHub is the shared review record: the reviewer must publish a readable formal decision and inline findings on the remote PR, not merely return a local report. The parent passes a structured payload to the identity-scoped publisher, for example:
+
+```json
+{
+  "version": 1,
+  "pr": 456,
+  "head": "EXACT_40_CHARACTER_PR_HEAD_SHA",
+  "round": 1,
+  "verdict": "REQUEST_CHANGES",
+  "blockers": ["src/parser.mjs:parse:empty-input"],
+  "rethink": false,
+  "conflicts": false,
+  "body": "Explain the concrete defect and evidence.",
+  "comments": [
+    {
+      "path": "src/parser.mjs",
+      "line": 12,
+      "side": "RIGHT",
+      "body": "P1 [src/parser.mjs:parse:empty-input]: explain this finding."
+    }
+  ]
+}
+```
+
+Use APPROVE with no blockers/rethink/conflicts for a complete clean review; COMMENT for incomplete evidence or human judgment. Inline comments must reference actual diff lines; `LEFT` is for deletions, `RIGHT` for additions/current code. The review skill defines severity and stable IDs.
+
+```sh
+npm run orchestrator -- review --pr 456 --file /dev/stdin
+```
+
+Supply the JSON payload above on standard input and close the input stream. Hosts without `/dev/stdin` can use `--file PATH` with a temporary transport file. The JSON carries exact-head/round metadata for validation; testers and fixers read the published GitHub conversation directly and do not need that file.
+
+For a setup/migration PR that must satisfy existing active agent-review rules before the new host is activated, a configured human operator can explicitly publish its locally evaluated review with `npm run orchestrator -- review --setup-review --pr N --file PATH`. This permits only the reviewer publishing operation during staged setup; it never enables claims, implementation, or a fix loop. Existing issue/PR pause state and lifetime limits still apply. Use ordinary review publication after activation.
+
+The publisher uses the reviewer App, verifies the actual GitHub review identity/head/decision, and records lifetime history. Only a valid approval makes the writer's `Agent review` status succeed for that exact SHA. A new head needs a new review. Humans still approve and squash merge.
+
+### Follow-up conversation and resolution
+
+Read reviews and inline comments from GitHub, for example:
+
+```sh
+gh pr view 456 --repo OWNER/REPOSITORY --json reviews,comments
+gh api --paginate repos/OWNER/REPOSITORY/pulls/456/comments
+```
+
+Use the PR UI or GitHub's GraphQL review-thread API to inspect thread resolution state; the REST comments list alone does not show whether a thread is resolved. Keep corrections and verification in the original threads, with stable finding IDs, fix commits, and test evidence. Publish fix replies through the configured writer identity. After the independent reviewer verifies the current head, record that verification and mark the agent's thread Resolved using an authorized reviewer session in the PR UI/API. Leave human objections for their author or a maintainer to resolve. Never treat a push or an outdated diff as resolution, delete earlier findings, or claim a thread is resolved when the remote state remains open. If the current publishing tool cannot perform a reply or resolution, leave that action pending for an authorized session and report it explicitly; do not borrow another identity or broaden publishing permissions.
+
+A `fix` decision starts another tester-first cycle in the same issue worktree. A `rethink` decision first needs an In Progress slot:
+
+```sh
+npm run orchestrator -- next --issue 123 --pr 456
+```
+
+Stop if the command reports `pause`; do not reset its history. After a human merges:
+
+```sh
+npm run orchestrator -- sync --pr 456
+```
+
+Only a merged, issue-linked PR completes the story. A closed unmerged PR needs triage/human judgment. Clean up task-owned worktrees only after confirmed human merge and released ownership.
+
+## Pause and recovery
+
+Add `agent:paused` to an issue/PR, or set repository variable `AUTOMATION_ENABLED=false` to stop local commands. A running native agent must be stopped in its harness as well; labels cannot terminate an OS process instantly. Revoke App keys/installations for an immediate credential incident.
+
+The ledger preserves review rounds, exact heads, claims, pending intentions, and stop reasons. Duplicate/malformed state and uncertain external writes fail closed. A human reconciles the actual branch, PR, review, and Project before resuming; never delete/reset a ledger to make a command pass. Legacy pending hosted operations must be stopped and their evidence reconciled during migration. The ten-round lifetime cap survives restarts and ordinary author pushes.
+
+For a test correction use the explicit [handoff](tdd.md#test-corrections). For interrupted setup, a failed configuration push, or host migration follow [installation recovery](installation.md#resume-remote-hosts-and-credentials). A lock in `<git-common-dir>/grait-setup/lock` is exclusive; stop its owning process and inspect it before manually removing a stale lock. Locks are local to that Git common directory; never coordinate the same Project from two independent clones/hosts.
+
+## Dependency updates
+
+Dependabot updates the hand-maintained deterministic Actions and npm lockfile. There are no generated Actions locks or compiler pin to reconcile. Keep action references SHA-pinned with a readable release comment; choose stable releases at least three days old. Treat dependency PRs like any other admitted contribution and apply the same CI/review/human merge gates.
+
+## Optional releases
+
+Release publication is separate from AI execution and is not required for initial activation. The included `release.yml` is deterministic and manual. Configure a dedicated release App with contents write, set `RELEASE_APP_CLIENT_ID`/`RELEASE_APP_ID`, and store its key only as `RELEASE_APP_PRIVATE_KEY` in the protected `release` environment. Register its numeric App ID as the sole integration allowed to create `v*` tags in the **Release tag creation** ruleset. Keep **Immutable release tags** active, prohibiting updates/deletion without bypass. Human-only token mode is available only for existing deliberate release integrations; default publishing identities use Apps.
+
+A configured human operator requests a version from the default branch:
 
 ```sh
 gh workflow run release.yml -f version=v1.2.3
 ```
 
-The configured human operator approves the release environment. The workflow tags the current default-branch commit and publishes GitHub-generated release notes. Update application version files through a PR before releasing when the chosen stack requires them. GRAIT includes an MIT license; configure the maintainer contact when adopting the template.
-
-Dependabot opens changes for Actions and npm tooling. Review compiler upgrades deliberately, regenerate workflows, and inspect changes to actions and secrets before approving the new manifest. Enable private vulnerability reporting, secret scanning, push protection, and dependency alerts where available.
-
-## Admission and dispatch budgets
-
-External issue/PR authors cannot start paid automation by posting or editing content. A maintainer admits an external submission with `agent:admitted`; this label authorizes processing, not implementation or merge. Author association alone is insufficient. Current write permission, configured operators, and the managed writer identity are trusted. Removing the label stops future dispatches; cancel an already-running workflow when revoking its authorization.
-
-`workflow.config.json` defaults to five concurrent agent workflows and 28,000 reserved AI credits per rolling 24 hours, shared by triage, implementation, review, and fixes. Each operation reserves 1,000 agent credits plus 400 detection credits before dispatch. Credits are gh-aw accounting units, not a dollar spending guarantee; configure provider billing limits too. Completed operations retain their full reservation for 24 hours. A denied budget leaves work waiting for the next reconciliation. The five-story In Progress limit remains independent.
-
-Bootstrap records the budget issue/comment author in `AUTOMATION_BUDGET_ISSUE` and `AUTOMATION_BUDGET_LOGIN`. Do not delete or reset its ledger. Unknown/uncertain dispatches keep their concurrency reservation until an operator verifies that no run can still execute and marks that reservation completed; its daily credits remain charged. Do not change timestamps or credit amounts. A malformed or missing ledger fails closed. Do not rerun agent Actions jobs: every agent, detection, output, and conclusion job rejects reruns. Use controller resume after investigating a failure; a fresh operation reserves fresh credits.
-
-Release versions must use a **new** tag. Existing lightweight or annotated tags are rejected even when they point at main. Release-tag creation is restricted to the dedicated release App (or configured operators in token mode); an independent ruleset forbids updates/deletions without bypass. If publication fails after tag creation, leave the immutable tag intact, investigate, and use a new version. The workflow checks the active immutability rule and exact tag SHA before publishing.
+The environment requires human approval. The script requires successful CI on the current default head, creates a new immutable tag, and publishes the release. Agents never dispatch this workflow. It uses no model, provider key, or subscription allowance. Application deployment is project-specific.

@@ -11,6 +11,8 @@ GRAIT provides reusable agent instructions, skills, tooling configurations, and 
 
 **GitHub-native. Language-agnostic. Opinionated by design.**
 
+**Start with the [installation and configuration guide](docs/installation.md): [new repository](docs/installation.md#new-repository), [existing repository](docs/installation.md#existing-repository), [upgrade](docs/installation.md#upgrade-an-existing-grait-installation), or [someone else's repository](docs/installation.md#ownership-and-access).**
+
 ## Philosophy
 
 AI can accelerate software development, but faster code generation does not automatically produce better software.
@@ -26,28 +28,38 @@ GRAIT is built around a few principles:
 - **Automate what makes sense.** Use deterministic automation for predictable tasks and AI-powered workflows where reasoning adds value.
 - **Conventions over repeated decisions.** Establish sensible defaults to reduce repetitive setup and improve consistency across repositories.
 
-## What's Included
+Your local Codex CLI, Claude Code, or GitHub Copilot CLI session acts as the orchestrator and delegates specialists in worktrees on your machine or your own remote host. Changes are pushed to GitHub PRs; humans approve, merge, and release.
 
-GRAIT brings together the building blocks of an AI-augmented engineering workflow.
+## Quick start
 
-| Component                                                                        | Purpose                                                                                                                                                              |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`AGENTS.md`](AGENTS.md) and [engineering guidelines](docs/coding-guidelines.md) | Shared instructions, engineering principles, and expectations for coding agents                                                                                      |
-| [Agent configurations](workflow.config.json)                                     | Selectable Codex, Claude, or Copilot engine, authentication mode, write scopes, and workflow limits                                                                  |
-| [Skills](docs/agents.md)                                                         | Reusable `grait-triage`, `grait-test`, `grait-implement`, `grait-review`, and `grait-fix` skills, generated for each harness from `automation/skills/`               |
-| [Agent definitions](automation/agents.json)                                      | Matching native roles in `.codex/agents/`, `.claude/agents/`, and `.github/agents/`, inheriting harness models and permissions                                       |
-| [Codex configuration](config/codex.toml)                                         | Matching `.codex/config.toml` with model, reasoning, approval, sandbox, and CLI/TUI defaults                                                                         |
-| [GitHub Actions](.github/workflows/ci.yml)                                       | Node.js 24 template validation, dependency maintenance, and [operator-triggered releases](.github/workflows/release.yml); application deployment is project-specific |
-| [GitHub Agentic Workflows](docs/architecture.md)                                 | Controller-authorized triage, implementation, PR review, and follow-up fixes using `gh-aw`                                                                           |
-| [Project workflow](docs/workflow.md)                                             | Five Kanban statuses, native blocking dependencies, and a project-wide limit of five In Progress stories                                                             |
-| [PR review and fixes](docs/review-guidelines.md)                                 | Reviews run in GitHub Actions and publish inline findings and formal decisions in the PR UI; fixes stop on conflicts, reversals, repeated blockers, or ten rounds    |
-| [Contribution guidance](CONTRIBUTING.md) and [security policy](SECURITY.md)      | Issue/PR templates, human ownership and squash-merge gates, credential boundaries, and setup guidance                                                                |
+Install Git, Node.js 24 with npm, GitHub CLI, and Codex CLI, Claude Code, or GitHub Copilot CLI. Sign in to GitHub with `gh auth login`, then run from your clone:
 
-GRAIT uses **Node.js 24 and npm for repository automation**: the Project controller, setup/release scripts, tests, formatting, and Markdown linting. GitHub Actions provisions Node.js for hosted workflows. Contributors maintaining this tooling need it locally; the application you build can use any language and its own build tools. See the [tooling guide and command reference](docs/setup.md#repository-tooling-runtime).
+```sh
+npm run setup -- --plan
+npm run setup
+```
 
-[Tester-first development](docs/tdd.md) separates test ownership from implementation, supports collocated test patterns and independent role models, and requires hosted Red/Green proof before review.
+Setup guides native harness login and the two GitHub App approvals, creates or reuses a Project, preserves application ownership rules, installs native roles, and prepares a configuration PR for your target repository. The App keys stay in private Git metadata on your host.
 
-The configurations are intentionally opinionated but can be adapted to individual project requirements. See [setup](docs/setup.md) and [operations](docs/operations.md) before enabling automation.
+Choose Claude with `npm run setup -- --harness claude` or Copilot with `npm run setup -- --harness copilot`; Codex is the default. Follow [installation and activation](docs/installation.md#guided-configuration) to complete setup and start the orchestrator. The guide also covers administrator access, existing identities, remote hosts, and interrupted setup.
+
+## What you get
+
+| Component                                                 | Purpose                                                                                                |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| [Orchestrator and specialists](docs/agents.md)            | Native Codex/Claude/Copilot roles for coordination, triage, testing, implementation, review, and fixes |
+| [Shared engineering policy](AGENTS.md)                    | Language-neutral conventions, scoped changes, and human authority                                      |
+| [Project workflow](docs/workflow.md)                      | Backlog → Ready → In Progress → Review → Done, native blockers, and at most five active stories        |
+| [Worktrees and tester-first delivery](docs/tdd.md)        | Separate orchestrator checkout, sequential tester/implementer ownership, independent validation        |
+| [PR review](docs/review-guidelines.md)                    | Separate publishing identity, inline findings, formal decisions, and bounded fix loops                 |
+| [Deterministic CI](.github/workflows/ci.yml)              | Configuration, generated-adapter drift, tests, formatting, and Markdown checks                         |
+| [Operator releases](docs/operations.md#optional-releases) | Optional deterministic release workflow with human approval                                            |
+
+## Subscription and execution
+
+Use the official harness with your own eligible subscription. Native sub-agents share its usage allowance; the default is two concurrent workers. GRAIT does not request provider API keys, run AI agents in GitHub Actions, or supply a separate LLM service. Model inference still uses the provider's servers. See [subscription setup](docs/setup.md#subscription-authentication).
+
+GitHub Apps identify **who publishes**, independently of where agents execute. One writer App pushes branches and opens PRs; one reviewer App publishes reviews. Tester and implementer do not need separate GitHub accounts. Neither App receives permission to bypass human merge gates.
 
 ## Getting Started
 
@@ -62,8 +74,8 @@ Before using the configurations, review:
 - Agent instructions and engineering conventions
 - Model selection and agent permissions
 - Available skills and specialized agents
-- GitHub Actions and agentic workflows
-- Repository secrets and required permissions
+- Local harness roles and deterministic GitHub Actions
+- Host-side publishing credentials, Project access, and required GitHub permissions
 
 ### 3. Customize for your project
 
@@ -79,6 +91,21 @@ GRAIT provides the common foundation. Extend it with project-specific context, i
 
 Use your configured coding agents and GitHub workflows to develop software while maintaining established engineering standards.
 
+## Maintain the starter
+
+Follow [GRAIT development](docs/grait-development.md) when changing the starter tooling, including inside an adopting project. GRAIT's automation uses Node.js 24; your application may use any language. Edit canonical roles under `automation/`, then run:
+
+```sh
+npm ci
+npm run harness:generate
+npm run check
+npm test
+npm run format:check
+npm run lint:md
+```
+
+Read [setup](docs/setup.md) for configuration, [operations](docs/operations.md) for commands and recovery, and [CONTRIBUTING.md](CONTRIBUTING.md) for changes. Existing installations should follow the migration guide before enabling the local orchestrator.
+
 ## Technology and Platform Support
 
 **Technology stack:** Agnostic by design.
@@ -87,11 +114,11 @@ GRAIT does not prescribe programming languages, frameworks, application architec
 
 **Repository platform:** GitHub.
 
-GRAIT intentionally relies on GitHub-native capabilities, including GitHub Actions and GitHub Agentic Workflows (`gh-aw`).
+GRAIT intentionally relies on GitHub-native capabilities, including GitHub Actions for deterministic CI, plus issues, Projects, PRs, and reviews.
 
 **Coding agents:** Initially optimized for OpenAI Codex.
 
-Claude and GitHub Copilot are also selectable engines and have matching skill and agent adapters, sharing the same engineering principles and workflow policies.
+Claude Code and GitHub Copilot CLI are also selectable local harnesses and have matching skill and agent adapters, sharing the same engineering principles and workflow policies.
 
 ## What GRAIT Is Not
 

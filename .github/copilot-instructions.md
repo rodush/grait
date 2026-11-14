@@ -1,7 +1,5 @@
 # Shared repository instructions
 
-The shared skill and role catalog is in `docs/agents.md`. Native definitions are generated from `automation/skills/` and `automation/agents.json`.
+Read `AGENTS.md`, `docs/coding-guidelines.md`, and `docs/workflow.md` before working. The shared skill and role catalog is in `docs/agents.md`; native adapters are generated from `automation/skills/` and `automation/agents.json`. All agents run in this user-owned harness.
 
-Read `AGENTS.md`, `docs/coding-guidelines.md`, and `docs/workflow.md` from the repository root before working. These files contain the shared policy for all harnesses; keep this adapter small.
-
-For PR review, also read `docs/review-guidelines.md`. Review runs in GitHub Actions and findings belong in the GitHub PR UI.
+For PR review, also read `docs/review-guidelines.md`. Evaluate the exact PR head locally without executing untrusted code in the credentialed session; publish findings and formal decisions through the separate GitHub reviewer identity. Humans merge and release.

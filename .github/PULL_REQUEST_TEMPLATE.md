@@ -1,21 +1,21 @@
 ## Outcome
 
-Describe the problem and resulting behavior.
+<!-- Explain the problem and resulting behavior. -->
 
 Closes #ISSUE_NUMBER
 
 ## Validation
 
-List commands run, results, and any checks that could not run. Include screenshots for visual changes.
+<!-- List commands run and results, including checks that could not run and why.
+Report application and GRAIT tooling checks separately when both apply.
+Attach screenshots for visual changes. -->
 
 ## Risks and rollout
 
-Describe compatibility, configuration, migrations, and operational impact where applicable.
+<!-- Note compatibility, configuration, migrations, or operational impact. Write "None" if applicable. -->
 
 ## Checklist
 
-- [ ] Acceptance criteria are met and the issue is linked.
-- [ ] Behavioral changes have appropriate validation.
-- [ ] Documentation and example configuration are current.
-- [ ] No credentials or private data are included.
-- [ ] A human will review and make the final squash-merge decision.
+- [ ] Issue acceptance criteria are met.
+- [ ] Relevant tests, documentation, and example configuration are updated.
+- [ ] No secrets or private data are included.

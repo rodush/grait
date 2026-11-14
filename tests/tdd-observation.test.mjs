@@ -89,18 +89,16 @@ test("tester-authored publicObservation shares only sanitized public expected an
   assert.match(unsafe.failed[0].observation.observed, /withheld/);
 });
 
-test("role contracts forbid implementation tailored to test internals and require visible behavioral negotiation", async () => {
-  const developer = await readFile(
-    new URL("../automation/prompts/develop.md", import.meta.url),
+test("local role contracts preserve black-box test ownership", async () => {
+  const implementer = await readFile(
+    new URL("../automation/skills/grait-implement/SKILL.md", import.meta.url),
     "utf8",
   );
-  const tester = await readFile(new URL("../automation/prompts/test.md", import.meta.url), "utf8");
-  assert.match(developer, /do not read test source, fixtures, assertion implementations/i);
-  assert.match(developer, /do not hardcode test IDs, fixture inputs/i);
-  assert.match(developer, /acceptance criterion/i);
-  assert.match(developer, /expected public behavior/i);
-  assert.match(developer, /observed behavior/i);
-  assert.match(tester, /rationale/i);
-  assert.match(tester, /needs-triage/i);
-  assert.match(tester, /independently/i);
+  const tester = await readFile(
+    new URL("../automation/skills/grait-test/SKILL.md", import.meta.url),
+    "utf8",
+  );
+  assert.match(implementer, /(?:do not|never) read test source/i);
+  assert.match(implementer, /acceptance criteri/i);
+  assert.match(tester, /never.*implementation|only.*test/i);
 });

@@ -3,11 +3,9 @@ node_modules/
 .aws/
 .codex/
 .agents/
-.github/workflows/*.lock.yml
-.github/workflows/shared/*.md
-!.github/workflows/shared/authorize.md
 package-lock.json
 .claude/skills/grait-*/SKILL.md
-.github/skills/grait-*/SKILL.md
 .claude/agents/grait-*.md
+
+.github/skills/grait-*/SKILL.md
 .github/agents/grait-*.agent.md

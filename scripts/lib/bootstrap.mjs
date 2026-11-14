@@ -102,3 +102,24 @@ export const repositorySettings = {
   squash_merge_commit_title: "PR_TITLE",
   squash_merge_commit_message: "PR_BODY",
 };
+
+export function preserveCodeowners(original, logins) {
+  const operators = logins.map((login) => `@${login}`);
+  let hasDefault = false;
+  const lines = original.split(/\r?\n/).map((line) => {
+    if (!line.trim() || line.trimStart().startsWith("#")) return line;
+    const match = line.match(/^(\s*)(\S+)(.*)$/);
+    if (!match) return line;
+    if (match[2] === "*") hasDefault = true;
+    const commentAt = match[3].indexOf("#");
+    const owners = (commentAt < 0 ? match[3] : match[3].slice(0, commentAt)).trim();
+    const comment = commentAt < 0 ? "" : ` ${match[3].slice(commentAt)}`;
+    const existing = owners.split(/\s+/).filter(Boolean);
+    for (const operator of operators)
+      if (!existing.some((owner) => owner.toLowerCase() === operator.toLowerCase()))
+        existing.push(operator);
+    return `${match[1]}${match[2]} ${existing.join(" ")}${comment}`;
+  });
+  if (!hasDefault) lines.unshift(`* ${operators.join(" ")}`);
+  return lines.join("\n").replace(/\n*$/, "\n");
+}

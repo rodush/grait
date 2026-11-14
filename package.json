@@ -17,14 +17,15 @@
     "check": "node scripts/check.mjs && node scripts/harnesses.mjs --check",
     "harness:generate": "node scripts/harnesses.mjs",
     "harness:check": "node scripts/harnesses.mjs --check",
-    "check:profiles": "node scripts/check-profiles.mjs",
     "test": "node --test --test-isolation=none tests/*.test.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint:md": "markdownlint-cli2",
-    "compile": "node scripts/compile.mjs",
     "bootstrap": "node scripts/bootstrap.mjs",
-    "activate": "node scripts/activate.mjs"
+    "activate": "node scripts/activate.mjs",
+    "setup": "node scripts/setup.mjs",
+    "orchestrator": "node scripts/orchestrator.mjs",
+    "github": "node scripts/github.mjs"
   },
   "devDependencies": {
     "markdownlint-cli2": "0.24.0",

@@ -1,41 +1,28 @@
-# Shared skills and agent definitions
+# Skills and agent roles
 
-The canonical skills live in `automation/skills/`; `automation/agents.json` defines the corresponding roles. These are repository-scoped workflow skills, intended to travel with GRAIT's policies and controller.
+The canonical catalog is `automation/agents.json`; role instructions live under `automation/skills/`. All roles execute in the user's Codex, Claude Code, or GitHub Copilot CLI harness using its native login.
 
-| Role              | Skill                                                           | Responsibility                                                    |
-| ----------------- | --------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `grait-triage`    | [Triage](../automation/skills/grait-triage/SKILL.md)            | Clarify scope, acceptance, validation, and blocking relationships |
-| `grait-implement` | [Implementation](../automation/skills/grait-implement/SKILL.md) | Implement an already claimed issue and prepare its PR             |
-| `grait-review`    | [Hosted review](../automation/skills/grait-review/SKILL.md)     | Review in Actions; locally, request or inspect that hosted review |
-| `grait-fix`       | [Follow-up fixes](../automation/skills/grait-fix/SKILL.md)      | Address hosted findings within the existing claim and loop budget |
+| Role                 | Responsibility                                                                       |
+| -------------------- | ------------------------------------------------------------------------------------ |
+| `grait-orchestrator` | Parent session: manage the queue, claims, worker capacity, handoffs, and PR delivery |
+| `grait-triage`       | Clarify scope, acceptance, validation, and native blockers                           |
+| `grait-test`         | Write acceptance tests and hand independent Red evidence to the implementer          |
+| `grait-implement`    | Implement accepted work without reading or changing tests                            |
+| `grait-review`       | Evaluate the exact PR head and return inline findings/formal review data             |
+| `grait-fix`          | Correct published findings within the existing claim and loop bounds                 |
 
-## Harness adapters
+## Generated adapters
 
-`npm run harness:generate` produces skills in `.agents/skills/` for Codex, `.claude/skills/` for Claude Code, and `.github/skills/` for Copilot. It also produces native agent definitions in `.codex/agents/*.toml`, `.claude/agents/*.md`, and `.github/agents/*.agent.md`. The adapters refer to the same canonical skills and inherit their harness's model and permissions.
+`npm run harness:generate` installs skills under `.agents/skills/` for Codex, `.claude/skills/` for Claude Code, and `.github/skills/` for Copilot, plus native role definitions under `.codex/agents/`, `.claude/agents/`, and `.github/agents/`. The generated `.github/copilot-instructions.md` adapter points to shared local policy. It also installs canonical `config/codex.toml` as `.codex/config.toml`. Edit sources, regenerate, and commit the resulting adapters. `npm run check` verifies drift.
 
-Use the named role or skill through the harness's supported invocation mechanism. For example, invoke `$grait-implement` in Codex for an already claimed issue, or ask the harness to assign that issue to `grait-implement`. Defining roles does not authorize extra work, external writes, parallel story claims, or permission changes.
+Start the main orchestrator with `npm run orchestrator -- start`. Within an existing native session, ask it to apply the `grait-orchestrator` skill. It delegates the other roles using supported native tools, or starts a role session in an assigned issue worktree with `npm run orchestrator -- worker --issue N --role test|implement|fix`. A role definition does not authorize unclaimed work, extra permissions, or another story slot.
 
-For PR review, a local invocation dispatches or observes the controller's hosted workflow. It never performs local code review. The review workflow imports the same skill, enforces controller authorization, and publishes findings in GitHub. Local triage similarly prepares an assessment; the hosted workflow supplies the published readiness attestation.
+Tester and implementer use the same issue branch/worktree sequentially at exact committed handoffs. Claude's automatic worktree isolation is limited to independent triage/review roles to avoid accidentally branching an implementation handoff from the default branch. See [worktrees](worktrees.md) and [TDD](tdd.md).
 
-## Maintain the shared definitions
+## Review and models
 
-Edit canonical skills or role metadata, then run:
+Review evaluation happens locally in a separate session. The parent publishes the result using the reviewer App through `npm run orchestrator -- review`; it never routes evaluation to Actions. Writer and reviewer are two GitHub publishing identities shared by the relevant roles, not two provider accounts. Human approval remains required.
 
-```sh
-npm run format
-npm run harness:generate
-npm run compile
-npm run check
-```
+The orchestrator defaults to medium reasoning; reviewer to high. Tester/implementer overrides use `workflow.config.json` and otherwise inherit native defaults. Native sub-agents share the user's subscription allowance; stop at saved handoffs rather than switching silently to API billing. See the [configuration reference](setup.md).
 
-Generated files are committed and checked for drift. The gh-aw compiler embeds the skill bodies in shared workflow fragments, so hosted jobs do not depend on local harness discovery. Keep controller inputs and output schemas in `automation/prompts/`; portable skills explain the task and execution boundaries.
-
-Native formats follow the [Codex agent reference](https://learn.chatgpt.com/docs/agent-configuration/subagents), [Claude Code agent reference](https://code.claude.com/docs/en/sub-agents), and [Copilot agent reference](https://docs.github.com/en/copilot/reference/custom-agents-configuration). Skills use the shared `SKILL.md` format with each harness's discovery location.
-
-## Coordinator responsibilities
-
-The coordinator keeps its checkout isolated and assigns separate worktrees to unrelated sub-agents. The tester and implementer for the same issue share one worktree and branch, handing over exclusive ownership sequentially. It records the role, scope, base SHA, and handoff evidence, serializes tester/implementer ownership of the shared issue branch, and verifies commits before integration. See [the worktree protocol](worktrees.md), including cleanup after human merge.
-
-## Tester and implementer
-
-`grait-test` starts testable issues and owns test-pattern files exclusively. `grait-implement` and `grait-fix` own implementation only; they hand back test revisions rather than editing tests. Role model/reasoning overrides live in `workflow.config.json` and inherit defaults when unset. See [the TDD protocol](tdd.md) for hosted proof gates and local sequential ownership.
+Native formats follow [Codex sub-agents](https://learn.chatgpt.com/docs/agent-configuration/subagents), [Claude Code sub-agents](https://code.claude.com/docs/en/sub-agents), and [Copilot CLI custom agents](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-custom-agents-for-cli).

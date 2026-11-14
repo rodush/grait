@@ -204,3 +204,14 @@ test("Conventional Commit titles allow scopes and breaking changes", () => {
   for (const title of ["Update stuff", "feat add API", "fix: "])
     assert.equal(conventionalTitle(title), false);
 });
+
+test("local configuration supports Codex Claude and Copilot without hosted execution", () => {
+  assert.deepEqual(config.supportedEngines, ["codex", "claude", "copilot"]);
+  for (const engine of ["codex", "claude", "copilot"]) {
+    const selected = { ...config, supportedEngines: ["codex", "claude", "copilot"], engine };
+    assert.doesNotThrow(() => validateConfig(selected));
+    assert.equal(selected.execution, "local");
+    assert.equal(selected.ghAwVersion, undefined);
+    assert.equal(selected.ghAwActionsSha, undefined);
+  }
+});

@@ -1,14 +1,16 @@
 ---
 name: grait-test
-description: Write acceptance tests before implementation and hand verified Red evidence to a separate implementer. Never edit implementation files.
+description: Write acceptance tests before implementation and hand verified Red evidence to a separate local implementer. Never edit implementation files.
 ---
 
 # Tester ownership
 
-Read AGENTS.md and the shared coding, TDD, and worktree policies. Take the issue worktree from the coordinator at the authorized SHA. You share this issue worktree and branch with the implementer sequentially; the coordinator has a separate worktree. Never write concurrently. Edit only configured test paths, including deletions and renames. Never edit production code to make tests fail or pass.
+Read AGENTS.md, docs/tdd.md, and docs/worktrees.md. Take the issue's shared worktree at the accepted committed SHA. You and the implementer own it sequentially, never concurrently. Edit only configured test paths, including renames and deletions. Never change production code to create Red or Green.
 
-Turn acceptance criteria into behavioral tests. Name the new tests that must fail as assertion failures before implementation. Do not use syntax/import errors, missing dependencies, or unrelated regressions as Red evidence. Hand the committed suite and expected test IDs to the independent hosted verifier. Only the controller may authorize the implementer after verified Red. If tests need revision, accept a reasoned handback; do not change implementation. See `docs/tdd.md` and `docs/worktrees.md` for local and hosted handoffs and cleanup.
+Turn acceptance criteria into meaningful behavioral tests. Name the expected failing test IDs before implementation. Syntax/import errors, missing dependencies, and unrelated regressions are infrastructure failures, not Red. Commit the tests and give the orchestrator the head, baseline, expected failures, and acceptance digest. Wait for independent Red verification before relinquishing ownership.
+
+For review-driven corrections, read the published GitHub review comments and open threads directly through GitHub CLI/API. Use their stable finding IDs and public behavior to define regression coverage; a local review JSON file is not required. Return the finding IDs and committed validation evidence so the parent can record them in the existing PR threads.
 
 ## Black-box feedback
 
-The implementer receives the acceptance contract and source-free behavioral feedback, not test code or fixture internals. Discuss disputed failures visibly, citing the acceptance criterion, expected public behavior, and observed behavior. Revise tests only with a contract-based rationale; unresolved ambiguity requires triage/operator input and pauses the handoff.
+The implementer receives the acceptance contract and source-free behavioral feedback, not test code or fixture internals. Explicitly opt into bounded public observations only when they describe the public contract. Discuss disputed failures using the acceptance criterion, expected behavior, observed behavior, and requested clarification. Revise tests only for a contract-based reason; unresolved ambiguity returns to triage or a human.

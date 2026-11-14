@@ -1,10 +1,13 @@
 import { parseArgs, promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import { parse as parseToml } from "smol-toml";
-import { Ledger } from "./lib/ledger.mjs";
 import { GitHub } from "./lib/github.mjs";
-import { repositoryRules, repositorySettings, resolveActionsAppId } from "./lib/bootstrap.mjs";
+import {
+  repositoryRules,
+  repositorySettings,
+  resolveActionsAppId,
+  preserveCodeowners,
+} from "./lib/bootstrap.mjs";
 import { sameLogin } from "./lib/policy.mjs";
 
 const { values } = parseArgs({
@@ -17,19 +20,16 @@ const { values } = parseArgs({
     "reviewer-login": { type: "string" },
     "release-app-id": { type: "string" },
     "status-app-id": { type: "string" },
-    model: { type: "string" },
     apply: { type: "boolean", default: false },
   },
 });
 const config = JSON.parse(await readFile("workflow.config.json", "utf8"));
-const codex = parseToml(await readFile("config/codex.toml", "utf8"));
 const repo = values.repo || config.controllerRepository;
-const projectOwner = values["project-owner"] || repo?.split("/")[0];
+let projectOwner = values["project-owner"] || repo?.split("/")[0];
 const maintainers = (values.maintainers || "")
   .split(",")
   .map((name) => name.trim().replace(/^@/, ""))
   .filter(Boolean);
-const model = values.model || (config.engine === "codex" ? codex.model : null);
 const plan = {
   repository: repo || "UNCONFIGURED",
   projectOwner: projectOwner || "UNCONFIGURED",
@@ -40,7 +40,6 @@ const plan = {
   maxInProgress: config.maxInProgress,
   maxReviewRounds: config.maxReviewRounds,
   engine: config.engine,
-  model: model || "UNCONFIGURED",
   authentication: config.authentication,
   maintainers,
   writer: values["writer-login"] || "UNCONFIGURED",
@@ -65,8 +64,8 @@ if (!values.apply) {
   try {
     if (!/^[\w.-]+\/[\w.-]+$/.test(repo || "") || !/^[\w-]+$/.test(projectOwner || ""))
       throw new Error("Provide --repo owner/repo and a valid --project-owner");
-    if (!maintainers.length || !model || !values["writer-login"] || !values["reviewer-login"])
-      throw new Error("Maintainers, model, writer login, and reviewer login are required");
+    if (!maintainers.length || !values["writer-login"] || !values["reviewer-login"])
+      throw new Error("Maintainers, writer login, and reviewer login are required");
     if (
       sameLogin(values["writer-login"], values["reviewer-login"]) ||
       maintainers.some(
@@ -82,10 +81,6 @@ if (!values.apply) {
     const token =
       process.env.GH_TOKEN ||
       (await promisify(execFile)("gh", ["auth", "token"], { encoding: "utf8" })).stdout.trim();
-    if (config.authentication === "app" && !/^[1-9]\d*$/.test(values["release-app-id"] || ""))
-      throw new Error(
-        "App mode requires a dedicated --release-app-id (numeric App ID, not client ID)",
-      );
     const api = new GitHub(token);
     const actionsAppId = await resolveActionsAppId(api);
     const projectApi = new GitHub(process.env.PROJECT_TOKEN || token);
@@ -97,6 +92,37 @@ if (!values.apply) {
     }
     const repository = await api.request(`repos/${repo}`);
     const currentVariables = await api.list(`repos/${repo}/actions/variables`, "variables");
+    const variable = (name) => currentVariables.find((item) => item.name === name)?.value;
+    async function setVariable(name, value) {
+      const existing = currentVariables.find((item) => item.name === name);
+      await api.request(
+        existing ? `repos/${repo}/actions/variables/${name}` : `repos/${repo}/actions/variables`,
+        { method: existing ? "PATCH" : "POST", body: { name, value: String(value) } },
+      );
+      if (existing) existing.value = String(value);
+      else currentVariables.push({ name, value: String(value) });
+    }
+    if (config.controllerRepository && !sameLogin(config.controllerRepository, repo))
+      throw new Error("Configured orchestrator belongs to another repository");
+    const operator = await api.request("user");
+    if (operator.type !== "User" || !actors.some((actor) => sameLogin(actor.login, operator.login)))
+      throw new Error("Bootstrap must authenticate as a configured human operator");
+    if (variable("PROJECT_OWNER")) {
+      if (values["project-owner"] && !sameLogin(values["project-owner"], variable("PROJECT_OWNER")))
+        throw new Error("Project owner conflicts with the recorded Project binding");
+      projectOwner = variable("PROJECT_OWNER");
+    }
+    const recordedNumber = variable("PROJECT_NUMBER");
+    if (recordedNumber && !/^[1-9]\d*$/.test(recordedNumber))
+      throw new Error("Recorded Project number is invalid");
+    if (recordedNumber && values["project-number"] && recordedNumber !== values["project-number"])
+      throw new Error("Project number conflicts with the recorded Project binding");
+    const projectNumber = values["project-number"] || recordedNumber;
+    const recordedId = variable("PROJECT_ID");
+    if (!recordedId && !projectNumber && variable("PROJECT_SETUP_STATUS") === "creating")
+      throw new Error(
+        "Project creation was interrupted. Inspect GitHub and provide the existing --project-number before retrying",
+      );
     if (
       currentVariables.some((item) => item.name === "AUTOMATION_ENABLED" && item.value === "true")
     )
@@ -110,7 +136,8 @@ if (!values.apply) {
     }
     const owner = await api.request(`users/${projectOwner}`);
     let project;
-    if (values["project-number"]) {
+    let newlyCreated = false;
+    if (projectNumber) {
       const result = await projectApi.graphql(
         `query($owner: String!, $number: Int!) {
         repositoryOwner(login: $owner) {
@@ -118,11 +145,19 @@ if (!values.apply) {
           ... on Organization { projectV2(number: $number) { id number url shortDescription } }
         }
       }`,
-        { owner: projectOwner, number: Number(values["project-number"]) },
+        { owner: projectOwner, number: Number(projectNumber) },
       );
       project = result.repositoryOwner?.projectV2;
       if (!project) throw new Error("Existing project is inaccessible");
+    } else if (recordedId) {
+      const result = await projectApi.graphql(
+        `query($id: ID!) { node(id: $id) { ... on ProjectV2 { id number url shortDescription } } }`,
+        { id: recordedId },
+      );
+      project = result.node;
+      if (!project?.id || !project.number) throw new Error("Recorded Project is inaccessible");
     } else {
+      await setVariable("PROJECT_SETUP_STATUS", "creating");
       const result = await projectApi.graphql(
         `mutation($owner: ID!, $title: String!) {
         createProjectV2(input: { ownerId: $owner, title: $title }) { projectV2 { id number url shortDescription } }
@@ -130,19 +165,37 @@ if (!values.apply) {
         { owner: owner.node_id, title: `${repository.name} development` },
       );
       project = result.createProjectV2.projectV2;
+      newlyCreated = true;
       console.log(
         `Created ${project.url}; if setup fails, rerun with --project-number ${project.number}`,
       );
     }
+    if (!project?.id || !Number.isSafeInteger(project.number) || project.number < 1)
+      throw new Error("GitHub returned an invalid Project identity");
+    if (recordedId && project.id !== recordedId)
+      throw new Error("Project identity conflicts with the recorded Project binding");
     const binding = `[agent-controller:${repo}]`;
     const previousBinding = project.shortDescription?.match(/\[agent-controller:([^\]]+)\]/)?.[1];
     if (previousBinding && !sameLogin(previousBinding, repo))
-      throw new Error("Project is already bound to another controller repository");
+      throw new Error("Project is already bound to another orchestrator repository");
+    // Save the returned identity before further configuration; never create a duplicate on retry.
+    await setVariable("PROJECT_ID", project.id);
+    await setVariable("PROJECT_NUMBER", project.number);
+    await setVariable("PROJECT_OWNER", projectOwner);
+    if (newlyCreated) {
+      await setVariable("PROJECT_CREATED_ID", project.id);
+      await setVariable("PROJECT_SETUP_STATUS", "created");
+    }
+    const initializeProject =
+      newlyCreated ||
+      (recordedId === project.id &&
+        variable("PROJECT_CREATED_ID") === project.id &&
+        variable("PROJECT_SETUP_STATUS") === "created");
     const description = previousBinding
       ? project.shortDescription
       : [project.shortDescription, binding].filter(Boolean).join(" ");
     if (description.length > 256)
-      throw new Error("Shorten the project description to make room for its controller binding");
+      throw new Error("Shorten the project description to make room for its orchestrator binding");
     const details = await projectApi.graphql(
       `query($id: ID!) {
       node(id: $id) { ... on ProjectV2 {
@@ -156,13 +209,13 @@ if (!values.apply) {
     if (!status) throw new Error("Project has no Status field");
     const names = Object.values(config.statuses);
     if (
-      values["project-number"] &&
+      !initializeProject &&
       names.some((name) => !status.options.some((option) => option.name === name))
     )
       throw new Error(
         "Configure all five Status options on the existing project before binding it",
       );
-    if (!values["project-number"]) {
+    if (initializeProject) {
       const colors = ["GRAY", "BLUE", "YELLOW", "PURPLE", "GREEN"];
       await projectApi.graphql(
         `mutation($field: ID!, $options: [ProjectV2SingleSelectFieldOptionInput!]!) {
@@ -193,6 +246,7 @@ if (!values.apply) {
       `mutation($project: ID!, $repository: ID!) { linkProjectV2ToRepository(input: { projectId: $project, repositoryId: $repository }) { repository { id } } }`,
       { project: project.id, repository: repository.node_id },
     );
+    await setVariable("PROJECT_SETUP_STATUS", "initialized");
     await api.request(`repos/${repo}`, { method: "PATCH", body: repositorySettings });
     const existingRules = await api.list(`repos/${repo}/rulesets`);
     const statusAppId =
@@ -200,7 +254,7 @@ if (!values.apply) {
       (values["writer-login"].endsWith("[bot]")
         ? (await api.request(`apps/${values["writer-login"].replace(/\[bot\]$/, "")}`)).id
         : null);
-    if (config.authentication === "app") {
+    if (values["release-app-id"]) {
       const reviewerApp = await api.request(
         `apps/${values["reviewer-login"].replace(/\[bot\]$/, "")}`,
       );
@@ -232,48 +286,23 @@ if (!values.apply) {
       if (!labels.some((label) => label.name === name))
         await api.request(`repos/${repo}/labels`, { method: "POST", body: { name, color } });
     }
-    await api.request(`repos/${repo}/environments/release`, {
-      method: "PUT",
-      body: {
-        prevent_self_review: false,
-        reviewers: actors.map((actor) => ({ type: "User", id: actor.id })),
-        deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
-      },
-    });
-    let budgetNumber = currentVariables.find(
-      (item) => item.name === "AUTOMATION_BUDGET_ISSUE",
-    )?.value;
-    let budgetLogin = currentVariables.find(
-      (item) => item.name === "AUTOMATION_BUDGET_LOGIN",
-    )?.value;
-    if (!budgetNumber) {
-      const operator = await api.request("user");
-      if (!actors.some((actor) => sameLogin(actor.login, operator.login)))
-        throw new Error(
-          "Bootstrap must authenticate as a configured human operator to initialize the budget",
-        );
-      const issue = await api.request(`repos/${repo}/issues`, {
-        method: "POST",
+    if (values["release-app-id"]) {
+      await api.request(`repos/${repo}/environments/release`, {
+        method: "PUT",
         body: {
-          title: "Automation budget ledger — do not delete",
-          body: "Internal rolling credit reservations. Do not edit or delete the ledger comment; it is not a development story.",
+          prevent_self_review: false,
+          reviewers: actors.map((actor) => ({ type: "User", id: actor.id })),
+          deployment_branch_policy: { protected_branches: true, custom_branch_policies: false },
         },
       });
-      budgetNumber = String(issue.number);
-      budgetLogin = operator.login;
-      const ledger = new Ledger(api, repo, budgetLogin);
-      const { state } = await ledger.load(issue.number);
-      state.reservations = [];
-      await ledger.save(issue.number);
     }
     const variables = {
-      AUTOMATION_BUDGET_ISSUE: budgetNumber,
-      AUTOMATION_BUDGET_LOGIN: budgetLogin,
       ...(values["release-app-id"] ? { RELEASE_APP_ID: values["release-app-id"] } : {}),
       PROJECT_ID: project.id,
+      PROJECT_NUMBER: String(project.number),
+      PROJECT_OWNER: projectOwner,
       AUTOMATION_LOGIN: values["writer-login"],
       REVIEW_LOGIN: values["reviewer-login"],
-      AGENT_MODEL: model,
       AUTOMATION_ENABLED: "false",
     };
     for (const [name, value] of Object.entries(variables))
@@ -289,9 +318,13 @@ if (!values.apply) {
     config.controllerRepository = repo;
     config.humanOperators = actors.map((actor) => actor.login);
     await writeFile("workflow.config.json", `${JSON.stringify(config, null, 2)}\n`);
+    const originalOwners = await readFile(".github/CODEOWNERS", "utf8").catch((error) => {
+      if (error.code === "ENOENT") return "# Human ownership is required for every change.\n";
+      throw error;
+    });
     await writeFile(
       ".github/CODEOWNERS",
-      `# Human ownership is required for every change.\n* ${actors.map((actor) => `@${actor.login}`).join(" ")}\n`,
+      preserveCodeowners(originalOwners, config.humanOperators),
     );
     console.log(
       `Configured ${project.url}. Automation remains disabled. Commit the local configuration, install credentials, and follow docs/setup.md before enabling.`,
