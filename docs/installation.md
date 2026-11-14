@@ -13,7 +13,7 @@ gh auth login
 gh auth setup-git
 ```
 
-The target GitHub plan must support the required branch rules and human code-owner review (especially for private repositories). The applying user needs repository administration, access to create/install Apps under the repository owner's account, and permission to create or manage the Project. For a personal Project, authorize the GitHub CLI's Project scope with `gh auth refresh -s project`. Organization policy may require an owner to approve App registration or installation. Those GitHub approvals cannot be bypassed by the starter.
+GitHub rulesets provide optional server-side enforcement of the delivery policy. Private repositories on GitHub Free cannot use rulesets, including through the manual settings UI. Setup can continue after an explicit acknowledgement that those rules are unenforced; agents must still leave PR approval and merge to humans. The applying user needs repository administration, access to create/install Apps under the repository owner's account, and permission to create or manage the Project. For a personal Project, authorize the GitHub CLI's Project scope with `gh auth refresh -s project`. Organization policy may require an owner to approve App registration or installation. Those GitHub approvals cannot be bypassed by the starter.
 
 ## New repository
 
@@ -87,7 +87,7 @@ For an owner handoff, attach the output of `npm run setup -- --plan --repo UPSTR
    npm run setup -- --activate
    ```
 
-   Substitute the actual default branch. Activation checks the committed configuration, CI head, Project binding, both host-side App credentials, and human ownership before enabling rules and this host.
+   Substitute the actual default branch. Activation checks the committed configuration, CI head, Project binding, both host-side App credentials, and human ownership before enabling this host. It attempts to activate delivery rules; if that fails, the same guided fallback applies.
 
 5. **Start the orchestrator.**
 
@@ -96,6 +96,32 @@ For an owner handoff, attach the output of `npm run setup -- --plan --repo UPSTR
    ```
 
    This launches your chosen official CLI with the orchestrator skill. It manages local specialist sessions/worktrees and publishes branches/PRs to GitHub. Follow [operations](operations.md) for the first issue, triage, claims, review, and recovery. It runs while the harness session is active; it is not a GitHub daemon or an unlimited unattended service.
+
+## Ruleset configuration fallback
+
+If GitHub rejects a ruleset operation or the rulesets are unavailable, setup prints the repository settings URL and complete JSON configurations for the delivery, human merge authority, and release-tag rules. It explains the failure and waits for your choice:
+
+- Configure the rules manually where supported, then enter `completed` to have setup verify them and continue.
+- Enter `continue` to acknowledge that GitHub rules are unenforced and continue setup. Agent instructions still require human PR approval and merge; agents never merge or release.
+- Enter `pause` to stop and return later. Keep the existing Apps, Project, and setup state.
+
+On GitHub Free private repositories, manual configuration cannot enable the unavailable feature. You can explicitly continue without enforcement, or enable rulesets through a supported GitHub plan or a deliberate visibility change. Setup never changes your subscription or repository visibility.
+
+For a noninteractive run, read the printed configuration and explicitly acknowledge unenforced rules with:
+
+```sh
+npm run setup -- --acknowledge-unenforced-rules
+```
+
+Repeat your original target, harness, and Project flags as needed. `--yes` accepts the ordinary setup plan only; it does not acknowledge unenforced rules. A ruleset pause restores setup's own preliminary configuration edit when it is unchanged, allowing you to rerun from a clean checkout. If other partial tracked changes remain, review and commit them before rerunning. Recorded Apps and Project bindings are reused. An interrupted process releases its local lock on normal exit; inspect any stale lock before removing it.
+
+Activation needs its own acknowledgement if GitHub still cannot enforce the rules:
+
+```sh
+npm run setup -- --activate --acknowledge-unenforced-rules
+```
+
+Each invocation attempts automatic ruleset configuration again. The repository variable `RULESET_ENFORCEMENT` records `pending`, `staged`, `active`, or `unenforced`; acknowledgement never claims that rules are active. Other setup failures, including invalid credentials, Project permissions, CI, or configuration, still require correction.
 
 ## Upgrade an existing GRAIT installation
 
