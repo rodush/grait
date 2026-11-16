@@ -28,7 +28,7 @@ Record application-specific install, build, lint, test, and local-run commands w
 
 ## Open and finish a PR
 
-Use a Conventional Commit PR title, such as `feat(api): add health endpoint` or `fix(parser): reject empty input`. Link the issue using `Closes #123`. Explain behavior, validation, risks, and any migration; attach screenshots for visual changes.
+Use a Conventional Commit PR title, such as `feat(api): add health endpoint` or `fix(parser): reject empty input`. Link the issue using `Closes #123`. Explain behavior, validation, risks, and any migration; attach screenshots for visual changes. Deliver the complete accepted scope with required validation and documentation as a normal ready-for-review PR. Use drafts only for explicitly user-requested work in progress or early feedback, and finish/promote them before final handoff.
 
 The separate local reviewer publishes findings and its formal decision in the PR. Follow-up fixes stay in Review. A substantial approach change returns the issue to In Progress through the orchestrator and consumes a slot. If none is available, work pauses in Review until capacity is available.
 
