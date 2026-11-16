@@ -61,6 +61,40 @@ async function publishConfiguration(repo, repository, store) {
   console.log(`Configuration PR: ${pr.html_url}`);
 }
 
+async function requireRegularConfig() {
+  const info = await lstat("workflow.config.json");
+  if (!info.isFile() || info.isSymbolicLink())
+    throw new Error("workflow.config.json must be a regular file, not a symbolic link");
+}
+
+async function requireSetupWorkspace() {
+  const { stdout } = await command("git", [
+    "status",
+    "--porcelain=v1",
+    "-z",
+    "--untracked-files=all",
+  ]);
+  // NUL-delimited porcelain preserves spaces, newlines, and the first status column.
+  // Reject rename/copy records immediately, including their second pathname record.
+  for (const record of stdout.split("\0")) {
+    if (!record) continue;
+    const status = record.slice(0, 2);
+    if (
+      record[2] !== " " ||
+      record.slice(3) !== "workflow.config.json" ||
+      !/^[ M]{2}$/.test(status) ||
+      !status.includes("M")
+    )
+      throw new Error(
+        "Only tracked workflow.config.json edits may be included in setup. Commit or preserve all other changes first; the wizard prepares a focused configuration commit",
+      );
+  }
+  const index = await command("git", ["ls-files", "--stage", "-z", "--", "workflow.config.json"]);
+  if (!/^100(?:644|755) [a-f0-9]+ 0\tworkflow\.config\.json\0$/.test(index.stdout))
+    throw new Error("Setup requires a tracked regular workflow.config.json file without conflicts");
+  await requireRegularConfig();
+}
+
 async function main() {
   const { values } = parseArgs({
     options: {
@@ -86,6 +120,7 @@ async function main() {
     );
     return;
   }
+  await requireRegularConfig();
   const originalConfigText = await readFile("workflow.config.json", "utf8");
   const config = JSON.parse(originalConfigText);
   const repo =
@@ -158,11 +193,7 @@ async function main() {
     }
     return;
   }
-  const dirty = (await command("git", ["status", "--porcelain"])).stdout.trim();
-  if (dirty)
-    throw new Error(
-      "Commit or preserve existing changes before setup; the wizard prepares a focused configuration commit",
-    );
+  await requireSetupWorkspace();
   const initialBranch = (await command("git", ["branch", "--show-current"])).stdout.trim();
   const initialHead = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
   if (!initialBranch)
