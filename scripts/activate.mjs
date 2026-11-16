@@ -1,15 +1,19 @@
 import { readFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { parseArgs, promisify } from "node:util";
 import { GitHub } from "./lib/github.mjs";
 import { SetupState } from "./lib/setup-state.mjs";
 import { roleToken } from "./lib/local-auth.mjs";
 import { Project } from "./lib/project.mjs";
 import { digest, sameLogin, validateConfig } from "./lib/policy.mjs";
 import { repositoryRules, resolveActionsAppId } from "./lib/bootstrap.mjs";
+import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
 
 let store;
 try {
+  const { values } = parseArgs({
+    options: { "acknowledge-unenforced-rules": { type: "boolean" } },
+  });
   const localText = await readFile("workflow.config.json", "utf8");
   const config = validateConfig(JSON.parse(localText));
   if (!config.controllerRepository || !config.humanOperators.length)
@@ -107,17 +111,29 @@ try {
   const appId = writer.endsWith("[bot]")
     ? (await api.request(`apps/${writer.replace(/\[bot\]$/, "")}`)).id
     : null;
-  const rules = await api.list(`repos/${repo}/rulesets`);
-  for (const expected of repositoryRules(
-    actors,
-    appId,
-    variables.get("RELEASE_APP_ID"),
-    actionsAppId,
-  )) {
-    const rule = rules.find((item) => item.name === expected.name && sameLogin(item.source, repo));
-    if (!rule) throw new Error(`Missing staged ruleset ${expected.name}`);
-    await api.request(`repos/${repo}/rulesets/${rule.id}`, { method: "PUT", body: expected });
+  async function recordEnforcement(value) {
+    await api.request(
+      variables.has("RULESET_ENFORCEMENT")
+        ? `repos/${repo}/actions/variables/RULESET_ENFORCEMENT`
+        : `repos/${repo}/actions/variables`,
+      {
+        method: variables.has("RULESET_ENFORCEMENT") ? "PATCH" : "POST",
+        body: { name: "RULESET_ENFORCEMENT", value },
+      },
+    );
+    variables.set("RULESET_ENFORCEMENT", value);
+    store.state.rulesetEnforcement = value;
+    await store.save();
   }
+  await recordEnforcement("pending");
+  const { enforcement } = await configureRepositoryRules({
+    api,
+    repo,
+    rules: repositoryRules(actors, appId, variables.get("RELEASE_APP_ID"), actionsAppId),
+    phase: "activate",
+    acknowledgeUnenforced: Boolean(values["acknowledge-unenforced-rules"]),
+  });
+  await recordEnforcement(enforcement);
   await api.request(`repos/${repo}/actions/variables/AUTOMATION_ENABLED`, {
     method: "PATCH",
     body: { name: "AUTOMATION_ENABLED", value: "true" },
@@ -125,14 +141,16 @@ try {
   store.state.enabled = true;
   await store.save();
   console.log(
-    "Delivery rules are active. Start the subscription-backed local orchestrator with npm run orchestrator -- start.",
+    enforcement === "active"
+      ? "Delivery rules are active. Start the subscription-backed local orchestrator with npm run orchestrator -- start."
+      : "Host activated with unenforced rules. Human approval and human merge remain required. Start the local orchestrator with npm run orchestrator -- start.",
   );
 } catch (error) {
   console.error(error.message);
   console.error(
     "Activation did not complete. Inspect rulesets and AUTOMATION_ENABLED before retrying.",
   );
-  process.exitCode = 1;
+  process.exitCode = error.code === "RULESET_SETUP_PENDING" ? 2 : 1;
 } finally {
   await store?.release();
 }

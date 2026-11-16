@@ -1,6 +1,6 @@
 # Setup reference
 
-For step-by-step adoption, start with [installation and configuration](installation.md). This page describes maintained configuration and commands.
+For step-by-step adoption, start with [installation and configuration](installation.md). This page describes maintained configuration and commands. Setup accepts staged or unstaged edits to the tracked `workflow.config.json` as configuration input and includes that file in its final configuration PR. Other local changes must be preserved separately before setup; a config-only edit needs no preliminary commit.
 
 ## Repository tooling runtime
 
@@ -59,6 +59,6 @@ The guided setup supplies these details automatically. For a deliberate manual i
 npm run bootstrap -- --repo OWNER/REPOSITORY --maintainers alice --writer-login 'writer-app[bot]' --reviewer-login 'review-app[bot]'
 ```
 
-Add `--apply` to mutate the repository. Use `--project-owner` and `--project-number` to select an existing Project. Bootstrap preserves existing CODEOWNERS rules and validates an existing Project's statuses rather than resetting them. It records new Project identity before later configuration can fail. Repository rules are staged until activation, except immutable release-tag protections. A release environment is configured only when an optional release App ID is supplied. No credit ledger or provider secrets are created. The `controllerRepository` key remains for compatibility with existing Project bindings.
+Add `--apply` to mutate the repository. Use `--project-owner` and `--project-number` to select an existing Project. Bootstrap preserves existing CODEOWNERS rules and validates an existing Project's statuses rather than resetting them. It records new Project identity before later configuration can fail. Repository rules are staged until activation, except immutable release-tag protections. Ruleset errors open the [guided fallback](installation.md#ruleset-configuration-fallback): complete manual configuration or explicitly acknowledge unenforced operation. Setup, bootstrap, and activation accept `--acknowledge-unenforced-rules` for that acknowledgement; the overall setup `--yes` does not imply it. The repository variable `RULESET_ENFORCEMENT` records the outcome. Agents still require human PR approval and merge. A release environment is configured only when an optional release App ID is supplied. No credit ledger or provider secrets are created. The `controllerRepository` key remains for compatibility with existing Project bindings.
 
 Advanced commands do not replace the host-side credentials and native login that guided setup configures. Follow [activation](installation.md#guided-configuration) before starting the orchestrator.

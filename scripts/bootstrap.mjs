@@ -9,6 +9,7 @@ import {
   preserveCodeowners,
 } from "./lib/bootstrap.mjs";
 import { sameLogin } from "./lib/policy.mjs";
+import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
 
 const { values } = parseArgs({
   options: {
@@ -21,6 +22,7 @@ const { values } = parseArgs({
     "release-app-id": { type: "string" },
     "status-app-id": { type: "string" },
     apply: { type: "boolean", default: false },
+    "acknowledge-unenforced-rules": { type: "boolean" },
   },
 });
 const config = JSON.parse(await readFile("workflow.config.json", "utf8"));
@@ -53,6 +55,7 @@ const plan = {
   releaseEnvironment:
     "Selected human maintainers approve releases; the requesting human may approve",
   automationEnabled: false,
+  acknowledgeUnenforcedRules: Boolean(values["acknowledge-unenforced-rules"]),
 };
 
 if (!values.apply) {
@@ -248,7 +251,6 @@ if (!values.apply) {
     );
     await setVariable("PROJECT_SETUP_STATUS", "initialized");
     await api.request(`repos/${repo}`, { method: "PATCH", body: repositorySettings });
-    const existingRules = await api.list(`repos/${repo}/rulesets`);
     const statusAppId =
       values["status-app-id"] ||
       (values["writer-login"].endsWith("[bot]")
@@ -261,21 +263,15 @@ if (!values.apply) {
       if ([Number(statusAppId), reviewerApp.id].includes(Number(values["release-app-id"])))
         throw new Error("Release App must be separate from implementation and review Apps");
     }
-    for (const rule of repositoryRules(
-      actors,
-      statusAppId,
-      values["release-app-id"],
-      actionsAppId,
-    )) {
-      const existing = existingRules.find(
-        (item) => item.name === rule.name && sameLogin(item.source, repo),
-      );
-      rule.enforcement = rule.target === "tag" ? "active" : existing?.enforcement || "disabled";
-      await api.request(
-        existing ? `repos/${repo}/rulesets/${existing.id}` : `repos/${repo}/rulesets`,
-        { method: existing ? "PUT" : "POST", body: rule },
-      );
-    }
+    await setVariable("RULESET_ENFORCEMENT", "pending");
+    const { enforcement } = await configureRepositoryRules({
+      api,
+      repo,
+      rules: repositoryRules(actors, statusAppId, values["release-app-id"], actionsAppId),
+      phase: "stage",
+      acknowledgeUnenforced: Boolean(values["acknowledge-unenforced-rules"]),
+    });
+    await setVariable("RULESET_ENFORCEMENT", enforcement);
     for (const [name, color] of [
       [config.labels.automated, "0E8A16"],
       [config.labels.admitted, "1D76DB"],
@@ -334,6 +330,6 @@ if (!values.apply) {
     console.error(
       "Setup can be partially applied. Inspect the repository and project before rerunning; automation has not been enabled.",
     );
-    process.exitCode = 1;
+    process.exitCode = error.code === "RULESET_SETUP_PENDING" ? 2 : 1;
   }
 }
