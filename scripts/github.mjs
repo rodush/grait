@@ -11,6 +11,7 @@ async function main() {
     allowPositionals: true,
     options: {
       help: { type: "boolean" },
+      draft: { type: "boolean" },
       issue: { type: "string" },
       title: { type: "string" },
       "body-file": { type: "string" },
@@ -19,7 +20,7 @@ async function main() {
   const task = positionals[0];
   if (values.help) {
     console.log(
-      "Publish through the local writer App:\n  npm run github -- push --issue N\n  npm run github -- pr --issue N --title 'feat: ...' --body-file PATH\nReviews use npm run orchestrator -- review. Merge and release are human-only.",
+      "Publish through the local writer App:\n  npm run github -- push --issue N\n  npm run github -- pr --issue N --title 'feat: ...' --body-file PATH [--draft]\nPRs are normal by default and require independent Green for the exact head or an accepted triage TDD exemption. Use --draft only when the user explicitly requests work in progress or early feedback.\nReviews use npm run orchestrator -- review. Merge and release are human-only.",
     );
     return;
   }
@@ -79,6 +80,14 @@ async function main() {
       const remote = await context.api.request(`repos/${context.repo}/git/ref/heads/${branch}`);
       if (remote.object?.sha !== head)
         throw new Error("Push this exact commit before opening its PR");
+      if (!values.draft) {
+        const { state } = await orchestrator.ledger.load(Number(values.issue));
+        if (
+          state.triage?.tdd?.required !== false &&
+          (state.tdd?.phase !== "review" || state.tdd.head !== head)
+        )
+          throw new Error("Independent Green evidence for this exact PR head is required");
+      }
       const pr = await context.api.request(`repos/${context.repo}/pulls`, {
         method: "POST",
         body: {
@@ -86,7 +95,7 @@ async function main() {
           body: `${body}\n\nCloses #${values.issue}`,
           head: branch,
           base: repository.default_branch,
-          draft: true,
+          draft: Boolean(values.draft),
         },
       });
       console.log(pr.html_url);

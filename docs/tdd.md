@@ -36,7 +36,7 @@ The implementer verifies that accepted SHA and changes production only. It recei
 npm run orchestrator -- verify --issue 123 --phase green
 ```
 
-Green reruns the accepted Red baseline and the complete candidate suite. It must execute and pass all accepted tests with no infrastructure errors, and the diff must stay in implementer paths. The ledger moves to review ownership only after validation succeeds. Push the exact commit and use `npm run orchestrator -- ready-pr --pr N` to mark the draft ready; a different head needs fresh evidence.
+Green reruns the accepted Red baseline and the complete candidate suite. It must execute and pass all accepted tests with no infrastructure errors, and the diff must stay in implementer paths. The ledger moves to review ownership only after validation succeeds. Push the exact commit and publish a normal ready-for-review PR after completing the accepted scope and documentation, then synchronize it with `npm run orchestrator -- sync --pr N`. Drafts are only for explicitly user-requested work in progress or early feedback; use `npm run orchestrator -- ready-pr --pr N` after finishing such a draft. A different head needs fresh evidence.
 
 ## Test corrections
 

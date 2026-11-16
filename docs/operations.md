@@ -61,13 +61,13 @@ npm run github -- push --issue 123
 npm run github -- pr --issue 123 --title 'feat: implement accepted behavior' --body-file /tmp/pr-body.md
 ```
 
-The PR starts as a draft with `Closes #123`. Include actual validation evidence and risks in its body. After the exact PR head has accepted Green (or a reasoned triage exemption):
+Complete the accepted scope, validation, and relevant documentation before publishing. The publisher opens a normal ready-for-review PR with `Closes #123` and requires accepted independent Green for that exact head (or a reasoned triage exemption). Include actual validation evidence and risks in its body, then synchronize the Project:
 
 ```sh
-npm run orchestrator -- ready-pr --pr 456
+npm run orchestrator -- sync --pr 456
 ```
 
-This marks it ready and synchronizes the Project. Publishing is limited to the claimed issue branch and configured writable paths; no force-push, merge, or release command is supplied to agents.
+Use `--draft` on the PR publishing command only when the user explicitly requests work in progress or early feedback. Drafts are not the normal delivery state and do not imply completed work. After finishing such a draft and obtaining exact-head Green or the accepted exemption, use `npm run orchestrator -- ready-pr --pr 456` to mark it ready and synchronize the Project. Ready for review starts review; independent review and human approval/merge are still required. Publishing is limited to the claimed issue branch and configured writable paths; no force-push, merge, or release command is supplied to agents.
 
 ## Review publication
 

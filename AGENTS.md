@@ -22,7 +22,7 @@ Follow `docs/coding-guidelines.md`, `.editorconfig`, and the chosen language's f
 
 ## Commit, Review & Pull Request Guidelines
 
-Use Conventional Commits and issue-linked PRs. PR descriptions explain behavior, validation, risks, and visual evidence where relevant. Reviews run in the user's harness and publish inline comments and formal decisions through the separate GitHub reviewer identity; follow `docs/review-guidelines.md`. Follow-up fixes stay in Review; redesign returns to In Progress after capacity is acquired. Stop automatic loops on oscillation, conflicting instructions, repeated blockers, or ten rounds. Humans approve and squash merge; agents never merge or release.
+Use Conventional Commits and issue-linked PRs. Agents deliver the complete accepted scope, required validation, and relevant documentation before handing off a normal ready-for-review PR. Drafts are reserved for explicit user requests for work in progress or early feedback; do not use draft status as the default or as a substitute for finishing the task. Ready for review does not mean approved or merged. PR descriptions explain behavior, validation, risks, and visual evidence where relevant. Reviews run in the user's harness and publish inline comments and formal decisions through the separate GitHub reviewer identity; follow `docs/review-guidelines.md`. Follow-up fixes stay in Review; redesign returns to In Progress after capacity is acquired. Stop automatic loops on oscillation, conflicting instructions, repeated blockers, or ten rounds. Humans approve and squash merge; agents never merge or release.
 
 ## Security & Configuration
 
