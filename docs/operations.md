@@ -9,7 +9,7 @@ npm run orchestrator -- start
 npm run orchestrator -- status
 ```
 
-The default is two concurrent workers. Native harness sessions are not an unlimited background service: subscription limits, permission prompts, or human/CI waits may stop progress. Save committed handoffs and continue from the recorded state rather than starting duplicate work. There is no automatic API-billing fallback.
+The default is five concurrent workers; [configure worker concurrency](setup.md#configure-worker-concurrency) with `maxConcurrentWorkers` in `workflow.config.json`. Native harness sessions are not an unlimited background service: subscription limits, permission prompts, or human/CI waits may stop progress. Save committed handoffs and continue from the recorded state rather than starting duplicate work. There is no automatic API-billing fallback.
 
 ## Triage and claim
 

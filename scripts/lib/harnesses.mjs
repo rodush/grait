@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { stringify as stringifyToml } from "smol-toml";
+import { validateConfig } from "./policy.mjs";
 
 const roles = ["orchestrator", "triage", "test", "implement", "review", "fix"];
 const skillRoots = [".agents/skills", ".claude/skills", ".github/skills"];
@@ -49,13 +50,27 @@ export function readSkill(text, expectedName) {
   return { metadata, body: match[2].trimStart() };
 }
 
+export function renderCodexConfig(template, config) {
+  const setting = /^max_concurrent_threads_per_session = \d+$/m;
+  if (!setting.test(template)) throw new Error("Codex template must define its worker limit");
+  return template.replace(
+    setting,
+    `max_concurrent_threads_per_session = ${config.maxConcurrentWorkers}`,
+  );
+}
+
 export async function generateHarnessFiles(root) {
   const definitions = validateAgentDefinitions(
     JSON.parse(await readFile(join(root, "automation/agents.json"), "utf8")),
   );
-  const config = JSON.parse(await readFile(join(root, "workflow.config.json"), "utf8"));
+  const config = validateConfig(
+    JSON.parse(await readFile(join(root, "workflow.config.json"), "utf8")),
+  );
   const files = new Map();
-  files.set(".codex/config.toml", await readFile(join(root, "config/codex.toml"), "utf8"));
+  files.set(
+    ".codex/config.toml",
+    renderCodexConfig(await readFile(join(root, "config/codex.toml"), "utf8"), config),
+  );
   files.set(
     ".github/copilot-instructions.md",
     "# Shared repository instructions\n\nRead `AGENTS.md`, `docs/coding-guidelines.md`, and `docs/workflow.md` before working. The shared skill and role catalog is in `docs/agents.md`; native adapters are generated from `automation/skills/` and `automation/agents.json`. All agents run in this user-owned harness.\n\nFor PR review, also read `docs/review-guidelines.md`. Evaluate the exact PR head locally without executing untrusted code in the credentialed session; publish findings and formal decisions through the separate GitHub reviewer identity. Humans merge and release.\n",

@@ -155,7 +155,7 @@ async function main() {
         : ["signed-in GitHub user"],
     project: values["project-number"] || "reuse recorded Project or create one",
     projectOwner: values["project-owner"] || repo.split("/")[0],
-    maxConcurrentWorkers: config.maxConcurrentWorkers || 2,
+    maxConcurrentWorkers: config.maxConcurrentWorkers || 5,
     providerApiKeys: false,
     activate: Boolean(values.activate),
     acknowledgeUnenforcedRules: Boolean(values["acknowledge-unenforced-rules"]),
@@ -308,7 +308,7 @@ async function main() {
     config.schemaVersion = 2;
     config.execution = "local";
     config.supportedEngines = ["codex", "claude", "copilot"];
-    config.maxConcurrentWorkers ||= 2;
+    config.maxConcurrentWorkers ||= 5;
     config.orchestrator ||= { reasoning: "medium" };
     for (const key of ["ghAwVersion", "ghAwActionsSha", "engineVersions", "budget"])
       delete config[key];

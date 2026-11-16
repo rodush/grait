@@ -17,7 +17,7 @@ Run commands from the tooling package directory, which is the repository root in
 | `npm run lint:md`          | Check Markdown                                                               |
 | `npm run harness:generate` | Regenerate native adapters after canonical source changes                    |
 
-Edit canonical sources first. Regenerate adapters after changing `automation/skills/`, `automation/agents.json`, or role profiles; edit `config/codex.toml` rather than its installed `.codex/config.toml` copy. Run the relevant checks above and report the commands actually run and any missing validation. Follow [the coding guidelines](coding-guidelines.md) for testing expectations.
+Edit canonical sources first. Regenerate adapters after changing `automation/skills/`, `automation/agents.json`, or role profiles; edit `config/codex.toml` rather than its installed `.codex/config.toml` copy. Configure worker capacity through `maxConcurrentWorkers` in `workflow.config.json`; generation applies that value to the installed Codex agent limit. Run the relevant checks above and report the commands actually run and any missing validation. Follow [the coding guidelines](coding-guidelines.md) for testing expectations.
 
 ## Git distribution policy (Milestone 1)
 

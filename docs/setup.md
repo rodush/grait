@@ -32,7 +32,20 @@ Copilot uses local CLI sub-agents; its `/delegate` cloud-agent flow is outside t
 
 ## Harness and model configuration
 
-`workflow.config.json` selects `engine: "codex"`, `"claude"`, or `"copilot"` and `execution: "local"`. Its six roles all run on the host. The main session is the orchestrator. `maxConcurrentWorkers` defaults to two, independently of the five-story Project cap. The orchestrator skill applies the worker cap; the Codex project config also caps spawned threads. The provider's native limits still apply.
+`workflow.config.json` selects `engine: "codex"`, `"claude"`, or `"copilot"` and `execution: "local"`. Its six roles all run on the host. The main session is the orchestrator. `maxConcurrentWorkers` defaults to five, independently of the five-story Project cap. The orchestrator skill applies the worker cap; the generated Codex project config uses the same value to cap spawned threads. The provider's native limits still apply.
+
+### Configure worker concurrency
+
+Set `maxConcurrentWorkers` in `workflow.config.json` to an integer from **1 to 5**; the default is **5**. For example, use `"maxConcurrentWorkers": 3` to run at most three specialists at once. Then run:
+
+```sh
+npm run harness:generate
+npm run check
+```
+
+Generation applies the value to `agents.max_concurrent_threads_per_session` in `.codex/config.toml`. Change `workflow.config.json` rather than editing that generated setting. Copilot worker launches also receive the configured value; all harnesses follow the orchestrator's worker cap, subject to their native limits. Start a new harness session to use the updated configuration.
+
+Slots are shared across triage, testing, implementation, fixes, and review. Five slots allow active work on up to five independent stories when available. Each story's tester and implementer still take sequential exclusive ownership of its branch and worktree. The project-wide ceiling remains five In Progress stories, and existing Review work still blocks new claims.
 
 The default orchestrator uses medium reasoning. The reviewer uses high reasoning. `config/codex.toml` is the canonical Codex project config; its installed `.codex/config.toml` copy is generated. Tester/implementer model and reasoning overrides remain under `tdd.profiles`; `null` inherits the selected harness model/settings. Overrides are emitted only for the matching provider, so a Codex model name does not leak into Claude agents. Select models available on your account. Role settings grant no extra permissions. Copilot uses its native `--effort` setting and custom-agent `reasoningEffort`; worker profiles must name Copilot-served models rather than provider-qualified BYOK models. The default launcher explicitly selects Copilot Auto and strips provider override variables instead of passing an LLM API key. When a Copilot parent uses Auto, native sub-agents inherit the resolved parent model regardless of their authored model preference; use an explicit `npm run orchestrator -- worker --issue N --role implement` session when a role profile must select a particular model. That session passes the profile through the native `--model` option.
 

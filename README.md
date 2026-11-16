@@ -57,7 +57,7 @@ Choose Claude with `npm run setup -- --harness claude` or Copilot with `npm run 
 
 ## Subscription and execution
 
-Use the official harness with your own eligible subscription. Native sub-agents share its usage allowance; the default is two concurrent workers. GRAIT does not request provider API keys, run AI agents in GitHub Actions, or supply a separate LLM service. Model inference still uses the provider's servers. See [subscription setup](docs/setup.md#subscription-authentication).
+Use the official harness with your own eligible subscription. Native sub-agents share its usage allowance; the default is five concurrent workers. GRAIT does not request provider API keys, run AI agents in GitHub Actions, or supply a separate LLM service. Model inference still uses the provider's servers. See [subscription setup](docs/setup.md#subscription-authentication).
 
 GitHub Apps identify **who publishes**, independently of where agents execute. One writer App pushes branches and opens PRs; one reviewer App publishes reviews. Tester and implementer do not need separate GitHub accounts. Neither App receives permission to bypass configured human merge gates. GitHub rulesets are optional server-side enforcement; when unavailable, setup offers an [explicit acknowledgement to continue without enforcement](docs/installation.md#ruleset-configuration-fallback). Agents must still leave PR approval and merge to humans.
 

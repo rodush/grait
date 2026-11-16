@@ -3,6 +3,7 @@ import { resolve, dirname, join } from "node:path";
 import { parse } from "yaml";
 import { parse as parseToml } from "smol-toml";
 import { conventionalTitle, validateConfig } from "./lib/policy.mjs";
+import { renderCodexConfig } from "./lib/harnesses.mjs";
 
 const failures = [];
 const assert = (condition, message) => {
@@ -20,7 +21,10 @@ const installedCodex = await readFile(".codex/config.toml", "utf8").catch((error
   throw error;
 });
 if (installedCodex !== null)
-  assert(installedCodex === codexText, "Installed .codex/config.toml must match config/codex.toml");
+  assert(
+    installedCodex === renderCodexConfig(codexText, config),
+    "Installed .codex/config.toml must match the Codex template and configured worker limit",
+  );
 assert(typeof codex.model === "string" && !!codex.model, "Codex needs an explicit model");
 assert(
   codex.model_reasoning_effort === config.orchestrator.reasoning,
