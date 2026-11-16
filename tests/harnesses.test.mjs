@@ -151,3 +151,26 @@ test("role model profiles apply only to the selected native harness", async (t) 
     }
   }
 });
+
+test("configured worker capacity drives Codex generation without changing other settings", async (t) => {
+  const temporary = await mkdtemp(join(tmpdir(), "grait-worker-cap-test-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  await cp(join(root, "automation"), join(temporary, "automation"), { recursive: true });
+  await cp(join(root, "config"), join(temporary, "config"), { recursive: true });
+  const config = JSON.parse(await readFile(join(root, "workflow.config.json"), "utf8"));
+  const template = parseToml(await readFile(join(root, "config/codex.toml"), "utf8"));
+  for (const workers of [1, 3, 5]) {
+    config.maxConcurrentWorkers = workers;
+    await writeFile(join(temporary, "workflow.config.json"), JSON.stringify(config));
+    const files = await generateHarnessFiles(temporary);
+    const generated = parseToml(files.get(".codex/config.toml"));
+    assert.equal(generated.agents.max_concurrent_threads_per_session, workers);
+    template.agents.max_concurrent_threads_per_session = workers;
+    assert.deepEqual(generated, template);
+  }
+  for (const workers of [0, -1, 1.5, 6, "3", null]) {
+    config.maxConcurrentWorkers = workers;
+    await writeFile(join(temporary, "workflow.config.json"), JSON.stringify(config));
+    await assert.rejects(generateHarnessFiles(temporary), /one to five concurrent local workers/);
+  }
+});

@@ -68,7 +68,7 @@
     }
   },
   "execution": "local",
-  "maxConcurrentWorkers": 2,
+  "maxConcurrentWorkers": 5,
   "orchestrator": {
     "reasoning": "medium"
   }
