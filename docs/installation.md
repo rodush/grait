@@ -55,7 +55,7 @@ For an owner handoff, attach the output of `npm run setup -- --plan --repo UPSTR
 
 ## Guided configuration
 
-1. **Preview the target and defaults.** From a clean checkout:
+1. **Preview the target and defaults.** You may edit `workflow.config.json` before setup; setup treats those edits as configuration input and includes the resulting file in its final configuration PR. Keep other files clean. You do not need to commit that config file separately:
 
    ```sh
    npm run setup -- --plan
@@ -113,7 +113,7 @@ For a noninteractive run, read the printed configuration and explicitly acknowle
 npm run setup -- --yes --acknowledge-unenforced-rules
 ```
 
-Repeat your original target, harness, and Project flags as needed. `--yes` accepts the ordinary setup plan only; it does not acknowledge unenforced rules. A ruleset pause restores setup's own preliminary configuration edit when it is unchanged, allowing you to rerun from a clean checkout. If other partial tracked changes remain, review and commit them before rerunning. Recorded Apps and Project bindings are reused. An interrupted process releases its local lock on normal exit; inspect any stale lock before removing it.
+Repeat your original target, harness, and Project flags as needed. `--yes` accepts the ordinary setup plan only; it does not acknowledge unenforced rules. A ruleset pause restores setup's own preliminary configuration edit when it is unchanged, allowing you to rerun while preserving your original configuration input. Existing edits to `workflow.config.json` are accepted on retry without a separate commit. If other partial tracked changes remain, review and commit them before rerunning. Recorded Apps and Project bindings are reused. An interrupted process releases its local lock on normal exit; inspect any stale lock before removing it.
 
 Activation needs its own acknowledgement if GitHub still cannot enforce the rules:
 
@@ -143,7 +143,7 @@ Each invocation attempts automatic ruleset configuration again. The repository v
 
 ## Resume, remote hosts, and credentials
 
-Rerun setup after a pre-commit interruption from the same host and checkout once any partial tracked changes have been reviewed and committed. Saved App registrations and the recorded Project are reused. An uncertain manifest conversion or Project creation fails closed; recover the existing object before retrying. A stale lock requires stopping its process and inspecting/removing the lock manually; never delete a live lock to start a second instance.
+Rerun setup after a pre-commit interruption from the same host and checkout. Edits to `workflow.config.json` are accepted as setup input without a separate commit; review and commit any other partial tracked changes before retrying. Saved App registrations and the recorded Project are reused. An uncertain manifest conversion or Project creation fails closed; recover the existing object before retrying. A stale lock requires stopping its process and inspecting/removing the lock manually; never delete a live lock to start a second instance.
 
 App credentials and local activation state live in `<git-common-dir>/grait-setup/session.json`; this is outside tracked files and shared by linked worktrees. Back it up securely. On a second host, authenticate GitHub and the native harness there, securely transfer the private setup directory with mode 700 for the directory and 600 for files (excluding any lock), and activate that host. Alternatively import keys as above while automation is paused. Do not commit or attach this directory to a PR.
 

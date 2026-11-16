@@ -1,6 +1,6 @@
 # Setup reference
 
-For step-by-step adoption, start with [installation and configuration](installation.md). This page describes maintained configuration and commands.
+For step-by-step adoption, start with [installation and configuration](installation.md). This page describes maintained configuration and commands. Setup accepts staged or unstaged edits to the tracked `workflow.config.json` as configuration input and includes that file in its final configuration PR. Other local changes must be preserved separately before setup; a config-only edit needs no preliminary commit.
 
 ## Repository tooling runtime
 
