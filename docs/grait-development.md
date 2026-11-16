@@ -41,7 +41,7 @@ Generate ready-to-run CLI code and required template assets under `dist/` and co
 
 Edit source and canonical templates first, then regenerate distribution output. Do not patch generated runtime files independently. Define an explicit package file allowlist and executable entrypoint so the installable package contains the required runtime/assets rather than the development repository. Make runtime dependencies explicit; do not rely on dependencies available only in the developer's checkout. Node.js and any other runtime prerequisites remain requirements and must be documented separately.
 
-Temporary `.tgz` archives produced by `npm pack` remain ignored local/CI artifacts, not committed distribution files. Keep credentials, setup journals, and target-project configuration out of `dist/`. Committing runnable files does not authorize npm publication, a release, or an automatic merge.
+Distribute GRAIT through remote Git revisions and committed `dist/` files. Do not introduce `.tgz` archives as a local, CI, or user-facing delivery workflow, and do not commit or publish them. Keep credentials, setup journals, and target-project configuration out of `dist/`. Committing runnable files does not authorize npm publication, a release, or an automatic merge.
 
 ### Bundle explicitly; do not build on the user's machine
 
@@ -54,9 +54,9 @@ There is an additional npm Git-installation constraint: a root script named `bui
 When implementing this architecture, add these checks to CI:
 
 - Regenerate `dist/` using locked development dependencies and deterministic output. Fail on tracked differences, missing files, or unexpected untracked generated files. Source and committed artifacts must agree.
-- Inspect the packed file list to verify the executable, policy templates, and runtime assets are included while development scaffolding, temporary state, and secrets are excluded.
-- Install and smoke-test the actual package with scripts disabled in an isolated environment without access to the development checkout or its `node_modules`.
-- Exercise the supported Git installation path and verify that the selected commit's committed artifacts run without consumer-side preparation. A local tarball test alone does not establish Git installation behavior.
+- Inspect the files included by Git installation to verify the executable, policy templates, and runtime assets are included while development scaffolding, temporary state, and secrets are excluded.
+- Install from a remote Git revision and smoke-test with scripts disabled in an isolated environment without access to the development checkout or its `node_modules`.
+- Verify that the selected commit's committed artifacts run without consumer-side preparation and that installation metadata records the resolved revision.
 - Test both installation and ongoing runtime commands from another working directory. Verify that only intended durable workflow artifacts enter the target repository and that application manifests, existing instructions, and application CI are preserved.
 
 These checks are requirements for future implementation, not checks claimed to exist today. Keep quick source-based development separate from distribution acceptance: a successful linked or source-checkout run is insufficient evidence that a Git-installed package works.
