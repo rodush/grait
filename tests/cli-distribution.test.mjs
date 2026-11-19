@@ -41,7 +41,10 @@ test("allowlisted distribution runs outside the checkout without development dep
   assert.equal(manifest.bin?.grait, "dist/cli.mjs");
   const listing = run("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], root);
   assert.equal(listing.status, 0);
-  const files = JSON.parse(listing.stdout)[0].files.map((file) => file.path);
+  const packages = JSON.parse(listing.stdout);
+  const packed = Array.isArray(packages) ? packages[0] : packages[manifest.name];
+  assert.ok(Array.isArray(packed?.files), "npm must report the package file listing");
+  const files = packed.files.map((file) => file.path);
   assert.ok(files.includes("dist/cli.mjs"));
   assert.ok(files.includes("LICENSE"));
   for (const path of files)
