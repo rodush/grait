@@ -18,7 +18,7 @@ Choose commands by the scope of the change. GRAIT tooling can be maintained in b
 
 ## GRAIT Build and Distribution Direction
 
-When developing GRAIT's CLI package, bundling, or distribution, follow the agreed [Git distribution policy](docs/grait-development.md#git-distribution-policy-milestone-1). Milestone 1 targets installation from remote Git revisions with runnable `dist/` artifacts committed alongside source, explicit developer/CI bundling, and no consumer-side build requirement. Keep GRAIT implementation and build tooling outside adopting application workspaces. These are implementation requirements for the package migration; do not assume a bundle command or installable CLI already exists.
+When developing GRAIT's CLI package, bundling, or distribution, follow the agreed [Git distribution policy](docs/grait-development.md#git-distribution-policy-milestone-1). Milestone 1 targets installation from remote Git revisions with runnable `dist/` artifacts committed alongside source, explicit developer/CI bundling, and no consumer-side build requirement. Keep GRAIT implementation and build tooling outside adopting application workspaces. Use `npm run bundle` to regenerate committed output and `npm run bundle:check` to verify it. The packaged CLI currently exposes help and version; the remaining milestone issues deliver installation and runtime operations.
 
 ## Coding Style & Testing Guidelines
 
