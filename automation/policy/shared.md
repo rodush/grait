@@ -4,7 +4,7 @@ Humans own the project and its engineering decisions. Agents never approve on be
 
 Work starts with a GitHub Project issue. Triage establishes scope, measurable acceptance criteria, validation, alignment, and native blocking dependencies before Ready. Open blockers prevent claiming. Changed requirements or dependencies invalidate readiness. Use `grait orchestrator` to claim work; never start an unclaimed story or move Project status manually.
 
-The Project uses Backlog, Ready, In Progress, Review, and Done. At most five stories may be In Progress across the Project. Review does not consume those slots. Finish all existing Review work before admitting a new story, including work waiting for a human or external dependency. Existing claims and fixes remain resumable. One designated host coordinates the Project.
+The Project uses Backlog, Ready, In Progress, In Review, and Done. At most five stories may be In Progress across the Project. Review does not consume those slots. Finish all existing Review work before admitting a new story, including work waiting for a human or external dependency. Existing claims and fixes remain resumable. One designated host coordinates the Project.
 
 For testable work, follow tester → independent Red verification → implementer → independent Green verification → independent reviewer. The tester alone changes tests; the implementer alone changes production files and treats tests and fixtures as a black box. Give implementers only the acceptance contract, stable failure IDs, and explicitly public observations. Syntax errors, missing dependencies, and unrelated failures are not valid Red evidence.
 
