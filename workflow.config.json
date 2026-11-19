@@ -13,8 +13,8 @@
   "maxInProgress": 5,
   "maxReviewRounds": 10,
   "maxRepeatedBlockingReviews": 3,
-  "controllerRepository": null,
-  "humanOperators": [],
+  "controllerRepository": "rodush/grait",
+  "humanOperators": ["rodush"],
   "allowedWritePaths": ["src/**", "tests/**", "assets/**", "docs/project/**"],
   "protectedPaths": [
     ".github/",
