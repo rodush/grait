@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
@@ -304,11 +305,27 @@ test("installed publisher rejects stale Green evidence before creating a PR", as
 
 test("installed verifier resolves its Node adapter from the package rather than the target", async (t) => {
   const installed = await installation(t);
-  const modulePath = join(installed.directory, "dist/scripts/lib/verification.mjs");
+  const modulePath = installed.cli;
   assert.ok(
     existsSync(modulePath),
     "The installed distribution must supply its verification runtime",
   );
+  const env = { ...process.env };
+  for (const key of Object.keys(env))
+    if (/TOKEN|SECRET|PASSWORD|PRIVATE_KEY|API_KEY/i.test(key)) delete env[key];
+  const probe = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `const bundle = await import(${JSON.stringify(pathToFileURL(modulePath).href)}); if (typeof bundle.verifyCommits !== "function") process.exitCode = 1;`,
+    ],
+    { env, encoding: "utf8", timeout: 60000 },
+  );
+  assert.ifError(probe.error);
+  assert.equal(probe.status, 0, "The compiled CLI exports its verifier without executing commands");
+  assert.equal(probe.stdout, "");
+  assert.equal(probe.stderr, "");
   const { verifyCommits } = await import(pathToFileURL(modulePath));
   const f = await setupFixture();
   t.after(() => f.close());
@@ -344,4 +361,5 @@ test("installed verifier resolves its Node adapter from the package rather than 
   ]);
   assert.deepEqual(report.infrastructureErrors, []);
   assert.equal(existsSync(join(f.directory, "scripts")), false);
+  assert.deepEqual(await readdir(join(installed.directory, "dist")), ["cli.mjs"]);
 });

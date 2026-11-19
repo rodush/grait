@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -79,6 +79,26 @@ test("allowlisted distribution runs outside the checkout without development dep
   });
 });
 
+test("distribution contains one self-contained compiled CLI", async () => {
+  assert.deepEqual(await readdir(join(root, "dist")), ["cli.mjs"]);
+  await temporary(async (directory) => {
+    const cli = join(directory, "cli.mjs");
+    await cp(join(root, "dist/cli.mjs"), cli);
+    for (const args of [
+      ["--version"],
+      ["--help"],
+      ["orchestrator", "--help"],
+      ["github", "--help"],
+    ]) {
+      const result = run(process.execPath, [cli, ...args], directory);
+      assert.equal(result.status, 0);
+      assert.equal(result.stderr, "");
+      if (args[0] === "--version") assert.equal(result.stdout.trim(), manifest.version);
+      else assert.match(result.stdout, /usage/i);
+    }
+  });
+});
+
 test("bundle compiles imported modules instead of mirroring the source tree", async () => {
   await temporary(async (directory) => {
     await cp(root, directory, {
@@ -89,7 +109,7 @@ test("bundle compiles imported modules instead of mirroring the source tree", as
     const cliPath = join(directory, "src/cli.mjs");
     await writeFile(
       cliPath,
-      `${await readFile(cliPath, "utf8")}\nimport { compiledProbe } from "./bundle-probe.mjs";\nconsole.log(compiledProbe);\n`,
+      `${await readFile(cliPath, "utf8")}\nimport { compiledProbe } from "./bundle-probe.mjs";\nimport { generateProjectArtifacts } from "./project-policy.mjs";\nconsole.log(compiledProbe);\nconst artifacts = await generateProjectArtifacts({harness: "codex", version: "0.1.0"});\nconsole.log(artifacts["AGENTS.md"].includes("embedded-policy-resource-probe"));\n`,
     );
     await writeFile(
       join(directory, "src/bundle-probe.mjs"),
@@ -99,18 +119,23 @@ test("bundle compiles imported modules instead of mirroring the source tree", as
       join(directory, "src/bundle-probe-value.mjs"),
       'export const compiledProbe = "compiled-dependency-graph";\n',
     );
+    const policyPath = join(directory, "automation/policy/shared.md");
+    await writeFile(
+      policyPath,
+      `${await readFile(policyPath, "utf8")}\nembedded-policy-resource-probe\n`,
+    );
     const build = run("npm", ["run", "bundle"], directory);
     assert.equal(build.status, 0);
     await rm(join(directory, "src"), { recursive: true });
     await rm(join(directory, "scripts"), { recursive: true });
     await rm(join(directory, "node_modules"), { recursive: true });
-    // Imported implementation belongs in compiled entrypoints/chunks, not a
-    // byte-for-byte mirror that makes source files runtime dependencies.
-    await rm(join(directory, "dist/bundle-probe.mjs"), { force: true });
-    await rm(join(directory, "dist/bundle-probe-value.mjs"), { force: true });
+    await rm(join(directory, "automation"), { recursive: true });
+    await rm(join(directory, "package.json"));
+    for (const entry of await readdir(join(directory, "dist")))
+      if (entry !== "cli.mjs") await rm(join(directory, "dist", entry), { recursive: true });
     const result = run(process.execPath, [join(directory, "dist/cli.mjs"), "--version"], directory);
     assert.equal(result.status, 0);
-    assert.equal(result.stdout.trim(), `${manifest.version}\ncompiled-dependency-graph`);
+    assert.equal(result.stdout.trim(), `${manifest.version}\ncompiled-dependency-graph\ntrue`);
   });
 });
 
