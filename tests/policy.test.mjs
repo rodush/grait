@@ -88,8 +88,18 @@ test("unchanged patches and unrelated pushes do not count as code reversals or c
 
 test("automated write scopes cannot include shared policy or automation", () => {
   assert.doesNotThrow(() => validateConfig(config));
+  const protectedConfig = {
+    ...config,
+    allowedWritePaths: ["src/**", "tests/**"],
+    protectedPaths: ["docs/", "scripts/", "AGENTS.md", ".github/"],
+    tdd: { ...config.tdd, implementationPaths: ["src/**"] },
+  };
+  assert.doesNotThrow(() => validateConfig(protectedConfig));
   for (const path of ["docs/**", "scripts/**", "AGENTS.md", ".github/workflows/**"])
-    assert.throws(() => validateConfig({ ...config, allowedWritePaths: [path] }), /protected/);
+    assert.throws(
+      () => validateConfig({ ...protectedConfig, allowedWritePaths: [path] }),
+      /protected/,
+    );
 });
 
 test("canceled or unreadable dependencies do not count as implemented", () => {
