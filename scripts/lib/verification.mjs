@@ -1,6 +1,7 @@
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { command } from "./setup-process.mjs";
 import { validateEvidence } from "./tdd.mjs";
 
@@ -55,7 +56,10 @@ export async function verifyCommits({
       if (runner.install?.length)
         await command(runner.install[0], runner.install.slice(1), { cwd, env });
       const args = runner.command.map((arg) =>
-        arg.replaceAll("{nodeAdapter}", resolve(root, "scripts/adapters/node-suite.mjs")),
+        arg.replaceAll(
+          "{nodeAdapter}",
+          fileURLToPath(new URL("../adapters/node-suite.mjs", import.meta.url)),
+        ),
       );
       const result = await command(args[0], args.slice(1), { cwd, env, allowFailure: true });
       let report;

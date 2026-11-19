@@ -36,6 +36,20 @@ async function files(directory, prefix = "") {
 // Copy dependency-free ESM modules without machine paths, timestamps, or install hooks.
 const expected = await files(join(root, "src"));
 if (!expected.has("cli.mjs")) throw new Error("The CLI source entrypoint is missing");
+// Ship deterministic runtime modules, never the development checker/generator.
+for (const entry of ["orchestrator.mjs", "github.mjs", "bootstrap.mjs", "activate.mjs"])
+  expected.set(`scripts/${entry}`, await readFile(join(root, "scripts", entry)));
+for (const directory of ["lib", "adapters"]) {
+  for (const [name, contents] of await files(join(root, "scripts", directory))) {
+    if (directory === "lib" && name === "harnesses.mjs") continue;
+    expected.set(`scripts/${directory}/${name}`, contents);
+  }
+}
+for (const [name, contents] of await files(join(root, "automation", "policy")))
+  expected.set(`automation/policy/${name}`, contents);
+// Installer defaults are canonical package assets, never the active repository's config.
+for (const [name, contents] of await files(join(root, "config")))
+  if (name === "project-workflow.json") expected.set("defaults/workflow.config.json", contents);
 if (args.includes("--check")) {
   const actual = await files(output);
   const changed = [...new Set([...expected.keys(), ...actual.keys()])]

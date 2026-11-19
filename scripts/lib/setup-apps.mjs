@@ -52,10 +52,19 @@ export function appJwt(app, now = Date.now()) {
   }
 }
 
-export async function githubRequest(path, { token, method = "GET", body, fetcher = fetch } = {}) {
+export async function githubRequest(
+  path,
+  {
+    token,
+    method = "GET",
+    body,
+    fetcher = fetch,
+    apiUrl = process.env.GITHUB_API_URL || "https://api.github.com",
+  } = {},
+) {
   let response;
   try {
-    response = await fetcher(`https://api.github.com/${path}`, {
+    response = await fetcher(`${apiUrl.replace(/\/$/, "")}/${path.replace(/^\//, "")}`, {
       method,
       headers: {
         Accept: "application/vnd.github+json",

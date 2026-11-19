@@ -20,7 +20,7 @@ async function main() {
   const task = positionals[0];
   if (values.help) {
     console.log(
-      "Publish through the local writer App:\n  npm run github -- push --issue N\n  npm run github -- pr --issue N --title 'feat: ...' --body-file PATH [--draft]\nPRs are normal by default and require independent Green for the exact head or an accepted triage TDD exemption. Use --draft only when the user explicitly requests work in progress or early feedback.\nReviews use npm run orchestrator -- review. Merge and release are human-only.",
+      "Publish through the local writer App:\n  grait github push --issue N\n  grait github pr --issue N --title 'feat: ...' --body-file PATH [--draft]\nPRs are normal by default and require independent Green for the exact head or an accepted triage TDD exemption. Use --draft only when the user explicitly requests work in progress or early feedback.\nReviews use grait orchestrator review. Merge and release are human-only.",
     );
     return;
   }
