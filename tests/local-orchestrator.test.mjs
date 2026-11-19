@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { issueDigest } from "../scripts/lib/policy.mjs";
 import { resolve } from "node:path";
@@ -8,10 +7,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const sourceRoot =
   process.env.GRAIT_TEST_SOURCE_ROOT || fileURLToPath(new URL("..", import.meta.url));
-const modulePath = pathToFileURL(resolve(sourceRoot, "scripts/lib/orchestrator.mjs"));
-const orchestratorModule = existsSync(modulePath) ? await import(modulePath) : {};
-const { LocalOrchestrator } = orchestratorModule;
-const available = typeof LocalOrchestrator === "function";
+const { LocalOrchestrator } = await import(
+  pathToFileURL(resolve(sourceRoot, "scripts/lib/orchestrator.mjs"))
+);
 const baseConfig = JSON.parse(await readFile(resolve(sourceRoot, "workflow.config.json"), "utf8"));
 const repo = "acme/service";
 const head = "a".repeat(40);
@@ -144,17 +142,15 @@ function fixture() {
       return response;
     },
   };
-  const orchestrator = available
-    ? new LocalOrchestrator({
-        api,
-        reviewerApi,
-        project,
-        repo,
-        writer: "writer[bot]",
-        reviewer: "reviewer[bot]",
-        config,
-      })
-    : null;
+  const orchestrator = new LocalOrchestrator({
+    api,
+    reviewerApi,
+    project,
+    repo,
+    writer: "writer[bot]",
+    reviewer: "reviewer[bot]",
+    config,
+  });
   const assessment = (overrides = {}) => ({
     version: 1,
     issue: 1,
@@ -203,46 +199,32 @@ function fixture() {
   };
 }
 
-const localTest = (name, fn) => test(name, { skip: !available }, fn);
-
-test("local orchestration exposes deterministic operations without a hosted scheduler", () => {
-  assert.equal(typeof LocalOrchestrator, "function");
-  for (const method of ["ready", "claim", "review", "sync"])
-    assert.equal(typeof LocalOrchestrator.prototype[method], "function");
+test("local triage records fresh readiness and claims once without workflow dispatch", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  assert.equal(f.item.status, f.config.statuses.ready);
+  const first = await f.orchestrator.claim(1);
+  assert.ok(first);
+  assert.equal(f.item.status, f.config.statuses.inProgress);
+  const moveCount = f.moves.length;
+  const second = await f.orchestrator.claim(1);
+  assert.deepEqual(second, first);
+  assert.equal(f.moves.length, moveCount);
+  assert.ok(!f.requests.some(({ path }) => /\/actions\/|\/dispatches/.test(path)));
 });
 
-localTest(
-  "local triage records fresh readiness and claims once without workflow dispatch",
-  async () => {
+test("local readiness cannot invent native blockers or accept unanswered questions", async () => {
+  for (const change of [{ blockers: ["acme/service#2"] }, { questions: ["Which outcome?"] }]) {
     const f = fixture();
-    await f.orchestrator.ready(1, f.assessment());
-    assert.equal(f.item.status, f.config.statuses.ready);
-    const first = await f.orchestrator.claim(1);
-    assert.ok(first);
-    assert.equal(f.item.status, f.config.statuses.inProgress);
-    const moveCount = f.moves.length;
-    const second = await f.orchestrator.claim(1);
-    assert.deepEqual(second, first);
-    assert.equal(f.moves.length, moveCount);
-    assert.ok(!f.requests.some(({ path }) => /\/actions\/|\/dispatches/.test(path)));
-  },
-);
+    await assert.rejects(() => f.orchestrator.ready(1, f.assessment(change)));
+    assert.equal(f.item.status, f.config.statuses.backlog);
+    assert.ok(
+      !f.requests.some(({ path, method }) => path.includes("/dependencies/") && method !== "GET"),
+    );
+  }
+});
 
-localTest(
-  "local readiness cannot invent native blockers or accept unanswered questions",
-  async () => {
-    for (const change of [{ blockers: ["acme/service#2"] }, { questions: ["Which outcome?"] }]) {
-      const f = fixture();
-      await assert.rejects(() => f.orchestrator.ready(1, f.assessment(change)));
-      assert.equal(f.item.status, f.config.statuses.backlog);
-      assert.ok(
-        !f.requests.some(({ path, method }) => path.includes("/dependencies/") && method !== "GET"),
-      );
-    }
-  },
-);
-
-localTest("local claiming rejects stale scope and native blocker-set changes", async () => {
+test("local claiming rejects stale scope and native blocker-set changes", async () => {
   const f = fixture();
   await f.orchestrator.ready(1, f.assessment());
   f.issue.body = "Changed acceptance criteria";
@@ -262,29 +244,26 @@ localTest("local claiming rejects stale scope and native blocker-set changes", a
   assert.equal(g.item.status, g.config.statuses.ready);
 });
 
-localTest(
-  "local claiming counts every active Project story and treats unknown work conservatively",
-  async () => {
-    const f = fixture();
-    await f.orchestrator.ready(1, f.assessment());
-    f.project.items.push(
-      ...Array.from({ length: 4 }, (_, index) => ({
-        id: `other-${index}`,
-        status: f.config.statuses.inProgress,
-        content: {
-          __typename: "Issue",
-          number: index + 20,
-          repository: { nameWithOwner: "other/repo" },
-        },
-      })),
-      { id: "opaque", status: f.config.statuses.inProgress, content: null },
-    );
-    await assert.rejects(() => f.orchestrator.claim(1));
-    assert.equal(f.item.status, f.config.statuses.ready);
-  },
-);
+test("local claiming counts every active Project story and treats unknown work conservatively", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  f.project.items.push(
+    ...Array.from({ length: 4 }, (_, index) => ({
+      id: `other-${index}`,
+      status: f.config.statuses.inProgress,
+      content: {
+        __typename: "Issue",
+        number: index + 20,
+        repository: { nameWithOwner: "other/repo" },
+      },
+    })),
+    { id: "opaque", status: f.config.statuses.inProgress, content: null },
+  );
+  await assert.rejects(() => f.orchestrator.claim(1));
+  assert.equal(f.item.status, f.config.statuses.ready);
+});
 
-localTest("local claiming rejects paused issues and unadmitted outsiders", async () => {
+test("local claiming rejects paused issues and unadmitted outsiders", async () => {
   const f = fixture();
   await f.orchestrator.ready(1, f.assessment());
   f.issue.labels.push({ name: f.config.labels.paused });
@@ -296,41 +275,35 @@ localTest("local claiming rejects paused issues and unadmitted outsiders", async
   assert.equal(g.item.status, g.config.statuses.backlog);
 });
 
-localTest(
-  "local review publishes through the separate reviewer at the exact current PR head",
-  async () => {
-    const f = fixture();
-    await f.orchestrator.ready(1, f.assessment());
-    await f.orchestrator.claim(1);
-    await f.orchestrator.review(7, f.review());
-    assert.equal(f.publishedReviews.length, 1);
-    assert.equal(f.publishedReviews[0].commit_id, head);
-    assert.ok(
-      f.requests.some(
-        ({ path, body }) =>
-          path.endsWith(`/statuses/${head}`) &&
-          body.context === "Agent review" &&
-          body.state === "success",
-      ),
-    );
-    await assert.rejects(() => f.orchestrator.review(7, f.review()));
-    assert.equal(f.publishedReviews.length, 1);
-  },
-);
+test("local review publishes through the separate reviewer at the exact current PR head", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  await f.orchestrator.claim(1);
+  await f.orchestrator.review(7, f.review());
+  assert.equal(f.publishedReviews.length, 1);
+  assert.equal(f.publishedReviews[0].commit_id, head);
+  assert.ok(
+    f.requests.some(
+      ({ path, body }) =>
+        path.endsWith(`/statuses/${head}`) &&
+        body.context === "Agent review" &&
+        body.state === "success",
+    ),
+  );
+  await assert.rejects(() => f.orchestrator.review(7, f.review()));
+  assert.equal(f.publishedReviews.length, 1);
+});
 
-localTest(
-  "local review rejects stale heads and the PR author's own reviewer identity",
-  async () => {
-    const f = fixture();
-    await assert.rejects(() => f.orchestrator.review(7, f.review({ head: "b".repeat(40) })));
-    assert.equal(f.publishedReviews.length, 0);
-    f.pull.user.login = "reviewer[bot]";
-    await assert.rejects(() => f.orchestrator.review(7, f.review()));
-    assert.equal(f.publishedReviews.length, 0);
-  },
-);
+test("local review rejects stale heads and the PR author's own reviewer identity", async () => {
+  const f = fixture();
+  await assert.rejects(() => f.orchestrator.review(7, f.review({ head: "b".repeat(40) })));
+  assert.equal(f.publishedReviews.length, 0);
+  f.pull.user.login = "reviewer[bot]";
+  await assert.rejects(() => f.orchestrator.review(7, f.review()));
+  assert.equal(f.publishedReviews.length, 0);
+});
 
-localTest("local review stops conflicting instructions before another automatic fix", async () => {
+test("local review stops conflicting instructions before another automatic fix", async () => {
   const f = fixture();
   const result = await f.orchestrator.review(
     7,
@@ -342,28 +315,25 @@ localTest("local review stops conflicting instructions before another automatic 
   );
 });
 
-localTest(
-  "local sync keeps drafts active, sends ready PRs to Review, and completes only merged work",
-  async () => {
-    const f = fixture();
-    await f.orchestrator.ready(1, f.assessment());
-    await f.orchestrator.claim(1);
-    f.pull.draft = true;
-    await f.orchestrator.sync(7);
-    assert.equal(f.item.status, f.config.statuses.inProgress);
-    f.pull.draft = false;
-    await f.orchestrator.sync(7);
-    assert.equal(f.item.status, f.config.statuses.review);
-    f.pull.state = "closed";
-    await f.orchestrator.sync(7);
-    assert.notEqual(f.item.status, f.config.statuses.done);
-    f.pull.merged = true;
-    await f.orchestrator.sync(7);
-    assert.equal(f.item.status, f.config.statuses.done);
-  },
-);
+test("local sync keeps drafts active, sends ready PRs to Review, and completes only merged work", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  await f.orchestrator.claim(1);
+  f.pull.draft = true;
+  await f.orchestrator.sync(7);
+  assert.equal(f.item.status, f.config.statuses.inProgress);
+  f.pull.draft = false;
+  await f.orchestrator.sync(7);
+  assert.equal(f.item.status, f.config.statuses.review);
+  f.pull.state = "closed";
+  await f.orchestrator.sync(7);
+  assert.notEqual(f.item.status, f.config.statuses.done);
+  f.pull.merged = true;
+  await f.orchestrator.sync(7);
+  assert.equal(f.item.status, f.config.statuses.done);
+});
 
-localTest("local sync never completes unrelated or unclaimed issues", async () => {
+test("local sync never completes unrelated or unclaimed issues", async () => {
   const f = fixture();
   f.pull.merged = true;
   await assert.rejects(() => f.orchestrator.sync(7));
@@ -373,20 +343,17 @@ localTest("local sync never completes unrelated or unclaimed issues", async () =
   assert.notEqual(f.item.status, f.config.statuses.done);
 });
 
-localTest(
-  "local admission checks current access rather than stale contributor association",
-  async () => {
-    const f = fixture();
-    f.issue.user.login = "outsider";
-    f.issue.author_association = "COLLABORATOR";
-    await assert.rejects(() => f.orchestrator.ready(1, f.assessment()));
-    assert.equal(f.item.status, f.config.statuses.backlog);
-    assert.equal(f.comments.size, 0);
-    f.issue.labels.push({ name: f.config.labels.admitted });
-    await f.orchestrator.ready(1, f.assessment());
-    assert.equal(f.item.status, f.config.statuses.ready);
-  },
-);
+test("local admission checks current access rather than stale contributor association", async () => {
+  const f = fixture();
+  f.issue.user.login = "outsider";
+  f.issue.author_association = "COLLABORATOR";
+  await assert.rejects(() => f.orchestrator.ready(1, f.assessment()));
+  assert.equal(f.item.status, f.config.statuses.backlog);
+  assert.equal(f.comments.size, 0);
+  f.issue.labels.push({ name: f.config.labels.admitted });
+  await f.orchestrator.ready(1, f.assessment());
+  assert.equal(f.item.status, f.config.statuses.ready);
+});
 
 function seedState(f, number, state) {
   f.comments.set(number, [
@@ -401,7 +368,7 @@ function seedState(f, number, state) {
   ]);
 }
 
-localTest("local review preserves the lifetime cap recorded by legacy history", async () => {
+test("local review preserves the lifetime cap recorded by legacy history", async () => {
   const f = fixture();
   seedState(f, 7, {
     history: Array.from({ length: 10 }, (_, index) => ({
@@ -429,59 +396,53 @@ localTest("local review preserves the lifetime cap recorded by legacy history", 
   assert.equal(g.publishedReviews.length, 1);
 });
 
-localTest(
-  "legacy pending hosted operations require reconciliation before local claims or reviews",
-  async () => {
-    const f = fixture();
-    seedState(f, 7, { pending: { operation: "legacy-operation", kind: "review", head } });
-    await assert.rejects(() => f.orchestrator.review(7, f.review()));
-    assert.equal(f.publishedReviews.length, 0);
-    const g = fixture();
-    g.item.status = g.config.statuses.ready;
-    seedState(g, 1, {
-      triagedDigest: issueDigest(g.issue),
-      triage: g.assessment(),
-      pending: { operation: "legacy-implementation", kind: "implement" },
-    });
-    await assert.rejects(() => g.orchestrator.claim(1));
-    assert.equal(g.item.status, g.config.statuses.ready);
-  },
-);
+test("legacy pending hosted operations require reconciliation before local claims or reviews", async () => {
+  const f = fixture();
+  seedState(f, 7, { pending: { operation: "legacy-operation", kind: "review", head } });
+  await assert.rejects(() => f.orchestrator.review(7, f.review()));
+  assert.equal(f.publishedReviews.length, 0);
+  const g = fixture();
+  g.item.status = g.config.statuses.ready;
+  seedState(g, 1, {
+    triagedDigest: issueDigest(g.issue),
+    triage: g.assessment(),
+    pending: { operation: "legacy-implementation", kind: "implement" },
+  });
+  await assert.rejects(() => g.orchestrator.claim(1));
+  assert.equal(g.item.status, g.config.statuses.ready);
+});
 
-localTest(
-  "local review requires current-head Green whenever the linked claim has TDD evidence",
-  async () => {
-    const f = fixture();
-    seedState(f, 1, {
-      claim: { issue: 1, branch: "agent/issue-1", digest: issueDigest(f.issue) },
-      tdd: {
-        version: 1,
-        issue: 1,
-        phase: "review",
-        owner: null,
-        head: "b".repeat(40),
-        evidence: ["previous-green"],
-      },
-    });
-    await assert.rejects(() => f.orchestrator.review(7, f.review()));
-    assert.equal(f.publishedReviews.length, 0);
-    const g = fixture();
-    seedState(g, 1, {
-      claim: { issue: 1, branch: "agent/issue-1", digest: issueDigest(g.issue) },
-      tdd: {
-        version: 1,
-        issue: 1,
-        phase: "review",
-        owner: null,
-        head,
-        evidence: ["current-green"],
-      },
-    });
-    assert.equal((await g.orchestrator.review(7, g.review())).action, "human-merge");
-  },
-);
+test("local review requires current-head Green whenever the linked claim has TDD evidence", async () => {
+  const f = fixture();
+  seedState(f, 1, {
+    claim: { issue: 1, branch: "agent/issue-1", digest: issueDigest(f.issue) },
+    tdd: {
+      version: 1,
+      issue: 1,
+      phase: "review",
+      owner: null,
+      head: "b".repeat(40),
+      evidence: ["previous-green"],
+    },
+  });
+  await assert.rejects(() => f.orchestrator.review(7, f.review()));
+  assert.equal(f.publishedReviews.length, 0);
+  const g = fixture();
+  seedState(g, 1, {
+    claim: { issue: 1, branch: "agent/issue-1", digest: issueDigest(g.issue) },
+    tdd: {
+      version: 1,
+      issue: 1,
+      phase: "review",
+      owner: null,
+      head,
+      evidence: ["current-green"],
+    },
+  });
+  assert.equal((await g.orchestrator.review(7, g.review())).action, "human-merge");
+});
 
-localTest("local sync cannot move a paused linked issue", async () => {
+test("local sync cannot move a paused linked issue", async () => {
   for (const pauseKind of ["ledger", "label"]) {
     const f = fixture();
     f.item.status = f.config.statuses.review;
@@ -497,35 +458,32 @@ localTest("local sync cannot move a paused linked issue", async () => {
   }
 });
 
-localTest(
-  "converting a reviewed PR to draft must acquire capacity before returning In Progress",
-  async () => {
-    const f = fixture();
-    await f.orchestrator.ready(1, f.assessment());
-    await f.orchestrator.claim(1);
-    await f.orchestrator.sync(7);
-    assert.equal(f.item.status, f.config.statuses.review);
-    f.project.items.push(
-      ...Array.from({ length: 5 }, (_, index) => ({
-        id: `busy-${index}`,
-        status: f.config.statuses.inProgress,
-        content: {
-          __typename: "Issue",
-          number: index + 30,
-          repository: { nameWithOwner: "other/repo" },
-        },
-      })),
-    );
-    f.pull.draft = true;
-    await assert.rejects(() => f.orchestrator.sync(7));
-    assert.equal(f.item.status, f.config.statuses.review);
-    f.project.items.pop();
-    await f.orchestrator.sync(7);
-    assert.equal(f.item.status, f.config.statuses.inProgress);
-  },
-);
+test("converting a reviewed PR to draft must acquire capacity before returning In Progress", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  await f.orchestrator.claim(1);
+  await f.orchestrator.sync(7);
+  assert.equal(f.item.status, f.config.statuses.review);
+  f.project.items.push(
+    ...Array.from({ length: 5 }, (_, index) => ({
+      id: `busy-${index}`,
+      status: f.config.statuses.inProgress,
+      content: {
+        __typename: "Issue",
+        number: index + 30,
+        repository: { nameWithOwner: "other/repo" },
+      },
+    })),
+  );
+  f.pull.draft = true;
+  await assert.rejects(() => f.orchestrator.sync(7));
+  assert.equal(f.item.status, f.config.statuses.review);
+  f.project.items.pop();
+  await f.orchestrator.sync(7);
+  assert.equal(f.item.status, f.config.statuses.inProgress);
+});
 
-localTest("new claims wait until every unarchived Review story is finished", async () => {
+test("new claims wait until every unarchived Review story is finished", async () => {
   const reviewStories = [
     { content: { __typename: "Issue", number: 20, repository: { nameWithOwner: repo } } },
     {
@@ -570,48 +528,42 @@ localTest("new claims wait until every unarchived Review story is finished", asy
   }
 });
 
-localTest(
-  "Review work is reported before the capacity guard when a new claim is blocked",
-  async () => {
-    const f = fixture();
-    await f.orchestrator.ready(1, f.assessment());
-    f.project.items.push({ id: "review-story", status: f.config.statuses.review, content: null });
-    f.project.items.push(
-      ...Array.from({ length: 5 }, (_, index) => ({
-        id: `busy-${index}`,
-        status: f.config.statuses.inProgress,
-        content: { __typename: "Issue" },
-      })),
-    );
-    await assert.rejects(() => f.orchestrator.claim(1), /review/i);
-    assert.equal(f.item.status, f.config.statuses.ready);
-  },
-);
+test("Review work is reported before the capacity guard when a new claim is blocked", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  f.project.items.push({ id: "review-story", status: f.config.statuses.review, content: null });
+  f.project.items.push(
+    ...Array.from({ length: 5 }, (_, index) => ({
+      id: `busy-${index}`,
+      status: f.config.statuses.inProgress,
+      content: { __typename: "Issue" },
+    })),
+  );
+  await assert.rejects(() => f.orchestrator.claim(1), /review/i);
+  assert.equal(f.item.status, f.config.statuses.ready);
+});
 
-localTest(
-  "archived Review stories and explicit PR items do not block a new story claim",
-  async () => {
-    const f = fixture();
-    await f.orchestrator.ready(1, f.assessment());
-    f.project.items.push(
-      {
-        id: "archived-review",
-        status: f.config.statuses.review,
-        isArchived: true,
-        content: { __typename: "Issue", number: 9 },
-      },
-      {
-        id: "pr-review",
-        status: f.config.statuses.review,
-        content: { __typename: "PullRequest", number: 7 },
-      },
-    );
-    assert.ok(await f.orchestrator.claim(1));
-    assert.equal(f.item.status, f.config.statuses.inProgress);
-  },
-);
+test("archived Review stories and explicit PR items do not block a new story claim", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  f.project.items.push(
+    {
+      id: "archived-review",
+      status: f.config.statuses.review,
+      isArchived: true,
+      content: { __typename: "Issue", number: 9 },
+    },
+    {
+      id: "pr-review",
+      status: f.config.statuses.review,
+      content: { __typename: "PullRequest", number: 7 },
+    },
+  );
+  assert.ok(await f.orchestrator.claim(1));
+  assert.equal(f.item.status, f.config.statuses.inProgress);
+});
 
-localTest("accepted claims resume during Review work without starting another story", async () => {
+test("accepted claims resume during Review work without starting another story", async () => {
   for (const ownStatus of ["inProgress", "review"]) {
     const f = fixture();
     await f.orchestrator.ready(1, f.assessment());
