@@ -1,3 +1,5 @@
+import { isEntrypoint } from "./lib/entrypoint.mjs";
+import { bundledRuntime } from "./lib/runtime-resources.mjs";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { localContext } from "./lib/local-context.mjs";
@@ -6,7 +8,7 @@ import { command, withoutCredentials } from "./lib/setup-process.mjs";
 import { conventionalTitle } from "./lib/policy.mjs";
 import { assertRoleChanges } from "./lib/tdd.mjs";
 
-async function main() {
+export async function githubMain() {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: {
@@ -20,7 +22,7 @@ async function main() {
   const task = positionals[0];
   if (values.help) {
     console.log(
-      "Publish through the local writer App:\n  npm run github -- push --issue N\n  npm run github -- pr --issue N --title 'feat: ...' --body-file PATH [--draft]\nPRs are normal by default and require independent Green for the exact head or an accepted triage TDD exemption. Use --draft only when the user explicitly requests work in progress or early feedback.\nReviews use npm run orchestrator -- review. Merge and release are human-only.",
+      "Publish through the local writer App:\n  grait github push --issue N\n  grait github pr --issue N --title 'feat: ...' --body-file PATH [--draft]\nPRs are normal by default and require independent Green for the exact head or an accepted triage TDD exemption. Use --draft only when the user explicitly requests work in progress or early feedback.\nReviews use grait orchestrator review. Merge and release are human-only.",
     );
     return;
   }
@@ -104,7 +106,8 @@ async function main() {
     await context.store.release();
   }
 }
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (!bundledRuntime && isEntrypoint(import.meta.url))
+  githubMain().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });

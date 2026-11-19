@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 
-const policyUrl = new URL("../automation/policy/shared.md", import.meta.url);
+import { packageResource } from "./resources.mjs";
+
+const policyUrl = packageResource("automation/policy/shared.md");
 const roles = {
   orchestrator: {
     description: "Coordinate the Project queue and local specialist handoffs.",
@@ -90,7 +92,11 @@ export async function generateProjectArtifacts({ harness, version, project = {},
       throw new Error("Project name and context must be text");
   if ([project.name, project.context].some((text) => text?.includes("grait:policy:")))
     throw new Error("Project context cannot contain managed policy boundaries");
-  const policy = (await readFile(policyUrl, "utf8")).trim();
+  const policy = (
+    typeof GRAIT_SHARED_POLICY === "string"
+      ? GRAIT_SHARED_POLICY
+      : await readFile(policyUrl, "utf8")
+  ).trim();
   const artifacts = {};
   const emit = (path, body, options = {}) => {
     const original = existing[path] ?? options.initial ?? "";

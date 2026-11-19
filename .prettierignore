@@ -9,3 +9,6 @@ package-lock.json
 
 .github/skills/grait-*/SKILL.md
 .github/agents/grait-*.agent.md
+
+# Generated, minified CLI; freshness is checked by bundle:check.
+dist/

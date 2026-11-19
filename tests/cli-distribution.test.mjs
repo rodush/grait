@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
-import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
@@ -52,6 +52,11 @@ test("allowlisted distribution runs outside the checkout without development dep
       path.startsWith("dist/") || ["package.json", "LICENSE", "README.md"].includes(path),
       `Development or host-state file leaked into package: ${path}`,
     );
+  for (const path of files)
+    assert.ok(
+      !/(?:^|\/)(?:tests|fixtures|node_modules)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]s$/.test(path),
+      `Development tests or dependencies leaked into package: ${path}`,
+    );
   await temporary(async (directory) => {
     const packageDirectory = join(directory, "package");
     const application = join(directory, "application");
@@ -71,6 +76,72 @@ test("allowlisted distribution runs outside the checkout without development dep
       if (argument === "--help") assert.match(result.stdout, /grait/i);
       else assert.equal(result.stdout.trim(), manifest.version);
     }
+  });
+});
+
+test("distribution contains one self-contained compiled CLI", async () => {
+  assert.deepEqual(await readdir(join(root, "dist")), ["cli.mjs"]);
+  await temporary(async (directory) => {
+    const cli = join(directory, "cli.mjs");
+    await cp(join(root, "dist/cli.mjs"), cli);
+    for (const args of [
+      ["--version"],
+      ["--help"],
+      ["orchestrator", "--help"],
+      ["github", "--help"],
+    ]) {
+      const result = run(process.execPath, [cli, ...args], directory);
+      assert.equal(result.status, 0);
+      assert.equal(result.stderr, "");
+      if (args[0] === "--version") assert.equal(result.stdout.trim(), manifest.version);
+      else if (args[0] === "orchestrator") {
+        assert.match(result.stdout, /claim\s+--issue/i);
+        assert.match(result.stdout, /verify\s+--issue/i);
+      } else if (args[0] === "github") {
+        assert.match(result.stdout, /grait github push\s+--issue/i);
+        assert.match(result.stdout, /grait github pr\s+--issue/i);
+      } else assert.match(result.stdout, /orchestrator[\s\S]*github/);
+    }
+  });
+});
+
+test("bundle compiles imported modules instead of mirroring the source tree", async () => {
+  await temporary(async (directory) => {
+    await cp(root, directory, {
+      recursive: true,
+      filter: (path) => ![join(root, ".git"), join(root, "node_modules")].includes(path),
+    });
+    await cp(join(root, "node_modules"), join(directory, "node_modules"), { recursive: true });
+    const cliPath = join(directory, "src/cli.mjs");
+    await writeFile(
+      cliPath,
+      `${await readFile(cliPath, "utf8")}\nimport { compiledProbe } from "./bundle-probe.mjs";\nimport { generateProjectArtifacts } from "./project-policy.mjs";\nconsole.log(compiledProbe);\nconst artifacts = await generateProjectArtifacts({harness: "codex", version: "0.1.0"});\nconsole.log(artifacts["AGENTS.md"].includes("embedded-policy-resource-probe"));\n`,
+    );
+    await writeFile(
+      join(directory, "src/bundle-probe.mjs"),
+      'export { compiledProbe } from "./bundle-probe-value.mjs";\n',
+    );
+    await writeFile(
+      join(directory, "src/bundle-probe-value.mjs"),
+      'export const compiledProbe = "compiled-dependency-graph";\n',
+    );
+    const policyPath = join(directory, "automation/policy/shared.md");
+    await writeFile(
+      policyPath,
+      `${await readFile(policyPath, "utf8")}\nembedded-policy-resource-probe\n`,
+    );
+    const build = run("npm", ["run", "bundle"], directory);
+    assert.equal(build.status, 0);
+    await rm(join(directory, "src"), { recursive: true });
+    await rm(join(directory, "scripts"), { recursive: true });
+    await rm(join(directory, "node_modules"), { recursive: true });
+    await rm(join(directory, "automation"), { recursive: true });
+    await rm(join(directory, "package.json"));
+    for (const entry of await readdir(join(directory, "dist")))
+      if (entry !== "cli.mjs") await rm(join(directory, "dist", entry), { recursive: true });
+    const result = run(process.execPath, [join(directory, "dist/cli.mjs"), "--version"], directory);
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout.trim(), `${manifest.version}\ncompiled-dependency-graph\ntrue`);
   });
 });
 

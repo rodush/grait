@@ -1,6 +1,7 @@
 import { readdir, readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { join, dirname } from "node:path";
+import { build } from "esbuild";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const output = join(root, "dist");
@@ -33,9 +34,28 @@ async function files(directory, prefix = "") {
   return result;
 }
 
-// Copy dependency-free ESM modules without machine paths, timestamps, or install hooks.
-const expected = await files(join(root, "src"));
-if (!expected.has("cli.mjs")) throw new Error("The CLI source entrypoint is missing");
+// One Node.js entry embeds all executable helpers, policy, and version data.
+// Imports and subprocess adapters reuse this file without package siblings.
+const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const policy = await readFile(join(root, "automation/policy/shared.md"), "utf8");
+const result = await build({
+  absWorkingDir: root,
+  entryPoints: ["src/cli.mjs"],
+  outfile: join(output, "cli.mjs"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node24",
+  minify: true,
+  write: false,
+  legalComments: "none",
+  define: {
+    GRAIT_BUNDLED: "true",
+    GRAIT_VERSION: JSON.stringify(version),
+    GRAIT_SHARED_POLICY: JSON.stringify(policy),
+  },
+});
+const expected = new Map([["cli.mjs", Buffer.from(result.outputFiles[0].contents)]]);
 if (args.includes("--check")) {
   const actual = await files(output);
   const changed = [...new Set([...expected.keys(), ...actual.keys()])]

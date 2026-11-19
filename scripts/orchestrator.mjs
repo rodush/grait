@@ -1,3 +1,5 @@
+import { isEntrypoint } from "./lib/entrypoint.mjs";
+import { bundledRuntime } from "./lib/runtime-resources.mjs";
 import { parseArgs } from "node:util";
 import { readFile, mkdir } from "node:fs/promises";
 import { resolve, join, dirname } from "node:path";
@@ -14,7 +16,16 @@ import {
 } from "./lib/tdd.mjs";
 import { verifyCommits } from "./lib/verification.mjs";
 
-async function main() {
+function skillPath(engine, role) {
+  const directory = {
+    codex: ".agents/skills",
+    claude: ".claude/skills",
+    copilot: ".github/skills",
+  }[engine];
+  return `${directory}/grait-${role}/SKILL.md`;
+}
+
+export async function orchestratorMain() {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
@@ -73,8 +84,7 @@ async function main() {
       harnessArguments(config.engine, {
         role: "orchestrator",
         reasoning: config.orchestrator.reasoning,
-        prompt:
-          "Apply the grait-orchestrator skill at automation/skills/grait-orchestrator/SKILL.md. Manage this repository's Project queue and delegate specialist sub-agents locally in assigned worktrees. Finish existing Review work before admitting new stories. Use the native subscription login. Check pause state before each stage; humans merge and release.",
+        prompt: `Apply the grait-orchestrator skill at ${skillPath(config.engine, "orchestrator")}. Manage this repository's Project queue and delegate specialist sub-agents locally in assigned worktrees. Finish existing Review work before admitting new stories. Use the native subscription login. Check pause state before each stage; humans merge and release.`,
       }),
       { interactive: true, env },
     );
@@ -290,7 +300,7 @@ async function main() {
           throw new Error("This role does not own the accepted TDD handoff");
         launch = {
           cwd: target,
-          prompt: `Apply the grait-${values.role} skill at automation/skills/grait-${values.role}/SKILL.md for claimed issue #${number}. This is the assigned shared issue worktree. Verify the exact committed handoff and next owner in the issue ledger before writing. Use this branch and worktree for every command. Return committed changes and validation evidence to the orchestrator. Do not create another worktree or edit the other role's files.`,
+          prompt: `Apply the grait-${values.role} skill at ${skillPath(context.config.engine, values.role)} for claimed issue #${number}. This is the assigned shared issue worktree. Verify the exact committed handoff and next owner in the issue ledger before writing. Use this branch and worktree for every command. Return committed changes and validation evidence to the orchestrator. Do not create another worktree or edit the other role's files.`,
         };
       }
     } else result = await orchestrator[task](number);
@@ -320,7 +330,8 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (!bundledRuntime && isEntrypoint(import.meta.url))
+  orchestratorMain().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
