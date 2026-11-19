@@ -12,7 +12,13 @@ const realGit = realpathSync(
     .map((entry) => join(entry, "git"))
     .find((entry) => existsSync(entry)),
 );
-const statuses = ["Backlog", "Ready", "In Progress", "Review", "Done"];
+const defaultStatuses = {
+  backlog: "Backlog",
+  ready: "Ready",
+  inProgress: "In Progress",
+  review: "In Review",
+  done: "Done",
+};
 
 export async function setupFixture(overrides = {}) {
   const directory = await mkdtemp(join(tmpdir(), "grait-setup-acceptance-"));
@@ -46,6 +52,7 @@ export async function setupFixture(overrides = {}) {
     }
   }
   const config = JSON.parse(await readFile(join(directory, "workflow.config.json"), "utf8"));
+  config.statuses = { ...defaultStatuses, ...overrides.projectStatuses };
   config.applicationMarker = "preserve-application-setting";
   if (overrides.configured) {
     config.controllerRepository = "acme/service";
@@ -74,6 +81,7 @@ export async function setupFixture(overrides = {}) {
     commands: [],
     createdProjects: 0,
     ...overrides,
+    projectStatusNames: Object.values(config.statuses),
   };
   await writeFile(statePath, JSON.stringify(state));
   await writeFile(join(directory, "preload.mjs"), preload);
@@ -184,7 +192,6 @@ const preload = `
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 const statePath = process.env.GRAIT_SETUP_FIXTURE_STATE;
-const statuses = ${JSON.stringify(statuses)};
 const save = state => writeFileSync(statePath, JSON.stringify(state));
 globalThis.fetch = async (url, options = {}) => {
   const state = JSON.parse(readFileSync(statePath, "utf8"));
@@ -246,7 +253,7 @@ globalThis.fetch = async (url, options = {}) => {
       if (state.failProjectDetails) {
         status = 503;
         value = { message: "Synthetic interrupted setup" };
-      } else value = { data: { node: { ...project, fields: { nodes: [{ id: "status-node", name: "Status", options: statuses.map(name => ({ id: name, name })) }] }, views: { nodes: [{ id: "view-node", name: "Kanban", layout: "BOARD_LAYOUT" }] } } } };
+      } else value = { data: { node: { ...project, fields: { nodes: [{ id: "status-node", name: "Status", options: state.projectStatusNames.map(name => ({ id: name, name })) }] }, views: { nodes: [{ id: "view-node", name: "Kanban", layout: "BOARD_LAYOUT" }] } } } };
     } else if (query.includes("repositoryOwner(")) value = { data: { repositoryOwner: { projectV2: project } } };
     else if (query.includes("node(id:")) value = { data: { node: project } };
     else value = { data: { ok: true } };
@@ -255,7 +262,10 @@ globalThis.fetch = async (url, options = {}) => {
   else if (method === "GET" && path === "repos/acme/service/labels") value = [];
   else if (method === "GET" && path.startsWith("apps/")) {
     const slug = path.slice(5);
-    value = { id: slug.includes("reviewer") ? 200 : 100, slug, owner: state.repository.owner };
+    if (state.hidePublishingApps) {
+      status = 404;
+      value = { message: "Not Found" };
+    } else value = { id: slug.includes("reviewer") ? 200 : 100, slug, owner: state.repository.owner };
   }
   else if (method === "GET" && path === "repos/acme/service/issues/900/comments") {
     value = [{ id: 901, user: { login: "operator" }, body: '<!-- workflow-state:v1 -->\\n\\n' + '\\u0060\\u0060\\u0060json\\n' + JSON.stringify({ version: 1, number: 900, reservations: [{ operation: "preserved" }] }) + '\\n\\u0060\\u0060\\u0060' }];

@@ -324,6 +324,8 @@ async function main() {
       maintainers,
       "--writer-login",
       `${store.state.apps.writer.slug}[bot]`,
+      "--status-app-id",
+      String(store.state.apps.writer.id),
       "--reviewer-login",
       `${store.state.apps.reviewer.slug}[bot]`,
     ];
