@@ -94,7 +94,13 @@ test("distribution contains one self-contained compiled CLI", async () => {
       assert.equal(result.status, 0);
       assert.equal(result.stderr, "");
       if (args[0] === "--version") assert.equal(result.stdout.trim(), manifest.version);
-      else assert.match(result.stdout, /usage/i);
+      else if (args[0] === "orchestrator") {
+        assert.match(result.stdout, /claim\s+--issue/i);
+        assert.match(result.stdout, /verify\s+--issue/i);
+      } else if (args[0] === "github") {
+        assert.match(result.stdout, /grait github push\s+--issue/i);
+        assert.match(result.stdout, /grait github pr\s+--issue/i);
+      } else assert.match(result.stdout, /orchestrator[\s\S]*github/);
     }
   });
 });
