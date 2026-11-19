@@ -12,7 +12,9 @@ Application checks every target snapshot before writing. An intervening target e
 
 ## Failure and recovery
 
-Before each mutation, application records rollback intent durably in a private journal. Default file writes use a temporary file and atomic rename. A failed application restores the original file contents and removes empty directories created by the transaction. An optional asynchronous `writeFile(path, content)` argument on `applyArtifacts` supports controlled write-failure injection; it does not change the journal protocol.
+Before each mutation, application records rollback intent durably in a private journal. Default file writes use a temporary file and atomic rename. The journal records each target temporary path before creation, then records the created file identity before writing its contents. Rollback and recovery remove those transaction-owned files and empty directories created by the transaction. They preserve unknown or subsequently edited files and leave the transaction pending when a conflict requires operator reconciliation.
+
+A failed application restores the original file contents only while each affected path still matches a known transaction snapshot. The same conflict checks apply during immediate rollback and later recovery. An optional asynchronous `writeFile(path, content)` argument on `applyArtifacts` supports controlled write-failure injection. The default writer also accepts an asynchronous `beforeRename({ path, temporaryPath })` hook after flushing the temporary contents and before renaming them; this supports deterministic interruption checks without replacing the writer or journal protocol.
 
 If a process exits before rollback completes, keep its plan and journal and call `recoverArtifacts({ root, stateDirectory, id })`. Recovery refuses to interrupt a live transaction. After confirming that a recorded lock's process no longer exists, it restores the interrupted transaction's original contents. Recovery rejects conflicting subsequent edits rather than overwriting them. Inspect and reconcile any reported conflict before retrying. A completed or already rolled-back transaction needs no recovery.
 

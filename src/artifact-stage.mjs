@@ -87,24 +87,28 @@ async function contents(root, path) {
   return { content: await readFile(destination, "utf8"), mode: value.mode & 0o777 };
 }
 
-async function atomicWrite(path, content, mode = 0o600) {
+async function atomicWrite(path, content, mode = 0o600, hooks = {}) {
   await regularAncestors(path);
   const temporary = join(dirname(path), `.grait-${randomBytes(16).toString("hex")}.tmp`);
+  await hooks.prepareTemporary?.(temporary);
   const file = await open(
     temporary,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
     mode,
   );
   try {
+    await hooks.openedTemporary?.(temporary, await file.stat());
     await file.writeFile(content);
     await file.sync();
     await file.close();
+    await hooks.beforeRename?.({ path, temporaryPath: temporary });
     await rename(temporary, path);
   } finally {
     await file.close();
-    await unlink(temporary).catch((error) => {
-      if (error.code !== "ENOENT") throw error;
-    });
+    if (!hooks.prepareTemporary)
+      await unlink(temporary).catch((error) => {
+        if (error.code !== "ENOENT") throw error;
+      });
   }
 }
 
@@ -189,14 +193,69 @@ async function missingParents(root, changes) {
   );
 }
 
-async function restore(root, plan, journal, { ownedFailure = false } = {}) {
+function transactionWriter(root, journal, journalPath) {
+  return async (path, content, mode, beforeRename) => {
+    let entry;
+    await atomicWrite(path, content, mode, {
+      prepareTemporary: async (temporary) => {
+        entry = {
+          path: relative(root, temporary),
+          artifact: relative(root, path),
+          content,
+          identity: null,
+        };
+        journal.temporaryFiles.push(entry);
+        await save(journalPath, journal);
+      },
+      openedTemporary: async (_temporary, metadata) => {
+        entry.identity = { dev: metadata.dev, ino: metadata.ino };
+        await save(journalPath, journal);
+      },
+      beforeRename,
+    });
+  };
+}
+
+async function temporaryFiles(root, plan, journal, remove = false) {
+  for (const entry of journal.temporaryFiles) {
+    artifactPath(entry.path);
+    const artifact = plan.changes.find((change) => change.path === entry.artifact);
+    if (
+      !artifact ||
+      dirname(entry.path) !== dirname(entry.artifact) ||
+      !/^\.grait-[a-f0-9]{32}\.tmp$/.test(entry.path.split(sep).at(-1)) ||
+      ![artifact.before, artifact.after].includes(entry.content)
+    )
+      throw new Error("Invalid transaction-owned temporary path");
+    const destination = join(root, entry.path);
+    await regularAncestors(destination);
+    const metadata = await info(destination);
+    if (!metadata) continue;
+    const current = await readFile(destination);
+    // An exclusive-create collision or later replacement is not our file.
+    // A known inode may contain a prefix if interrupted during its write.
+    if (
+      !entry.identity ||
+      metadata.dev !== entry.identity.dev ||
+      metadata.ino !== entry.identity.ino ||
+      typeof entry.content !== "string" ||
+      !Buffer.from(entry.content).subarray(0, current.length).equals(current)
+    )
+      throw new Error(`Recovery conflicts with an unowned or edited temporary file: ${entry.path}`);
+    if (remove) await unlink(destination);
+  }
+}
+
+async function restore(root, plan, journal, journalPath) {
   // Preflight every affected file before rollback, so recovery never silently
   // replaces an edit made after the interrupted process exited.
   for (const change of plan.changes.slice(0, journal.attempted)) {
     const current = await contents(root, change.path);
-    if (!ownedFailure && current.content !== change.before && current.content !== change.after)
+    if (current.content !== change.before && current.content !== change.after)
       throw new Error(`Recovery conflicts with a later project edit: ${change.path}`);
   }
+  await temporaryFiles(root, plan, journal);
+  const writeSnapshot = transactionWriter(root, journal, journalPath);
   for (const change of plan.changes.slice(0, journal.attempted).reverse()) {
     const destination = join(root, change.path);
     if (change.before === null) {
@@ -206,9 +265,10 @@ async function restore(root, plan, journal, { ownedFailure = false } = {}) {
     } else {
       await regularAncestors(dirname(destination), { directory: true });
       await mkdir(dirname(destination), { recursive: true });
-      await atomicWrite(destination, change.before, change.mode ?? 0o644);
+      await writeSnapshot(destination, change.before, change.mode ?? 0o644);
     }
   }
+  await temporaryFiles(root, plan, journal, true);
   for (const path of [...journal.createdDirectories].reverse()) {
     const destination = join(root, artifactPath(path));
     await regularAncestors(destination, { directory: true });
@@ -240,7 +300,7 @@ export async function stageArtifacts({ root, artifacts, stateDirectory }) {
 }
 
 /** Apply a reviewed preview, recording rollback intent before each target write. */
-export async function applyArtifacts({ root, stateDirectory, id, writeFile }) {
+export async function applyArtifacts({ root, stateDirectory, id, writeFile, beforeRename }) {
   const location = await locations(root, stateDirectory);
   const release = await acquire(location.stateDirectory);
   try {
@@ -270,8 +330,10 @@ export async function applyArtifacts({ root, stateDirectory, id, writeFile }) {
       status: "applying",
       attempted: 0,
       createdDirectories: await missingParents(location.root, plan.changes),
+      temporaryFiles: [],
     };
     await save(journalPath, journal);
+    const writeSnapshot = transactionWriter(location.root, journal, journalPath);
     try {
       for (let index = 0; index < plan.changes.length; index++) {
         const change = plan.changes[index];
@@ -289,14 +351,14 @@ export async function applyArtifacts({ root, stateDirectory, id, writeFile }) {
             await writeFile(destination, change.after);
             await regularAncestors(destination);
             await chmod(destination, change.mode ?? 0o644);
-          } else await atomicWrite(destination, change.after, change.mode ?? 0o644);
+          } else await writeSnapshot(destination, change.after, change.mode ?? 0o644, beforeRename);
         }
       }
       journal.status = "applied";
       await save(journalPath, journal);
     } catch (error) {
       try {
-        await restore(location.root, plan, journal, { ownedFailure: true });
+        await restore(location.root, plan, journal, journalPath);
         journal.status = "rolled-back";
         await save(journalPath, journal);
       } catch {
@@ -339,7 +401,10 @@ export async function recoverArtifacts({ root, stateDirectory, id }) {
     if (["applied", "rolled-back"].includes(journal.status))
       return { id, recovered: false, changes: [] };
     if (journal.status !== "applying") throw new Error("Invalid artifact recovery state");
-    await restore(location.root, plan, journal);
+    if (journal.temporaryFiles === undefined) journal.temporaryFiles = [];
+    if (!Array.isArray(journal.temporaryFiles))
+      throw new Error("Invalid artifact temporary-file journal");
+    await restore(location.root, plan, journal, journalPath);
     journal.status = "rolled-back";
     await save(journalPath, journal);
     return { id, recovered: true, changes: plan.changes.slice(0, journal.attempted) };
