@@ -1,17 +1,331 @@
+// scripts/bootstrap.mjs
 import { parseArgs, promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { readFile, writeFile } from "node:fs/promises";
-import { GitHub } from "./lib/github.mjs";
-import {
-  repositoryRules,
-  repositorySettings,
-  resolveActionsAppId,
-  preserveCodeowners,
-} from "./lib/bootstrap.mjs";
-import { sameLogin } from "./lib/policy.mjs";
-import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
 
-const { values } = parseArgs({
+// scripts/lib/github.mjs
+var GitHub = class {
+  constructor(
+    token,
+    { fetcher = fetch, apiUrl = process.env.GITHUB_API_URL || "https://api.github.com" } = {},
+  ) {
+    if (!token) throw new Error("A GitHub token is required");
+    this.token = token;
+    this.fetcher = fetcher;
+    this.apiUrl = apiUrl.replace(/\/$/, "");
+  }
+  async request(path, { method = "GET", body, binary = false } = {}) {
+    const response = await this.fetcher(`${this.apiUrl}/${path.replace(/^\//, "")}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2026-03-10",
+        "Content-Type": "application/json",
+      },
+      body: body === void 0 ? void 0 : JSON.stringify(body),
+      signal: AbortSignal.timeout(3e4),
+    });
+    if (!response.ok) {
+      const error = new Error(`GitHub ${method} ${path.split("?")[0]} returned ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return binary
+      ? Buffer.from(await response.arrayBuffer())
+      : response.status === 204
+        ? null
+        : response.json();
+  }
+  async list(path, key) {
+    const values2 = [];
+    for (let page = 1; page <= 1e3; page++) {
+      const separator = path.includes("?") ? "&" : "?";
+      const response = await this.request(`${path}${separator}per_page=100&page=${page}`);
+      const batch = key ? response[key] : response;
+      if (!Array.isArray(batch)) throw new Error(`Invalid paginated response for ${path}`);
+      values2.push(...batch);
+      if (batch.length < 100) return values2;
+    }
+    throw new Error(`Pagination limit reached for ${path}`);
+  }
+  async graphql(query, variables = {}) {
+    const response = await this.request("graphql", { method: "POST", body: { query, variables } });
+    if (response.errors?.length || !response.data)
+      throw new Error("GitHub GraphQL returned an incomplete result");
+    return response.data;
+  }
+};
+
+// scripts/lib/bootstrap.mjs
+async function resolveActionsAppId(api) {
+  const app = await api.request("apps/github-actions");
+  if (
+    app?.slug !== "github-actions" ||
+    typeof app.id !== "number" ||
+    !Number.isSafeInteger(app.id) ||
+    app.id <= 0
+  )
+    throw new Error(
+      "Invalid GitHub Actions publisher metadata: expected github-actions and a positive safe integer App ID",
+    );
+  return app.id;
+}
+function repositoryRules(actors, statusAppId, releaseAppId, actionsAppId) {
+  if (typeof actionsAppId !== "number" || !Number.isSafeInteger(actionsAppId) || actionsAppId <= 0)
+    throw new Error(
+      "A resolved positive safe integer GitHub Actions App ID is required for the CI publisher binding",
+    );
+  const conditions = { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } };
+  return [
+    {
+      name: "Required delivery gates",
+      target: "branch",
+      enforcement: "active",
+      bypass_actors: [],
+      conditions,
+      rules: [
+        { type: "deletion" },
+        { type: "non_fast_forward" },
+        { type: "required_linear_history" },
+        {
+          type: "pull_request",
+          parameters: {
+            required_approving_review_count: 1,
+            dismiss_stale_reviews_on_push: true,
+            require_code_owner_review: true,
+            require_last_push_approval: true,
+            required_review_thread_resolution: true,
+            allowed_merge_methods: ["squash"],
+          },
+        },
+        {
+          type: "required_status_checks",
+          parameters: {
+            strict_required_status_checks_policy: true,
+            required_status_checks: [
+              { context: "Template validation", integration_id: actionsAppId },
+              {
+                context: "Agent review",
+                ...(statusAppId ? { integration_id: Number(statusAppId) } : {}),
+              },
+            ],
+          },
+        },
+      ],
+    },
+    {
+      // Human actors bypass only update restriction, never the independent delivery-gate ruleset.
+      name: "Human merge authority",
+      target: "branch",
+      enforcement: "active",
+      conditions,
+      bypass_actors: actors.map((actor) => ({
+        actor_id: actor.id,
+        actor_type: "User",
+        bypass_mode: "pull_request",
+      })),
+      rules: [{ type: "update" }],
+    },
+    {
+      name: "Release tag creation",
+      target: "tag",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+      bypass_actors: releaseAppId
+        ? [{ actor_id: Number(releaseAppId), actor_type: "Integration", bypass_mode: "always" }]
+        : actors.map((actor) => ({
+            actor_id: actor.id,
+            actor_type: "User",
+            bypass_mode: "always",
+          })),
+      rules: [{ type: "creation" }],
+    },
+    {
+      name: "Immutable release tags",
+      target: "tag",
+      enforcement: "active",
+      conditions: { ref_name: { include: ["refs/tags/v*"], exclude: [] } },
+      bypass_actors: [],
+      rules: [{ type: "update" }, { type: "deletion" }],
+    },
+  ];
+}
+var repositorySettings = {
+  allow_squash_merge: true,
+  allow_merge_commit: false,
+  allow_rebase_merge: false,
+  allow_auto_merge: false,
+  delete_branch_on_merge: true,
+  squash_merge_commit_title: "PR_TITLE",
+  squash_merge_commit_message: "PR_BODY",
+};
+function preserveCodeowners(original, logins) {
+  const operators = logins.map((login) => `@${login}`);
+  let hasDefault = false;
+  const lines = original.split(/\r?\n/).map((line) => {
+    if (!line.trim() || line.trimStart().startsWith("#")) return line;
+    const match = line.match(/^(\s*)(\S+)(.*)$/);
+    if (!match) return line;
+    if (match[2] === "*") hasDefault = true;
+    const commentAt = match[3].indexOf("#");
+    const owners = (commentAt < 0 ? match[3] : match[3].slice(0, commentAt)).trim();
+    const comment = commentAt < 0 ? "" : ` ${match[3].slice(commentAt)}`;
+    const existing = owners.split(/\s+/).filter(Boolean);
+    for (const operator of operators)
+      if (!existing.some((owner) => owner.toLowerCase() === operator.toLowerCase()))
+        existing.push(operator);
+    return `${match[1]}${match[2]} ${existing.join(" ")}${comment}`;
+  });
+  if (!hasDefault) lines.unshift(`* ${operators.join(" ")}`);
+  return lines.join("\n").replace(/\n*$/, "\n");
+}
+
+// scripts/lib/policy.mjs
+var sameLogin = (a, b) =>
+  typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+
+// scripts/lib/ruleset-setup.mjs
+import { createInterface } from "node:readline";
+function pending() {
+  const error = new Error(
+    "Ruleset configuration is pending. Rerun the same command after completing the configuration, or add --acknowledge-unenforced-rules to explicitly continue without verified GitHub enforcement. The overall setup --yes flag does not acknowledge this choice.",
+  );
+  error.code = "RULESET_SETUP_PENDING";
+  return error;
+}
+async function ask() {
+  if (!process.stdin.isTTY) return null;
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await new Promise((resolve) => {
+      terminal.once("close", () => resolve(null));
+      terminal.once("SIGINT", () => terminal.close());
+      terminal.question(
+        "Complete the configuration, then type completed to verify it; type continue to acknowledge unenforced rules, or pause to resume later: ",
+        resolve,
+      );
+    });
+  } finally {
+    terminal.close();
+  }
+}
+function matches(actual, expected) {
+  if (Array.isArray(expected))
+    return (
+      Array.isArray(actual) &&
+      actual.length === expected.length &&
+      expected.every((value) => actual.some((item) => matches(item, value)))
+    );
+  if (expected && typeof expected === "object")
+    return (
+      actual &&
+      typeof actual === "object" &&
+      Object.entries(expected).every(([key, value]) => matches(actual[key], value))
+    );
+  return actual === expected;
+}
+async function configureRepositoryRules({
+  api,
+  repo: repo2,
+  rules,
+  phase,
+  acknowledgeUnenforced = false,
+  prompt = ask,
+  log = console.log,
+}) {
+  if (!["stage", "activate"].includes(phase)) throw new Error("Invalid ruleset setup phase");
+  let expected = rules.map((rule) => ({
+    ...rule,
+    enforcement: phase === "stage" && rule.target === "branch" ? "disabled" : "active",
+  }));
+  let failure;
+  try {
+    const existingRules = await api.list(`repos/${repo2}/rulesets`);
+    expected = expected.map((rule) => {
+      const existing = existingRules.find(
+        (item) => item.name === rule.name && sameLogin(item.source, repo2),
+      );
+      return {
+        ...rule,
+        enforcement:
+          phase === "stage" && rule.target === "branch"
+            ? existing?.enforcement || "disabled"
+            : "active",
+      };
+    });
+    for (const rule of expected) {
+      const existing = existingRules.find(
+        (item) => item.name === rule.name && sameLogin(item.source, repo2),
+      );
+      if (!existing && phase === "activate") throw new Error("Missing staged ruleset");
+      await api.request(
+        existing ? `repos/${repo2}/rulesets/${existing.id}` : `repos/${repo2}/rulesets`,
+        { method: existing ? "PUT" : "POST", body: rule },
+      );
+    }
+    return { enforcement: phase === "stage" ? "staged" : "active" };
+  } catch (error) {
+    failure = error;
+  }
+  const explain = (error) => {
+    const status = Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599;
+    log(
+      status
+        ? `GitHub ruleset configuration returned HTTP ${error.status}.`
+        : "GitHub ruleset configuration could not be completed or verified.",
+    );
+    log(`Manual configuration: https://github.com/${repo2}/settings/rules`);
+    log(
+      "Create or update each named ruleset using the exact JSON configuration below (import each object separately), including its enforcement setting. Branch rules remain staged until activation.",
+    );
+    for (const rule of expected) log(JSON.stringify(rule, null, 2));
+    log(
+      "GitHub Free private repositories do not support rulesets through the API or settings UI. If unavailable, you may explicitly continue without verified GitHub enforcement; rulesets can be configured later on a supported plan. Other errors may require correcting permissions, configuration, or connectivity before retrying.",
+    );
+    log(
+      "Human approval and merge remain mandatory: agents must never merge PRs or release. Continuing does not verify server-side enforcement; some rules may already have been applied.",
+    );
+    log(
+      "To deliberately continue without verified rulesets in a noninteractive session, rerun the same command with --acknowledge-unenforced-rules. The overall setup --yes flag only accepts the original plan and does not acknowledge unenforced rules.",
+    );
+  };
+  explain(failure);
+  if (!acknowledgeUnenforced) {
+    for (;;) {
+      const answer = (await prompt())?.trim().toLowerCase();
+      if (answer === "continue") break;
+      if (answer === "completed") {
+        try {
+          const existingRules = await api.list(`repos/${repo2}/rulesets`);
+          for (const rule of expected) {
+            const existing = existingRules.find(
+              (item) => item.name === rule.name && sameLogin(item.source, repo2),
+            );
+            if (!existing) throw new Error("Missing manually configured ruleset");
+            const actual = await api.request(`repos/${repo2}/rulesets/${existing.id}`);
+            if (!matches(actual, rule)) throw new Error("Manual ruleset configuration differs");
+          }
+          log("Manual ruleset configuration verified.");
+          return { enforcement: phase === "stage" ? "staged" : "active" };
+        } catch (error) {
+          explain(error);
+        }
+      } else if (!answer || answer === "pause") {
+        throw pending();
+      } else {
+        log("Choose completed, continue, or pause. No acknowledgement has been recorded.");
+      }
+    }
+  }
+  log(
+    "Explicit acknowledgement received: continuing with unenforced rules (GitHub enforcement is not fully verified). Human approval and human merge are still required; agents never merge or release.",
+  );
+  return { enforcement: "unenforced" };
+}
+
+// scripts/bootstrap.mjs
+var { values } = parseArgs({
   options: {
     repo: { type: "string" },
     "project-owner": { type: "string" },
@@ -25,14 +339,14 @@ const { values } = parseArgs({
     "acknowledge-unenforced-rules": { type: "boolean" },
   },
 });
-const config = JSON.parse(await readFile("workflow.config.json", "utf8"));
-const repo = values.repo || config.controllerRepository;
-let projectOwner = values["project-owner"] || repo?.split("/")[0];
-const maintainers = (values.maintainers || "")
+var config = JSON.parse(await readFile("workflow.config.json", "utf8"));
+var repo = values.repo || config.controllerRepository;
+var projectOwner = values["project-owner"] || repo?.split("/")[0];
+var maintainers = (values.maintainers || "")
   .split(",")
   .map((name) => name.trim().replace(/^@/, ""))
   .filter(Boolean);
-const plan = {
+var plan = {
   repository: repo || "UNCONFIGURED",
   projectOwner: projectOwner || "UNCONFIGURED",
   project: values["project-number"]
@@ -57,7 +371,6 @@ const plan = {
   automationEnabled: false,
   acknowledgeUnenforcedRules: Boolean(values["acknowledge-unenforced-rules"]),
 };
-
 if (!values.apply) {
   console.log(JSON.stringify(plan, null, 2));
   console.log(
@@ -83,7 +396,7 @@ if (!values.apply) {
       throw new Error("Invalid project number");
     const suppliedStatusAppId = values["status-app-id"];
     if (
-      suppliedStatusAppId !== undefined &&
+      suppliedStatusAppId !== void 0 &&
       (!/^[1-9]\d*$/.test(suppliedStatusAppId) ||
         !Number.isSafeInteger(Number(suppliedStatusAppId)))
     )
@@ -188,7 +501,6 @@ if (!values.apply) {
     const previousBinding = project.shortDescription?.match(/\[agent-controller:([^\]]+)\]/)?.[1];
     if (previousBinding && !sameLogin(previousBinding, repo))
       throw new Error("Project is already bound to another orchestrator repository");
-    // Save the returned identity before further configuration; never create a duplicate on retry.
     await setVariable("PROJECT_ID", project.id);
     await setVariable("PROJECT_NUMBER", project.number);
     await setVariable("PROJECT_OWNER", projectOwner);
@@ -259,7 +571,7 @@ if (!values.apply) {
     await setVariable("PROJECT_SETUP_STATUS", "initialized");
     await api.request(`repos/${repo}`, { method: "PATCH", body: repositorySettings });
     const statusAppId =
-      suppliedStatusAppId !== undefined
+      suppliedStatusAppId !== void 0
         ? Number(suppliedStatusAppId)
         : values["writer-login"].endsWith("[bot]")
           ? (await api.request(`apps/${values["writer-login"].replace(/\[bot\]$/, "")}`)).id
@@ -321,7 +633,11 @@ if (!values.apply) {
       );
     config.controllerRepository = repo;
     config.humanOperators = actors.map((actor) => actor.login);
-    await writeFile("workflow.config.json", `${JSON.stringify(config, null, 2)}\n`);
+    await writeFile(
+      "workflow.config.json",
+      `${JSON.stringify(config, null, 2)}
+`,
+    );
     const originalOwners = await readFile(".github/CODEOWNERS", "utf8").catch((error) => {
       if (error.code === "ENOENT") return "# Human ownership is required for every change.\n";
       throw error;

@@ -1,11 +1,21 @@
+// src/runtime.mjs
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { resolve } from "node:path";
-import { packageResource } from "./resources.mjs";
 
-const execute = promisify(execFile);
+// scripts/lib/runtime-resources.mjs
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+var runtimeDirectory = true
+  ? fileURLToPath(new URL("./", import.meta.url))
+  : fileURLToPath(new URL("../../", import.meta.url));
+function packageResource(path) {
+  return join(runtimeDirectory, path);
+}
 
-export async function targetRoot(cwd = process.cwd()) {
+// src/runtime.mjs
+var execute = promisify(execFile);
+async function targetRoot(cwd = process.cwd()) {
   try {
     const { stdout } = await execute("git", ["rev-parse", "--show-toplevel"], {
       cwd: resolve(cwd),
@@ -16,8 +26,7 @@ export async function targetRoot(cwd = process.cwd()) {
     throw new Error("Choose a Git repository with --cwd PATH");
   }
 }
-
-export async function runRuntime({ command, args = [], cwd = process.cwd() }) {
+async function runRuntime({ command, args = [], cwd = process.cwd() }) {
   if (!["orchestrator", "github"].includes(command)) throw new Error("Unknown runtime command");
   const root = args.includes("--help") ? resolve(cwd) : await targetRoot(cwd);
   return new Promise((resolveResult, reject) => {
@@ -34,3 +43,4 @@ export async function runRuntime({ command, args = [], cwd = process.cwd() }) {
     });
   });
 }
+export { runRuntime, targetRoot };

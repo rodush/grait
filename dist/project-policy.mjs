@@ -1,7 +1,19 @@
+// src/project-policy.mjs
 import { readFile } from "node:fs/promises";
 
-const policyUrl = new URL("../automation/policy/shared.md", import.meta.url);
-const roles = {
+// scripts/lib/runtime-resources.mjs
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+var runtimeDirectory = true
+  ? fileURLToPath(new URL("./", import.meta.url))
+  : fileURLToPath(new URL("../../", import.meta.url));
+function packageResource(path) {
+  return join(runtimeDirectory, path);
+}
+
+// src/project-policy.mjs
+var policyUrl = packageResource("automation/policy/shared.md");
+var roles = {
   orchestrator: {
     description: "Coordinate the Project queue and local specialist handoffs.",
     instructions:
@@ -33,7 +45,6 @@ const roles = {
       "Read published findings and original review threads directly from GitHub. Stay within the existing issue claim and accepted fix scope. Use `grait orchestrator next` for the accepted cycle; incremental fixes stay Review and redesign reacquires capacity. Repeat tester-first ownership, independent Red, implementation, and independent Green. Own production only during implementation; never inspect test internals. Return finding IDs, exact committed head, and verification evidence for the original review threads. Stop at bounded-loop limits and leave human objections for humans.",
   },
 };
-
 function validateVersion(version) {
   if (
     typeof version !== "string" ||
@@ -41,16 +52,17 @@ function validateVersion(version) {
   )
     throw new Error("Provide a safe semantic policy version");
 }
-
 function updateManaged(original, body, version, { comment = false } = {}) {
   const start = comment ? "# grait:policy:start version=" : "<!-- grait:policy:start version=";
   const end = comment ? "# grait:policy:end" : "<!-- grait:policy:end -->";
   const opening = comment ? `${start}${version}` : `${start}${version} -->`;
-  const managed = `${opening}\n${body.trim()}\n${end}`;
-  // Every recognized marker must belong to exactly one complete, ordered section.
+  const managed = `${opening}
+${body.trim()}
+${end}`;
   const markerCount = (original.match(/grait:policy:(?:start|end)/g) || []).length;
   if (!markerCount)
-    return `${original}${original && !original.endsWith("\n") ? "\n" : ""}${original ? "\n" : ""}${managed}\n`;
+    return `${original}${original && !original.endsWith("\n") ? "\n" : ""}${original ? "\n" : ""}${managed}
+`;
   const pattern = comment
     ? /^# grait:policy:start version=[^\r\n]+\r?\n[\s\S]*?^# grait:policy:end$/m
     : /<!-- grait:policy:start version=[^\r\n<>]+ -->\r?\n[\s\S]*?<!-- grait:policy:end -->/;
@@ -59,7 +71,6 @@ function updateManaged(original, body, version, { comment = false } = {}) {
     throw new Error("Malformed or duplicate GRAIT managed policy boundaries");
   return original.slice(0, match.index) + managed + original.slice(match.index + match[0].length);
 }
-
 function roleBody(role, instructions) {
   return (
     "# GRAIT " +
@@ -69,13 +80,15 @@ function roleBody(role, instructions) {
     "\n\nUse the packaged `grait orchestrator` and `grait github` commands from the target repository. This role grants no additional permissions."
   );
 }
-
 function frontmatter(name, description) {
-  return `---\nname: ${name}\ndescription: ${JSON.stringify(description)}\n---\n\n`;
-}
+  return `---
+name: ${name}
+description: ${JSON.stringify(description)}
+---
 
-/** Return durable project artifacts without reading or writing the target repository. */
-export async function generateProjectArtifacts({ harness, version, project = {}, existing = {} }) {
+`;
+}
+async function generateProjectArtifacts({ harness, version, project = {}, existing = {} }) {
   if (!["codex", "claude", "copilot"].includes(harness))
     throw new Error("Choose a supported harness: codex, claude, or copilot");
   validateVersion(version);
@@ -86,7 +99,7 @@ export async function generateProjectArtifacts({ harness, version, project = {},
   for (const value of Object.values(existing))
     if (typeof value !== "string") throw new Error("Existing artifact content must be text");
   for (const key of ["name", "context"])
-    if (project[key] !== undefined && typeof project[key] !== "string")
+    if (project[key] !== void 0 && typeof project[key] !== "string")
       throw new Error("Project name and context must be text");
   if ([project.name, project.context].some((text) => text?.includes("grait:policy:")))
     throw new Error("Project context cannot contain managed policy boundaries");
@@ -99,7 +112,12 @@ export async function generateProjectArtifacts({ harness, version, project = {},
   const context = [project.name ? `# ${project.name}` : "# Project instructions", project.context]
     .filter(Boolean)
     .join("\n\n");
-  emit("AGENTS.md", `${context}\n\n${policy}`);
+  emit(
+    "AGENTS.md",
+    `${context}
+
+${policy}`,
+  );
   const harnessInstructions =
     "Read `AGENTS.md` for shared engineering policy and the project's stack and exact commands. Use `grait orchestrator` for local queue coordination and `grait github` for scoped publishing. Apply the selected GRAIT role instructions. Humans approve, merge, and release.";
   if (harness === "codex") {
@@ -127,24 +145,24 @@ export async function generateProjectArtifacts({ harness, version, project = {},
       initial: frontmatter(name, definition.description),
     });
     if (harness === "codex") {
-      // Standalone role files keep project-level model and permission settings intact.
-      const instructions = `${body}\n\n${harnessInstructions}`;
+      const instructions = `${body}
+
+${harnessInstructions}`;
       const rolePath = `.codex/agents/${name}.toml`;
       const original = existing[rolePath] || "";
       const unmanaged = original.replace(
         /^# grait:policy:start version=[^\r\n]+\r?\n[\s\S]*?^# grait:policy:end$/m,
         "",
       );
-      // A pre-existing named role can contain arbitrary valid TOML strings and
-      // settings. Preserve it verbatim; its companion skill supplies the managed
-      // instructions without appending duplicate TOML keys or table definitions.
       const userRole = /^\s*(?:name|description|developer_instructions)\s*=/m.test(unmanaged);
       const roleConfig = userRole
         ? instructions
             .split("\n")
             .map((line) => `# ${line}`)
             .join("\n")
-        : `name = ${JSON.stringify(name)}\ndescription = ${JSON.stringify(definition.description)}\ndeveloper_instructions = ${JSON.stringify(instructions)}`;
+        : `name = ${JSON.stringify(name)}
+description = ${JSON.stringify(definition.description)}
+developer_instructions = ${JSON.stringify(instructions)}`;
       emit(rolePath, roleConfig, { comment: true });
     } else {
       const path =
@@ -154,3 +172,4 @@ export async function generateProjectArtifacts({ harness, version, project = {},
   }
   return artifacts;
 }
+export { generateProjectArtifacts };

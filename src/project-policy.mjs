@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
 
-const policyUrl = new URL("../automation/policy/shared.md", import.meta.url);
+import { packageResource } from "./resources.mjs";
+
+const policyUrl = packageResource("automation/policy/shared.md");
 const roles = {
   orchestrator: {
     description: "Coordinate the Project queue and local specialist handoffs.",
