@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { resolve } from "node:path";
-import { packageResource } from "./resources.mjs";
+import { packageResource, bundledRuntime, runtimeFile } from "../scripts/lib/runtime-resources.mjs";
 
 const execute = promisify(execFile);
 
@@ -21,7 +21,10 @@ export async function runRuntime({ command, args = [], cwd = process.cwd() }) {
   if (!["orchestrator", "github"].includes(command)) throw new Error("Unknown runtime command");
   const root = args.includes("--help") ? resolve(cwd) : await targetRoot(cwd);
   return new Promise((resolveResult, reject) => {
-    const child = spawn(process.execPath, [packageResource(`scripts/${command}.mjs`), ...args], {
+    const invocation = bundledRuntime
+      ? [runtimeFile, "--grait-internal-runtime", command, ...args]
+      : [packageResource(`scripts/${command}.mjs`), ...args];
+    const child = spawn(process.execPath, invocation, {
       cwd: root,
       env: process.env,
       stdio: "inherit",

@@ -92,7 +92,11 @@ export async function generateProjectArtifacts({ harness, version, project = {},
       throw new Error("Project name and context must be text");
   if ([project.name, project.context].some((text) => text?.includes("grait:policy:")))
     throw new Error("Project context cannot contain managed policy boundaries");
-  const policy = (await readFile(policyUrl, "utf8")).trim();
+  const policy = (
+    typeof GRAIT_SHARED_POLICY === "string"
+      ? GRAIT_SHARED_POLICY
+      : await readFile(policyUrl, "utf8")
+  ).trim();
   const artifacts = {};
   const emit = (path, body, options = {}) => {
     const original = existing[path] ?? options.initial ?? "";

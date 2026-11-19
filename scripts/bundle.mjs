@@ -1,8 +1,7 @@
 import { readdir, readFile, mkdir, writeFile, rm, chmod } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { join, dirname, relative } from "node:path";
+import { join, dirname } from "node:path";
 import { build } from "esbuild";
-import { format, resolveConfig } from "prettier";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const output = join(root, "dist");
@@ -35,51 +34,28 @@ async function files(directory, prefix = "") {
   return result;
 }
 
-// Compile each public/process entry and its dependency graph. Runtime adapters
-// are executable package resources; repository tests and helper source trees
-// are never distribution inputs.
-const entries = new Map();
-for (const entry of await readdir(join(root, "src")))
-  if (entry.endsWith(".mjs")) entries.set(entry, `src/${entry}`);
-if (!entries.has("cli.mjs")) throw new Error("The CLI source entrypoint is missing");
-for (const entry of ["orchestrator.mjs", "github.mjs", "bootstrap.mjs", "activate.mjs"])
-  entries.set(`scripts/${entry}`, `scripts/${entry}`);
-entries.set("scripts/lib/verification.mjs", "scripts/lib/verification.mjs");
-for (const entry of ["node-suite.mjs", "node-test-reporter.mjs"])
-  entries.set(`scripts/adapters/${entry}`, `scripts/adapters/${entry}`);
-
-const formatting = await resolveConfig(join(root, "package.json"));
-const expected = new Map();
-for (const [name, entry] of entries) {
-  const base = relative(dirname(join(output, name)), output).replaceAll("\\", "/");
-  const result = await build({
-    absWorkingDir: root,
-    entryPoints: [entry],
-    outfile: join(output, name),
-    bundle: true,
-    platform: "node",
-    format: "esm",
-    target: "node24",
-    write: false,
-    legalComments: "none",
-    define: { GRAIT_RUNTIME_BASE: JSON.stringify(base ? `${base}/` : "./") },
-  });
-  expected.set(
-    name,
-    Buffer.from(await format(result.outputFiles[0].text, { ...formatting, filepath: name })),
-  );
-}
-// Only explicitly owned static runtime resources are copied.
-for (const [name, contents] of await files(join(root, "automation", "policy")))
-  expected.set(`automation/policy/${name}`, contents);
-try {
-  expected.set(
-    "defaults/workflow.config.json",
-    await readFile(join(root, "config", "project-workflow.json")),
-  );
-} catch (error) {
-  if (error.code !== "ENOENT") throw error;
-}
+// One Node.js entry embeds all executable helpers, policy, and version data.
+// Imports and subprocess adapters reuse this file without package siblings.
+const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
+const policy = await readFile(join(root, "automation/policy/shared.md"), "utf8");
+const result = await build({
+  absWorkingDir: root,
+  entryPoints: ["src/cli.mjs"],
+  outfile: join(output, "cli.mjs"),
+  bundle: true,
+  platform: "node",
+  format: "esm",
+  target: "node24",
+  minify: true,
+  write: false,
+  legalComments: "none",
+  define: {
+    GRAIT_BUNDLED: "true",
+    GRAIT_VERSION: JSON.stringify(version),
+    GRAIT_SHARED_POLICY: JSON.stringify(policy),
+  },
+});
+const expected = new Map([["cli.mjs", Buffer.from(result.outputFiles[0].contents)]]);
 if (args.includes("--check")) {
   const actual = await files(output);
   const changed = [...new Set([...expected.keys(), ...actual.keys()])]

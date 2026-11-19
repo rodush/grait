@@ -1,3 +1,5 @@
+import { isEntrypoint } from "./lib/entrypoint.mjs";
+import { bundledRuntime } from "./lib/runtime-resources.mjs";
 import { parseArgs } from "node:util";
 import { readFile, mkdir } from "node:fs/promises";
 import { resolve, join, dirname } from "node:path";
@@ -23,7 +25,7 @@ function skillPath(engine, role) {
   return `${directory}/grait-${role}/SKILL.md`;
 }
 
-async function main() {
+export async function orchestratorMain() {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
@@ -328,7 +330,8 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (!bundledRuntime && isEntrypoint(import.meta.url))
+  orchestratorMain().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });

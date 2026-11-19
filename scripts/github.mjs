@@ -1,3 +1,5 @@
+import { isEntrypoint } from "./lib/entrypoint.mjs";
+import { bundledRuntime } from "./lib/runtime-resources.mjs";
 import { parseArgs } from "node:util";
 import { readFile } from "node:fs/promises";
 import { localContext } from "./lib/local-context.mjs";
@@ -6,7 +8,7 @@ import { command, withoutCredentials } from "./lib/setup-process.mjs";
 import { conventionalTitle } from "./lib/policy.mjs";
 import { assertRoleChanges } from "./lib/tdd.mjs";
 
-async function main() {
+export async function githubMain() {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: {
@@ -104,7 +106,8 @@ async function main() {
     await context.store.release();
   }
 }
-main().catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (!bundledRuntime && isEntrypoint(import.meta.url))
+  githubMain().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
