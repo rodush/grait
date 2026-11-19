@@ -31,8 +31,8 @@
   },
   "devDependencies": {
     "esbuild": "0.28.2",
-    "markdownlint-cli2": "0.24.0",
-    "prettier": "3.9.10",
+    "markdownlint-cli2": "0.24.1",
+    "prettier": "3.10.1",
     "smol-toml": "1.9.1",
     "yaml": "2.9.1"
   },
