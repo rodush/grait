@@ -83,7 +83,7 @@ function assertWriterStatusBinding(state) {
 test("setup reuses local Apps and Project then publishes a validated writer-authored configuration PR", async (t) => {
   const f = await fixture(t, {
     hidePublishingApps: true,
-    projectStatuses: { inProgress: "In progress", review: "In review" },
+    projectStatuses: { inProgress: "In Progress", review: "In Review" },
   });
   const result = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"], {
     env: { OPENAI_API_KEY: "synthetic-unwanted-api-key" },

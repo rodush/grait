@@ -16,7 +16,7 @@ const defaultStatuses = {
   backlog: "Backlog",
   ready: "Ready",
   inProgress: "In Progress",
-  review: "Review",
+  review: "In Review",
   done: "Done",
 };
 
