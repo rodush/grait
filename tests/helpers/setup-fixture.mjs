@@ -54,10 +54,8 @@ export async function setupFixture(overrides = {}) {
   const config = JSON.parse(await readFile(join(directory, "workflow.config.json"), "utf8"));
   config.statuses = { ...defaultStatuses, ...overrides.projectStatuses };
   config.applicationMarker = "preserve-application-setting";
-  if (overrides.configured) {
-    config.controllerRepository = "acme/service";
-    config.humanOperators = ["operator"];
-  }
+  config.controllerRepository = overrides.configured ? "acme/service" : null;
+  config.humanOperators = overrides.configured ? ["operator"] : [];
   await writeFile(join(directory, "workflow.config.json"), JSON.stringify(config));
   await writeFile(
     join(directory, ".github/CODEOWNERS"),
