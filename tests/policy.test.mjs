@@ -29,20 +29,23 @@ const entry = (number, extra = {}) => ({
 
 test("only In Progress consumes the five-story limit, including other repositories and opaque items", () => {
   const progress = Array.from({ length: 4 }, () => ({
-    status: "In Progress",
+    status: config.statuses.inProgress,
     content: { __typename: "Issue" },
   }));
   const review = Array.from({ length: 20 }, () => ({
-    status: "Review",
+    status: config.statuses.review,
     content: { __typename: "Issue" },
   }));
   assert.equal(availableSlots([...progress, ...review], config), 1);
   assert.equal(
-    availableSlots([...progress, ...review, { status: "In Progress", content: null }], config),
+    availableSlots(
+      [...progress, ...review, { status: config.statuses.inProgress, content: null }],
+      config,
+    ),
     0,
   );
   assert.equal(
-    availableSlots([...progress, { status: "In Progress", isArchived: true }], config),
+    availableSlots([...progress, { status: config.statuses.inProgress, isArchived: true }], config),
     1,
   );
 });

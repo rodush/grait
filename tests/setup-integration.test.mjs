@@ -70,8 +70,21 @@ function noCloudProvisioning(state) {
   );
 }
 
+function assertWriterStatusBinding(state) {
+  const gates = state.calls.find(({ body }) => body?.name === "Required delivery gates")?.body;
+  const checks = gates?.rules.find(({ type }) => type === "required_status_checks");
+  assert.equal(
+    checks?.parameters.required_status_checks.find(({ context }) => context === "Agent review")
+      ?.integration_id,
+    installedApps.writer.id,
+  );
+}
+
 test("setup reuses local Apps and Project then publishes a validated writer-authored configuration PR", async (t) => {
-  const f = await fixture(t);
+  const f = await fixture(t, {
+    hidePublishingApps: true,
+    projectStatuses: { inProgress: "In progress", review: "In review" },
+  });
   const result = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"], {
     env: { OPENAI_API_KEY: "synthetic-unwanted-api-key" },
   });
@@ -80,6 +93,7 @@ test("setup reuses local Apps and Project then publishes a validated writer-auth
   assert.doesNotMatch(result.output, /synthetic-unwanted-api-key|BEGIN PRIVATE KEY/);
   const state = await f.state();
   noCloudProvisioning(state);
+  assertWriterStatusBinding(state);
   const pr = state.pullRequests[0];
   assert.equal(pr.user.login, "grait-writer[bot]");
   assert.equal(pr.base, "main");
@@ -161,10 +175,11 @@ test("configuration publication refuses a dirty or changed saved branch", async 
 });
 
 test("activation validates committed config, current CI, humans and installed Apps without provider prerequisites", async (t) => {
-  const f = await fixture(t, { remoteOwners: "* @operator\n" });
+  const f = await fixture(t, { remoteOwners: "* @operator\n", hidePublishingApps: true });
   const result = await f.run("activate.mjs");
   assert.equal(result.status, 0, "The fake local activation happy path must finish");
   const state = await f.state();
+  assertWriterStatusBinding(state);
   assert.equal(state.variables.find(({ name }) => name === "AUTOMATION_ENABLED").value, "true");
   assert.equal((await f.localState()).enabled, true);
   assert.ok(state.calls.some(({ path }) => path.includes("/actions/workflows/ci.yml/runs")));

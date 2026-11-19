@@ -81,6 +81,13 @@ if (!values.apply) {
       );
     if (values["project-number"] && !/^[1-9]\d*$/.test(values["project-number"]))
       throw new Error("Invalid project number");
+    const suppliedStatusAppId = values["status-app-id"];
+    if (
+      suppliedStatusAppId !== undefined &&
+      (!/^[1-9]\d*$/.test(suppliedStatusAppId) ||
+        !Number.isSafeInteger(Number(suppliedStatusAppId)))
+    )
+      throw new Error("Status App ID must be a positive safe integer");
     const token =
       process.env.GH_TOKEN ||
       (await promisify(execFile)("gh", ["auth", "token"], { encoding: "utf8" })).stdout.trim();
@@ -252,10 +259,11 @@ if (!values.apply) {
     await setVariable("PROJECT_SETUP_STATUS", "initialized");
     await api.request(`repos/${repo}`, { method: "PATCH", body: repositorySettings });
     const statusAppId =
-      values["status-app-id"] ||
-      (values["writer-login"].endsWith("[bot]")
-        ? (await api.request(`apps/${values["writer-login"].replace(/\[bot\]$/, "")}`)).id
-        : null);
+      suppliedStatusAppId !== undefined
+        ? Number(suppliedStatusAppId)
+        : values["writer-login"].endsWith("[bot]")
+          ? (await api.request(`apps/${values["writer-login"].replace(/\[bot\]$/, "")}`)).id
+          : null;
     if (values["release-app-id"]) {
       const reviewerApp = await api.request(
         `apps/${values["reviewer-login"].replace(/\[bot\]$/, "")}`,

@@ -107,10 +107,6 @@ try {
     if (user.type !== "User") throw new Error("A configured operator is a bot account");
     actors.push(user);
   }
-  const writer = variables.get("AUTOMATION_LOGIN");
-  const appId = writer.endsWith("[bot]")
-    ? (await api.request(`apps/${writer.replace(/\[bot\]$/, "")}`)).id
-    : null;
   async function recordEnforcement(value) {
     await api.request(
       variables.has("RULESET_ENFORCEMENT")
@@ -129,7 +125,12 @@ try {
   const { enforcement } = await configureRepositoryRules({
     api,
     repo,
-    rules: repositoryRules(actors, appId, variables.get("RELEASE_APP_ID"), actionsAppId),
+    rules: repositoryRules(
+      actors,
+      state.apps.writer.id,
+      variables.get("RELEASE_APP_ID"),
+      actionsAppId,
+    ),
     phase: "activate",
     acknowledgeUnenforced: Boolean(values["acknowledge-unenforced-rules"]),
   });
