@@ -192,3 +192,74 @@ test("artifact staging and application refuse symlink targets", async (t) => {
   await assert.rejects(applyArtifacts({ root, stateDirectory, id: plan.id }));
   assert.equal(await readFile(join(outside, "policy.md"), "utf8"), "outside\n");
 });
+
+test("artifact failure rollback preserves concurrent edits and retains recoverable conflict state", async (t) => {
+  const { stageArtifacts, applyArtifacts, recoverArtifacts } = await api();
+  const { root, stateDirectory } = await workspace(t);
+  await writeFile(join(root, "first.md"), "before first\n");
+  await writeFile(join(root, "second.md"), "before second\n");
+  const plan = await stageArtifacts({
+    root,
+    stateDirectory,
+    artifacts: { "first.md": "after first\n", "second.md": "after second\n" },
+  });
+  let writes = 0;
+  await assert.rejects(
+    applyArtifacts({
+      root,
+      stateDirectory,
+      id: plan.id,
+      writeFile: async (path, content) => {
+        if (++writes === 2) {
+          await writeFile(join(root, "first.md"), "concurrent user edit\n");
+          throw new Error("Injected second write failure after concurrent edit");
+        }
+        await writeFile(path, content);
+      },
+    }),
+  );
+  assert.equal(await contents(root, "first.md"), "concurrent user edit\n");
+  assert.equal(await contents(root, "second.md"), "before second\n");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await assert.rejects(recoverArtifacts({ root, stateDirectory, id: plan.id }));
+    assert.equal(await contents(root, "first.md"), "concurrent user edit\n");
+  }
+  // An operator explicitly reconciles the conflict to the known applied content.
+  await writeFile(join(root, "first.md"), "after first\n");
+  await recoverArtifacts({ root, stateDirectory, id: plan.id });
+  assert.equal(await contents(root, "first.md"), "before first\n");
+  assert.equal(await contents(root, "second.md"), "before second\n");
+});
+
+test("artifact recovery removes default-writer temporary files after interruption before rename", async (t) => {
+  const { stageArtifacts, recoverArtifacts } = await api();
+  const { root, stateDirectory } = await workspace(t);
+  await writeFile(join(root, "app.txt"), "application\n");
+  const plan = await stageArtifacts({
+    root,
+    stateDirectory,
+    artifacts: { "nested/policy.md": "policy\n" },
+  });
+  const script = `import {applyArtifacts} from ${JSON.stringify(moduleUrl.href)};
+import {readFile} from 'node:fs/promises';
+await applyArtifacts({...JSON.parse(process.argv[1]),beforeRename:async({path,temporaryPath})=>{
+  if(!path || !temporaryPath || path===temporaryPath)process.exit(72);
+  if(await readFile(temporaryPath,'utf8')!=='policy\\n')process.exit(73);
+  process.exit(71);
+}});`;
+  const child = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", script, JSON.stringify({ root, stateDirectory, id: plan.id })],
+    { encoding: "utf8", timeout: 10000, env: { PATH: process.env.PATH } },
+  );
+  assert.equal(
+    child.status,
+    71,
+    "the default atomic writer must be interrupted after writing its temporary file and before renaming",
+  );
+  await recoverArtifacts({ root, stateDirectory, id: plan.id });
+  assert.deepEqual(await readdir(root), ["app.txt"]);
+  assert.equal(await contents(root, "app.txt"), "application\n");
+  await recoverArtifacts({ root, stateDirectory, id: plan.id });
+  assert.deepEqual(await readdir(root), ["app.txt"]);
+});
