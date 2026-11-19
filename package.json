@@ -7,7 +7,7 @@
     "type": "git",
     "url": "git+ssh://git@github.com/rodush/grait.git"
   },
-  "description": "Language-neutral GitHub template for AI-augmented software development",
+  "description": "Git-installable workflow CLI for AI-augmented software development",
   "type": "module",
   "engines": {
     "node": ">=24",
@@ -25,7 +25,9 @@
     "activate": "node scripts/activate.mjs",
     "setup": "node scripts/setup.mjs",
     "orchestrator": "node scripts/orchestrator.mjs",
-    "github": "node scripts/github.mjs"
+    "github": "node scripts/github.mjs",
+    "bundle": "node scripts/bundle.mjs",
+    "bundle:check": "node scripts/bundle.mjs --check"
   },
   "devDependencies": {
     "markdownlint-cli2": "0.24.0",
@@ -41,5 +43,12 @@
       "katex": "0.19.1"
     }
   },
-  "packageManager": "npm@12.2.2"
+  "packageManager": "npm@12.2.2",
+  "bin": {
+    "grait": "dist/cli.mjs"
+  },
+  "files": [
+    "dist/",
+    "LICENSE"
+  ]
 }

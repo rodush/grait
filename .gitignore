@@ -80,7 +80,6 @@ out
 
 # Nuxt.js build / generate output
 .nuxt
-dist
 .output
 
 # Gatsby files
@@ -159,3 +158,6 @@ coverage/
 *.pem
 *.key
 .DS_Store
+
+# GRAIT intentionally commits its runnable Git distribution.
+!/dist/
