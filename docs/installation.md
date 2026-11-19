@@ -71,7 +71,7 @@ For an owner handoff, attach the output of `npm run setup -- --plan --repo UPSTR
 
    `--yes` accepts the displayed plan for repeatable invocations. Each App still needs GitHub's human registration and repository-installation approvals. The manifests prefill permissions; no manual bot-account creation is needed. Setup verifies each App's actual owner, permissions, and installation. It creates exactly two publishing identities, writer and reviewer. Provider credentials remain with the official harness; publishing App keys stay in mode-600 files under private Git metadata, never GitHub Actions secrets.
 
-3. **Let setup prepare the configuration PR.** It creates or reuses the recorded Project, configures its five statuses and board for a newly created Project, adds human CODEOWNERS without discarding application rules, stages repository rules, generates native adapters, runs checks, and commits/pushes a focused configuration branch. An existing Project is validated without resetting its statuses or views. To select one explicitly:
+3. **Let setup prepare the configuration PR.** It creates or reuses the recorded Project, configures its five statuses and board for a newly created Project, adds human CODEOWNERS without discarding application rules, stages repository rules, generates native adapters, runs configuration, formatting, and Markdown checks, and commits/pushes a focused configuration branch. GRAIT's development test suite runs during development and CI, rather than during setup. An existing Project is validated without resetting its statuses or views. To select one explicitly:
 
    ```sh
    npm run setup -- --project-owner OWNER --project-number 7

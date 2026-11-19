@@ -99,6 +99,10 @@ test("setup reuses local Apps and Project then publishes a validated writer-auth
   assert.equal(pr.base, "main");
   assert.notEqual(pr.head, "main");
   const commands = state.commands;
+  assert.ok(
+    !commands.some(({ command, args }) => command === "npm" && args[0] === "test"),
+    "Setup must not run GRAIT's development test suite",
+  );
   const validation = commands.findIndex(
     ({ command, args }) => command === "npm" && args.join(" ") === "run lint:md",
   );

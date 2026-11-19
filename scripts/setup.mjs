@@ -53,7 +53,7 @@ async function publishConfiguration(repo, repository, store) {
         base: repository.default_branch,
         head: branch,
         title: "chore: configure local GRAIT harness",
-        body: "Configure subscription-backed agents on the user's host, separate GitHub publishing identities, and the Project board. Local configuration checks and tests passed. A human must review and merge; then run npm run setup -- --activate on the updated default branch.",
+        body: "Configure subscription-backed agents on the user's host, separate GitHub publishing identities, and the Project board. Local configuration, formatting, and Markdown checks passed. A human must review and merge; then run npm run setup -- --activate on the updated default branch.",
       },
     }));
   store.state.configuration.pr = pr.number;
@@ -355,7 +355,6 @@ async function main() {
     });
     await command("npm", ["run", "harness:generate"], { interactive: true });
     await command("npm", ["run", "check"], { interactive: true });
-    await command("npm", ["test"], { interactive: true, env: withoutCredentials() });
     await command("npm", ["run", "format:check"], { interactive: true });
     await command("npm", ["run", "lint:md"], { interactive: true });
     const current = (await command("git", ["branch", "--show-current"])).stdout.trim();
