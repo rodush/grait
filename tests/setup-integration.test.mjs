@@ -688,3 +688,92 @@ test("ordinary activation rejects partial, malformed or ambiguous numeric bindin
     assert.equal((await f.localState()).enabled, false);
   }
 });
+
+test("ordinary setup leaves legacy or partially migrated publishing bindings unchanged", async (t) => {
+  for (const recordedVariables of [
+    withoutNumericBinding,
+    [...withoutNumericBinding, publishingIdVariables[0]],
+  ]) {
+    const f = await fixture(t, { localApps: legacyApps, variables: recordedVariables });
+    const original = await f.localState();
+    const result = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"]);
+
+    assert.notEqual(
+      result.status,
+      0,
+      "Migrating an existing installation requires explicit consent",
+    );
+    assert.match(result.output, /migrat/i);
+    assert.deepEqual((await f.localState()).apps, original.apps);
+    const state = await f.state();
+    assert.deepEqual(state.variables, recordedVariables);
+    assert.ok(
+      !state.commands.some(({ command, args }) => command === "git" && args.includes("push")),
+    );
+    assert.equal(state.pullRequests?.length || 0, 0);
+  }
+});
+
+test("configuration publication recovery refuses a superseded writer App or bot ID", async (t) => {
+  const f = await fixture(t, { failPush: true });
+  const initial = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"]);
+  assert.notEqual(initial.status, 0);
+  assert.match(initial.output, /--publish/);
+  const saved = await f.localState();
+  assert.ok(saved.configuration.head);
+  assert.equal(saved.configuration.pr, undefined);
+
+  const staged = await f.state();
+  for (const identity of ["AUTOMATION_APP_ID", "AUTOMATION_BOT_USER_ID"]) {
+    await f.update({
+      failPush: false,
+      calls: [],
+      commands: [],
+      variables: staged.variables.map((variable) =>
+        variable.name === identity ? { ...variable, value: "7654" } : variable,
+      ),
+    });
+    const result = await f.run("setup.mjs", ["--repo", "acme/service", "--publish"]);
+
+    assert.notEqual(result.status, 0, "Recovery cannot publish with a superseded writer");
+    assert.match(result.output, /identit|binding|app id|writer/i);
+    const state = await f.state();
+    assert.ok(
+      !state.commands.some(({ command, args }) => command === "git" && args.includes("push")),
+    );
+    assert.equal(state.pullRequests?.length || 0, 0);
+    assert.deepEqual((await f.localState()).configuration, saved.configuration);
+  }
+});
+
+test("numeric setup key import rejects an installed App owned by another account", async (t) => {
+  const f = await fixture(t, {
+    localApps: { reviewer: installedApps.reviewer },
+    remoteApps: { writer: { owner: { login: "different-owner", id: 888, type: "Organization" } } },
+  });
+  const key = join(f.directory, ".git/writer-import.pem");
+  await writeFile(key, pem, { mode: 0o600 });
+
+  const result = await f.run("setup.mjs", [
+    "--repo",
+    "acme/service",
+    "--yes",
+    "--no-browser",
+    "--writer-key",
+    key,
+  ]);
+
+  assert.notEqual(
+    result.status,
+    0,
+    "Installation on the repository does not establish App ownership",
+  );
+  assert.match(result.output, /owner/i);
+  const state = await f.state();
+  assert.equal((await f.localState()).apps.writer, undefined);
+  assert.deepEqual(state.variables, variables);
+  assert.ok(
+    !state.commands.some(({ command, args }) => command === "git" && args.includes("push")),
+  );
+  assert.equal(state.pullRequests?.length || 0, 0);
+});
