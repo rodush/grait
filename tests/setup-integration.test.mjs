@@ -777,3 +777,72 @@ test("numeric setup key import rejects an installed App owned by another account
   );
   assert.equal(state.pullRequests?.length || 0, 0);
 });
+
+test("explicit setup migration imports the original legacy keys on a new host", async (t) => {
+  const f = await fixture(t, { localApps: undefined, variables: withoutNumericBinding });
+  await assert.rejects(() => f.localState(), { code: "ENOENT" });
+
+  const reviewerPem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+    type: "pkcs8",
+    format: "pem",
+  });
+  const writerKey = join(f.directory, ".git/legacy-writer.pem");
+  const reviewerKey = join(f.directory, ".git/legacy-reviewer.pem");
+  await writeFile(writerKey, pem, { mode: 0o600 });
+  await writeFile(reviewerKey, reviewerPem, { mode: 0o600 });
+  const args = [
+    "--repo",
+    "acme/service",
+    "--yes",
+    "--no-browser",
+    "--writer-key",
+    writerKey,
+    "--reviewer-key",
+    reviewerKey,
+  ];
+
+  const ordinaryHost = await fixture(t, { localApps: undefined, variables: withoutNumericBinding });
+  const ordinary = await ordinaryHost.run("setup.mjs", args);
+  assert.notEqual(ordinary.status, 0, "Key import does not imply migration consent");
+  assert.match(ordinary.output, /migrat/i);
+  const before = await ordinaryHost.state();
+  assert.deepEqual(before.variables, withoutNumericBinding);
+  assert.equal(before.pullRequests?.length || 0, 0);
+
+  const migration = await f.run("setup.mjs", [...args, "--migrate-publishing-identities"]);
+  assert.equal(
+    migration.status,
+    0,
+    "Explicit key import and migration must work without a saved host",
+  );
+
+  const state = await f.state();
+  assertPublishingIds(state);
+  noCloudProvisioning(state);
+  assertWriterStatusBinding(state);
+  for (const { name, value } of withoutNumericBinding) {
+    assert.equal(state.variables.find((variable) => variable.name === name)?.value, value, name);
+  }
+  assert.equal(state.pullRequests.length, 1);
+  assert.equal(state.pullRequests[0].user.id, installedApps.writer.botUserId);
+  assert.equal(state.pullRequests[0].base, "main");
+  assert.notEqual(state.pullRequests[0].head, "main");
+
+  const local = await f.localState();
+  assert.equal(local.enabled, false);
+  assert.equal(local.configuration.pr, state.pullRequests[0].number);
+  assert.equal(local.apps.writer.id, installedApps.writer.id);
+  assert.equal(local.apps.reviewer.id, installedApps.reviewer.id);
+  assert.equal(local.apps.writer.botUserId, installedApps.writer.botUserId);
+  assert.equal(local.apps.reviewer.botUserId, installedApps.reviewer.botUserId);
+  assert.ok(
+    local.apps.writer.pem === pem && local.apps.reviewer.pem === reviewerPem,
+    "Both original role keys must be retained",
+  );
+  assert.ok(
+    !state.calls.some(
+      ({ path, method }) =>
+        method !== "GET" && /\/issues\/\d+\/comments|\/pulls\/\d+\/reviews/.test(path),
+    ),
+  );
+});

@@ -254,8 +254,8 @@ globalThis.fetch = async (url, options = {}) => {
   else if (method === "GET" && path === "repos/acme/service/actions/secrets") value = { secrets: state.secrets || [] };
   else if (method === "GET" && path.endsWith("/environments/release/secrets")) value = { secrets: state.releaseSecrets || [] };
   else if (method === "GET" && path === "repos/acme/service/installation") {
-    const saved = state.localApps?.[role];
-    value = { id: (saved?.id || 100) + 1000, app_id: saved?.id || 100, account: { login: "acme" }, suspended_at: null, permissions: app(role).permissions, ...state.remoteInstallations?.[role] };
+    const installed = app(role);
+    value = { id: installed.id + 1000, app_id: installed.id, account: { login: "acme" }, suspended_at: null, permissions: installed.permissions, ...state.remoteInstallations?.[role] };
   }
   else if (method === "POST" && path.startsWith("app/installations/") && path.endsWith("/access_tokens")) {
     const role = path.includes("1200") ? "reviewer" : "writer";
@@ -296,7 +296,7 @@ globalThis.fetch = async (url, options = {}) => {
     if (state.hidePublishingApps) {
       status = 404;
       value = { message: "Not Found" };
-    } else value = { id: slug.includes("reviewer") ? 200 : 100, slug, owner: state.repository.owner };
+    } else value = { ...app(slug.includes("reviewer") ? "reviewer" : "writer"), slug };
   }
   else if (method === "GET" && path === "repos/acme/service/issues/900/comments") {
     value = [{ id: 901, user: { login: "operator" }, body: '<!-- workflow-state:v1 -->\\n\\n' + '\\u0060\\u0060\\u0060json\\n' + JSON.stringify({ version: 1, number: 900, reservations: [{ operation: "preserved" }] }) + '\\n\\u0060\\u0060\\u0060' }];
