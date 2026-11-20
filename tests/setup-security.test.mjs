@@ -27,6 +27,7 @@ const repo = "acme/service";
 function app(role = "writer") {
   return {
     id: role === "writer" ? 101 : 102,
+    botUserId: role === "writer" ? 10101 : 10102,
     name: `grait-${role}`,
     slug: `grait-${role}`,
     clientId: `Iv1.local-${role}`,
@@ -404,7 +405,14 @@ test("role tokens are minted only for the target repository and approved publish
     cwd,
     fetcher: async (url, options) => {
       calls.push({ url, options });
+      if (
+        decodeURIComponent(url).endsWith("/users/grait-writer[bot]") ||
+        url.endsWith("/user/10101")
+      ) {
+        return Response.json({ login: "grait-writer[bot]", id: app().botUserId, type: "Bot" });
+      }
       assertAppJwt(options.headers.Authorization.replace(/^Bearer /, ""));
+      if (url.endsWith("/app")) return Response.json(registration());
       if (url.endsWith("/installation")) return Response.json(installation());
       assert.equal(url, "https://api.github.com/app/installations/501/access_tokens");
       assert.deepEqual(JSON.parse(options.body), {
@@ -418,7 +426,8 @@ test("role tokens are minted only for the target repository and approved publish
     },
   });
   assert.equal(token, "synthetic-installation-token");
-  assert.equal(calls.length, 2);
+  assert.equal(calls.filter(({ url }) => url.endsWith("/installation")).length, 1);
+  assert.equal(calls.filter(({ url }) => url.endsWith("/access_tokens")).length, 1);
   assert.ok(!(await readFile(path, "utf8")).includes("synthetic-installation-token"));
   await assert.rejects(() =>
     roleToken(repo, "release", {

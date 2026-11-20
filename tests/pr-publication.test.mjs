@@ -15,6 +15,7 @@ const apps = Object.fromEntries(
       name: `grait-${role}`,
       slug: `grait-${role}`,
       id: role === "writer" ? 100 : 200,
+      botUserId: role === "writer" ? 10001 : 20001,
       clientId: `Iv1.${role}`,
       pem,
       phase: "installed",
@@ -29,6 +30,10 @@ const variables = [
   { name: "PROJECT_OWNER", value: "acme" },
   { name: "AUTOMATION_LOGIN", value: "grait-writer[bot]" },
   { name: "REVIEW_LOGIN", value: "grait-reviewer[bot]" },
+  { name: "AUTOMATION_APP_ID", value: "100" },
+  { name: "AUTOMATION_BOT_USER_ID", value: "10001" },
+  { name: "REVIEW_APP_ID", value: "200" },
+  { name: "REVIEW_BOT_USER_ID", value: "20001" },
 ];
 
 async function fixture(t, { tdd = "green", exempt = false } = {}) {
@@ -47,7 +52,7 @@ async function fixture(t, { tdd = "green", exempt = false } = {}) {
     title: "Deliver validated outcome",
     body: "Accepted behavior",
     state: "open",
-    user: { login: "operator" },
+    user: { login: "operator", id: 42, type: "User" },
     labels: [],
   };
   const digest = issueDigest(issue);
@@ -73,7 +78,7 @@ async function fixture(t, { tdd = "green", exempt = false } = {}) {
     issueComments: [
       {
         id: 701,
-        user: { login: "grait-writer[bot]" },
+        user: { login: "grait-writer[bot]", id: 10001, type: "Bot" },
         body: "<!-- workflow-state:v1 -->\n\n```json\n" + JSON.stringify(recorded) + "\n```",
       },
     ],

@@ -20,6 +20,7 @@ const apps = Object.fromEntries(
       name: `grait-${role}`,
       slug: `grait-${role}`,
       id: role === "writer" ? 100 : 200,
+      botUserId: role === "writer" ? 10001 : 20001,
       clientId: `Iv1.${role}`,
       pem: privateKey.export({ type: "pkcs8", format: "pem" }),
       installed: true,
@@ -31,6 +32,10 @@ const variables = [
   { name: "PROJECT_ID", value: "project-node" },
   { name: "AUTOMATION_LOGIN", value: "grait-writer[bot]" },
   { name: "REVIEW_LOGIN", value: "grait-reviewer[bot]" },
+  { name: "AUTOMATION_APP_ID", value: "100" },
+  { name: "AUTOMATION_BOT_USER_ID", value: "10001" },
+  { name: "REVIEW_APP_ID", value: "200" },
+  { name: "REVIEW_BOT_USER_ID", value: "20001" },
 ];
 const issue = {
   number: 1,
@@ -38,12 +43,12 @@ const issue = {
   title: "Deliver installed workflow",
   body: "Accepted public behavior",
   state: "open",
-  user: { login: "operator" },
+  user: { login: "operator", id: 42, type: "User" },
   labels: [],
 };
 const stateComment = (state, number = 1) => ({
   id: number === 1 ? 701 : 799,
-  user: { login: "grait-writer[bot]" },
+  user: { login: "grait-writer[bot]", id: 10001, type: "Bot" },
   body: `<!-- workflow-state:v1 -->\n\n\`\`\`json\n${JSON.stringify(state)}\n\`\`\``,
 });
 
@@ -148,11 +153,11 @@ globalThis.fetch = async (url, options = {}) => {
     Object.assign(value, body);
   } else if (method === "GET" && path === "repos/acme/service/issues/99/comments") value = state.prComments;
   else if (method === "POST" && path === "repos/acme/service/issues/99/comments") {
-    value = { id: 799, user: { login: "grait-writer[bot]" }, ...body }; state.prComments.push(value);
-  } else if (method === "GET" && path === "repos/acme/service/pulls/99") value = { number: 99, state: "open", draft: false, changed_files: 1, body: "Closes #1", user: { login: "grait-writer[bot]" }, labels: [], head: { sha: state.remoteHead } };
+    value = { id: 799, user: { login: "grait-writer[bot]", id: 10001, type: "Bot" }, ...body }; state.prComments.push(value);
+  } else if (method === "GET" && path === "repos/acme/service/pulls/99") value = { number: 99, state: "open", draft: false, changed_files: 1, body: "Closes #1", user: state.pullActor || { login: "grait-writer[bot]", id: 10001, type: "Bot" }, labels: [], head: { sha: state.remoteHead } };
   else if (method === "GET" && path === "repos/acme/service/pulls/99/files") value = [{ filename: "src/outcome.txt", status: "added", patch: "@@ -0,0 +1 @@\\n+Outcome" }];
   else if (method === "POST" && path === "repos/acme/service/pulls/99/reviews") {
-    value = { id: 801, user: { login: identity === "reviewer" ? "grait-reviewer[bot]" : "wrong-identity" }, commit_id: body.commit_id, state: { APPROVE: "APPROVED", REQUEST_CHANGES: "CHANGES_REQUESTED", COMMENT: "COMMENTED" }[body.event], body: body.body };
+    value = { id: 801, user: state.publishedReviewer || { login: identity === "reviewer" ? "grait-reviewer[bot]" : "wrong-identity", id: identity === "reviewer" ? 20001 : 99999, type: "Bot" }, commit_id: body.commit_id, state: { APPROVE: "APPROVED", REQUEST_CHANGES: "CHANGES_REQUESTED", COMMENT: "COMMENTED" }[body.event], body: body.body };
     state.publishedReviews = [...(state.publishedReviews || []), value];
   } else if (method === "POST" && path.startsWith("repos/acme/service/statuses/")) value = {};
   else return original(url, options);
@@ -362,4 +367,139 @@ test("installed verifier resolves its Node adapter from the package rather than 
   assert.deepEqual(report.infrastructureErrors, []);
   assert.equal(existsSync(join(f.directory, "scripts")), false);
   assert.deepEqual(await readdir(join(installed.directory, "dist")), ["cli.mjs"]);
+});
+
+test("installed claim reuses ready ledger state after an App rename and rejects lookalike authors", async (t) => {
+  const f = await fixture(t, { claimed: false });
+  await f.update({
+    remoteApps: { writer: { slug: "renamed-writer" } },
+    issue: { ...issue, user: { login: "renamed-writer[bot]", id: 10001, type: "Bot" } },
+    issueComments: [
+      { ...stateComment(f.record), user: { login: "renamed-writer[bot]", id: 10001, type: "Bot" } },
+      {
+        ...stateComment({ version: 1, number: 1, paused: true }),
+        id: 702,
+        user: { login: "grait-writer[bot]", id: 99999, type: "Bot" },
+      },
+    ],
+  });
+  const result = await f.run(["orchestrator", "claim", "--issue", "1"]);
+  assert.equal(result.status, 0, "Stable ownership must survive a writer rename");
+  const state = await f.state();
+  assert.match(state.issueComments[0].body, /"claim"/);
+  assert.match(state.issueComments[1].body, /"paused":true/);
+  assert.ok(
+    state.calls.some(({ path, method }) => path.endsWith("/comments/701") && method === "PATCH"),
+  );
+  assert.ok(
+    !state.calls.some(({ path, method }) => path.endsWith("/comments/702") && method === "PATCH"),
+  );
+});
+
+test("installed claim requires reconciliation for duplicate ledger comments with the same bot ID", async (t) => {
+  const f = await fixture(t, { claimed: false });
+  await f.update({
+    issueComments: [
+      stateComment(f.record),
+      {
+        ...stateComment(f.record),
+        id: 702,
+        user: { login: "renamed-writer[bot]", id: 10001, type: "Bot" },
+      },
+    ],
+  });
+  const result = await f.run(["orchestrator", "claim", "--issue", "1"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /multiple|duplicat|ambiguous/i);
+  assert.ok(
+    !(await f.state()).calls.some(
+      ({ path, method }) => path.endsWith("/comments/701") && method === "PATCH",
+    ),
+  );
+});
+
+async function reviewCurrentHead(f, round) {
+  const report = join(f.directory, ".git/review.json");
+  await writeFile(
+    report,
+    JSON.stringify({
+      version: 1,
+      pr: 99,
+      head: f.head,
+      round,
+      verdict: "APPROVE",
+      blockers: [],
+      rethink: false,
+      conflicts: false,
+      body: "Verified accepted behavior.",
+      comments: [],
+    }),
+  );
+  return f.run(["orchestrator", "review", "--pr", "99", "--file", report]);
+}
+
+test("installed review preserves existing history and accepts a renamed reviewer by bot ID", async (t) => {
+  const f = await fixture(t);
+  const olderHead = "d".repeat(40);
+  await f.update({
+    remoteApps: { writer: { slug: "renamed-writer" }, reviewer: { slug: "renamed-reviewer" } },
+    pullActor: { login: "renamed-writer[bot]", id: 10001, type: "Bot" },
+    publishedReviewer: { login: "renamed-reviewer[bot]", id: 20001, type: "Bot" },
+    prComments: [
+      {
+        ...stateComment(
+          {
+            version: 1,
+            number: 99,
+            reviews: [
+              {
+                head: olderHead,
+                round: 1,
+                verdict: "REQUEST_CHANGES",
+                blockers: ["previous-finding"],
+              },
+            ],
+          },
+          99,
+        ),
+        user: { login: "renamed-writer[bot]", id: 10001, type: "Bot" },
+      },
+    ],
+  });
+  const result = await reviewCurrentHead(f, 2);
+  assert.equal(
+    result.status,
+    0,
+    "A reviewer rename must not break publication or discard earlier rounds",
+  );
+  const state = await f.state();
+  assert.equal(state.prComments.length, 1);
+  assert.ok(state.prComments[0].body.includes(olderHead));
+  assert.ok(state.prComments[0].body.includes(f.head));
+  assert.equal(state.publishedReviews[0].user.id, 20001);
+  assert.ok(
+    state.calls.some(({ path, body }) => path.includes("/statuses/") && body?.state === "success"),
+  );
+});
+
+test("installed review never treats a familiar login with a different bot ID as reviewer approval", async (t) => {
+  const f = await fixture(t);
+  await f.update({
+    publishedReviewer: { login: "grait-reviewer[bot]", id: 99999, type: "Bot" },
+  });
+  const result = await reviewCurrentHead(f, 1);
+  assert.notEqual(result.status, 0);
+  assert.ok(
+    !(await f.state()).calls.some(
+      ({ path, body }) => path.includes("/statuses/") && body?.state === "success",
+    ),
+  );
+});
+
+test("installed orchestrator authorizes complete numeric bindings without display login variables", async (t) => {
+  const f = await fixture(t);
+  await f.update({ variables: variables.filter(({ name }) => !name.endsWith("_LOGIN")) });
+  const result = await f.run(["orchestrator", "status"]);
+  assert.equal(result.status, 0);
+  assert.equal(JSON.parse(result.output.trim())[0].issue, 1);
 });

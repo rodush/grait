@@ -43,21 +43,25 @@ test("untrusted comments cannot impersonate the controller's ledger", async () =
   const api = {
     list: async () => [
       {
-        user: { login: "contributor" },
+        user: { login: "contributor", id: 99999, type: "User" },
         body: `${STATE_MARKER}\n\n\`\`\`json\n${JSON.stringify(state)}\n\`\`\``,
       },
     ],
   };
-  const ledger = new Ledger(api, "org/repo", "controller[bot]");
+  const ledger = new Ledger(api, "org/repo", "controller[bot]", 10101);
   assert.equal((await ledger.load(1)).state.paused, undefined);
 });
 
 test("duplicate trusted ledgers require human reconciliation", async () => {
-  const comment = { user: { login: "controller[bot]" }, body: STATE_MARKER };
+  const comment = {
+    user: { login: "controller[bot]", id: 10101, type: "Bot" },
+    body: STATE_MARKER,
+  };
   const ledger = new Ledger(
     { list: async () => [comment, comment] },
     "org/repo",
     "controller[bot]",
+    10101,
   );
   await assert.rejects(() => ledger.load(1), /Multiple/);
 });
