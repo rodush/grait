@@ -7,13 +7,11 @@ import {
   assertPublishingBindings,
   assertSetupPublishingBindings,
   humanToken,
-  identityNumber,
-  publishingBindings,
-  publishingRoles,
+  preparePublishingApps,
   publishingVariableMap,
   verifyPublishingIdentity,
 } from "./lib/local-auth.mjs";
-import { githubRequest, registerApp, validateApp } from "./lib/setup-apps.mjs";
+import { githubRequest } from "./lib/setup-apps.mjs";
 
 async function repositoryPublishingVariables(repo, token) {
   return publishingVariableMap(
@@ -125,7 +123,6 @@ async function main() {
       "acknowledge-unenforced-rules": { type: "boolean" },
       "no-browser": { type: "boolean" },
       activate: { type: "boolean" },
-      "migrate-publishing-identities": { type: "boolean" },
       publish: { type: "boolean" },
       repo: { type: "string" },
       harness: { type: "string" },
@@ -138,7 +135,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "GRAIT local setup\n\nnpm run setup -- [--plan] [--repo OWNER/REPO] [--harness codex|claude|copilot]\n  --yes              Accept the displayed configuration plan\n  --acknowledge-unenforced-rules   Explicitly continue if GitHub rulesets cannot be configured\n  --no-browser       Print approval URLs (forward the localhost callback port over SSH)\n  --project-owner LOGIN --project-number NUMBER   Bind an existing Project\n  --maintainers LOGIN,LOGIN   Human code owners (default: signed-in GitHub user)\n  --writer-key PATH --reviewer-key PATH   Import private keys for existing Apps\n  --publish          Retry only the saved configuration push/PR after a failure\n  --activate         Activate after human merge and successful default-branch CI\n  --migrate-publishing-identities  Use with --activate to verify and migrate legacy App bindings\n\nAll AI runs in your native harness using its own login. No provider API keys are requested. See docs/installation.md.",
+      "GRAIT local setup\n\nnpm run setup -- [--plan] [--repo OWNER/REPO] [--harness codex|claude|copilot]\n  --yes              Accept the displayed configuration plan\n  --acknowledge-unenforced-rules   Explicitly continue if GitHub rulesets cannot be configured\n  --no-browser       Print approval URLs (forward the localhost callback port over SSH)\n  --project-owner LOGIN --project-number NUMBER   Bind an existing Project\n  --maintainers LOGIN,LOGIN   Human code owners (default: signed-in GitHub user)\n  --writer-key PATH --reviewer-key PATH   Import private keys for existing Apps\n  --publish          Retry only the saved configuration push/PR after a failure\n  --activate         Activate after human merge and successful default-branch CI\n\nAll AI runs in your native harness using its own login. No provider API keys are requested. See docs/installation.md.",
     );
     return;
   }
@@ -184,14 +181,11 @@ async function main() {
   };
   console.log(JSON.stringify(plan, null, 2));
   if (values.plan) return;
-  if (values["migrate-publishing-identities"] && !values.activate)
-    throw new Error("Use --migrate-publishing-identities with --activate");
   if (values.activate) {
     await command(
       process.execPath,
       [
         "scripts/activate.mjs",
-        ...(values["migrate-publishing-identities"] ? ["--migrate-publishing-identities"] : []),
         ...(values["acknowledge-unenforced-rules"] ? ["--acknowledge-unenforced-rules"] : []),
       ],
       { interactive: true },
@@ -265,105 +259,20 @@ async function main() {
         "Pause the existing installation first: set AUTOMATION_ENABLED=false and stop any old hosted runs before upgrading",
       );
     assertSetupPublishingBindings(publishedVariables, store.state);
-    store.state.enabled = false;
-    for (const [role, names] of Object.entries(publishingRoles)) {
-      const existingLogin = variable(names.login);
-      const recordedApp = variable(names.app);
-      const recordedBot = variable(names.bot);
-      const appId = identityNumber(recordedApp);
-      const botUserId = identityNumber(recordedBot);
-      if (
-        (recordedApp !== undefined && !appId) ||
-        (recordedBot !== undefined && !botUserId) ||
-        (botUserId && !appId)
-      )
-        throw new Error(`Invalid recorded ${role} publishing identity; reconcile it before setup`);
-      const keyPath = values[`${role}-key`];
-      let saved = store.state.apps[role];
-      if (keyPath) {
-        if (!appId && !existingLogin?.endsWith("[bot]"))
-          throw new Error(
-            `No recorded ${role} App to import; register through the normal setup instead`,
-          );
-        const info = await lstat(keyPath);
-        if (
-          !info.isFile() ||
-          info.isSymbolicLink() ||
-          info.mode & 0o077 ||
-          (process.getuid && info.uid !== process.getuid())
-        )
-          throw new Error(
-            "Imported App keys must be private files owned by you (chmod 600), not symlinks",
-          );
-        const slug = existingLogin?.replace(/\[bot\]$/, "");
-        const app = appId
-          ? undefined
-          : await githubRequest(`apps/${encodeURIComponent(slug)}`, { token });
-        if (app) validateApp(app, { role, owner: repo.split("/")[0] });
-        const id = appId || app.id;
-        if (saved?.id && saved.id !== id)
-          throw new Error(`Imported ${role} App ID differs from the saved identity`);
-        saved = {
-          ...saved,
-          name: saved?.name || app?.slug || `grait-${role}-${id}`,
-          id,
-          slug: app?.slug || saved?.slug,
-          clientId: app?.client_id || saved?.clientId,
-          pem: await readFile(keyPath, "utf8"),
-          phase: "installed",
-          installed: true,
-        };
-      }
-      if ((appId || existingLogin) && !saved?.id)
-        throw new Error(
-          `Existing ${role} identity found. Import its private key with --${role}-key PATH; GitHub Secrets cannot be downloaded. Setup will not create a duplicate App`,
-        );
-      if (appId && saved.id !== appId)
-        throw new Error(`Saved ${role} App ID differs from the repository's identity`);
-      if (!saved?.installed)
-        saved = await registerApp({
-          role,
-          repo,
-          owner: repo.split("/")[0],
-          ownerType: repository.owner.type,
-          store,
-          token,
-          openBrowser: values["no-browser"]
-            ? null
-            : async (url) => {
-                const opened = await command("gh", ["browse", url], { allowFailure: true });
-                if (opened.code) console.log("Open the printed URL in your browser to continue.");
-              },
-        });
-      const {
-        token: _token,
-        login,
-        ...verified
-      } = await verifyPublishingIdentity(saved, { repo, role });
-      if (
-        (botUserId && verified.botUserId !== botUserId) ||
-        (!appId &&
-          existingLogin &&
-          ![login, `${saved.slug}[bot]`].some(
-            (candidate) => candidate.toLowerCase() === existingLogin.toLowerCase(),
-          ))
-      )
-        throw new Error(
-          `Verified ${role} publishing identity differs from the repository's identity`,
-        );
-      // A suspended first setup may already have written its display login.
-      if (store.state.setupPublishingBindingsPending && existingLogin === `${saved.slug}[bot]`)
-        verified.slug = saved.slug;
-      store.state.apps[role] = verified;
-      await store.save();
-    }
-    const bindings = publishingBindings(store.state.apps);
-    if (Object.keys(bindings).some((name) => !publishedVariables.has(name))) {
-      // Bootstrap creates repository variables one at a time. A retry may
-      // finish only the bindings this host prepared and verified.
-      store.state.setupPublishingBindingsPending = true;
-      await store.save();
-    }
+    await preparePublishingApps({
+      repo,
+      ownerType: repository.owner.type,
+      store,
+      token,
+      variables: publishedVariables,
+      keys: { writer: values["writer-key"], reviewer: values["reviewer-key"] },
+      openBrowser: values["no-browser"]
+        ? null
+        : async (url) => {
+            const opened = await command("gh", ["browse", url], { allowFailure: true });
+            if (opened.code) console.log("Open the printed URL in your browser to continue.");
+          },
+    });
     config.engine = harness;
     config.schemaVersion = 2;
     config.execution = "local";

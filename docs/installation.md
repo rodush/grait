@@ -1,6 +1,6 @@
 # Installation and configuration
 
-Choose your repository path first, then follow [guided configuration](#guided-configuration). The target is one user-owned host running Codex CLI, Claude Code, or GitHub Copilot CLI, with GitHub providing issues, a Project, PRs, reviews, and deterministic CI.
+Use the [Git-pinned CLI](#existing-repository) to install GRAIT in an existing repository. Use [guided configuration](#guided-configuration) if your repository was created from the GRAIT template. The target is one user-owned host running Codex CLI, Claude Code, or GitHub Copilot CLI, with GitHub providing issues, a Project, PRs, reviews, and deterministic CI.
 
 ## Prerequisites
 
@@ -29,6 +29,38 @@ GitHub rulesets provide optional server-side enforcement of the delivery policy.
 4. Continue with [guided configuration](#guided-configuration).
 
 ## Existing repository
+
+Create an integration branch in the target repository. Choose a reviewed GRAIT commit and use its full SHA or 12-character prefix for `GIT_PIN` in both arguments. The installer checks the running package against npm's resolved Git revision and records the full SHA in the installation record and workflow.
+
+```sh
+git switch -c chore/adopt-grait
+npm exec --yes --allow-git=root --ignore-scripts \
+  --package='git+https://github.com/rodush/grait.git#GIT_PIN' -- \
+  grait init --plan --repo OWNER/REPOSITORY --revision GIT_PIN \
+  --harness codex --maintainers OWNER
+```
+
+The preview lists artifact changes without writing the target or contacting GitHub. When recovery is pending, it reports the interrupted transaction. A confirmed retry recovers the journal before calculating the next diff. To install from another directory, pass `--cwd PATH` before `init`. Choose `claude` or `copilot` to generate the corresponding harness integration. The CLI runs from the installed package, so the application can use any stack and keep its existing manifests and CI.
+
+Review the plan and repeat the command without `--plan`. The applying account needs repository administration and Project access. In a terminal, confirm the plan and the final artifact diff. For scripted use, pass the CLI's `--yes` after `grait init` to accept both. GitHub App registration and installation still require human approval. Use `--project-owner LOGIN --project-number N` to bind an existing Project or reconcile an interrupted Project creation. Use `--no-browser` to print approval URLs on a remote host.
+
+The installer reuses verified writer and reviewer Apps and the recorded Project on retry. It provisions using private staging and then applies the full set of artifacts together. These include the selected harness instructions, `workflow.config.json`, human CODEOWNERS, `.github/workflows/grait.yml`, and `.grait/installation.json`. The installation record tracks the GRAIT package version, pinned Git revision, and artifact ownership hashes. Publishing keys and operational recovery state live in the repository's private Git metadata. If setup is interrupted during a file transaction, preserve the journal and rerun the same installation. If the setup lock remains, confirm that its recorded process has stopped before removing the stale lock. Review any recovery conflict before retrying. An unchanged repeat installation leaves artifacts and provisioning alone.
+
+Review and commit the result to one configuration PR. After a human merges it and the generated GRAIT workflow passes on the current default-branch head, run activation from the target repository with the same pinned CLI:
+
+```sh
+npm exec --yes --allow-git=root --ignore-scripts \
+  --package='git+https://github.com/rodush/grait.git#GIT_PIN' -- \
+  grait activate
+```
+
+Activation verifies that a human merged the configuration PR into the default branch. The installed artifacts must match both the merge commit and the current default-branch head. Activation also checks current CI, Project access, CODEOWNERS, and both App installations. The generated workflow runs `grait validate` for GRAIT configuration and managed content. Keep your application checks and configure the application runner and write scopes in `workflow.config.json` before starting testable work.
+
+If init or activation pauses on GitHub rulesets, use the displayed settings link and configuration, then retry. If the repository cannot use rulesets, the separate `--acknowledge-unenforced-rules` option explicitly allows continuing. Ordinary `--yes` only confirms the installation plan. Human approval and merge remain required.
+
+## Existing template-based repository
+
+Use this path when installing or repairing the source-based template workflow.
 
 1. Clone the target and create an integration branch. Preserve the existing application's code, history, and policies:
 
@@ -125,38 +157,14 @@ Each invocation attempts automatic ruleset configuration again. The repository v
 
 ## Upgrade an existing GRAIT installation
 
-1. Stop active agents at committed handoffs. In the old installation set `AUTOMATION_ENABLED=false`, disable `controller.yml`, and cancel/wait for old agent workflows before enabling the local runtime. Preserve issue/PR ledgers and their writer identity so review history and lifetime limits survive migration. Resolve any in-flight or ambiguous external operation with a human.
-2. Integrate this version on a branch, preserving application changes and Project identity. Remove the old agent `.md`/`.lock.yml` files and `shared/` under `.github/workflows/`, `controller.yml`, `tdd-verify.yml`, `automation/prompts/`, and the old compiler/dispatch/authorizer scripts. Remove their npm scripts and CI compiler steps. The maintained workflows are `ci.yml` and optional `release.yml`. Keep the local Copilot skill, agent, and instruction adapters; Copilot CLI remains a supported subscription-backed harness.
-3. Migrate `workflow.config.json` to schema version 2 using this version's configuration: keep your repository binding, humans, scopes, statuses, and TDD profiles; select `execution: "local"`, `engine: "codex"`, `"claude"`, or `"copilot"`, five workers, and medium orchestrator reasoning. Remove compiler pins, hosted engine pins, credit budgets, and the old runner image; retain/adapt explicit local test install/command arrays under `tdd.runner`. Keep the legacy `controllerRepository` key and `[agent-controller:OWNER/REPOSITORY]` Project marker: they preserve existing bindings. Add the new orchestrator canonical skill and regenerate adapters.
-4. Reuse the existing publishing Apps. Their old private keys cannot be downloaded from GitHub Secrets. Recover your original keys or generate/download replacement keys **on the existing Apps**. Remove obsolete Actions permission from the writer App, keeping contents/issues/pull requests/statuses write and metadata read; reviewer keeps contents read, issues/pull requests write, metadata read. Approve permission changes on the installation. Local Project writes use the human's Project authorization rather than an App organization-Project grant.
-5. Import private key files on the runtime host during setup:
-
-   ```sh
-   chmod 600 /secure/writer.pem /secure/reviewer.pem
-   npm run setup -- --writer-key /secure/writer.pem --reviewer-key /secure/reviewer.pem
-   ```
-
-   Commit the integration before this command. Setup finds the recorded App logins and Project variables, validates the supplied keys, and prepares the configuration PR. It will not silently replace missing identities. Review old ledgers for paused work; a pending hosted operation requires human reconciliation before local work resumes.
-
-6. Existing delivery rules may still require an agent review on the migration PR. Have the local reviewer evaluate its exact head, then let a configured human publish that report with `npm run orchestrator -- review --setup-review --pr N --file /tmp/review.json`. This limited staged-review command works before host activation without disabling the delivery rules or starting implementation. See [review publication](operations.md#review-publication).
-7. After human merge/CI, activate and start locally. Delete unused provider API-key secrets, hosted writer/reviewer Actions secrets, and hosted credit-budget variables after confirming the old workflows cannot run. Preserve the old budget issue as historical evidence; local setup does not create or reset a paid-automation ledger. Retain optional release credentials only if you use that separate integration.
+Install this version using [guided configuration](#guided-configuration). A repository that only records App logins or has incomplete numeric bindings requires clean setup before activation. Stop previous automation before configuring the repository.
 
 ## Resume, remote hosts, and credentials
 
 Rerun setup after a pre-commit interruption from the same host and checkout. Edits to `workflow.config.json` are accepted as setup input without a separate commit; review and commit any other partial tracked changes before retrying. Saved App registrations and the recorded Project are reused. An uncertain manifest conversion or Project creation fails closed; recover the existing object before retrying. A stale lock requires stopping its process and inspecting/removing the lock manually; never delete a live lock to start a second instance.
 
-App credentials and local activation state live in `<git-common-dir>/grait-setup/session.json`; this is outside tracked files and shared by linked worktrees. Back it up securely. On a second host, authenticate GitHub and the native harness there, securely transfer the private setup directory with mode 700 for the directory and 600 for files (excluding any lock), and activate that host. Alternatively import keys as above while automation is paused. Do not commit or attach this directory to a PR.
+App credentials and local activation state live in `<git-common-dir>/grait-setup/session.json`; this is outside tracked files and shared by linked worktrees. Back it up securely. On a second host, authenticate GitHub and the native harness there, securely transfer the private setup directory with mode 700 for the directory and 600 for files (excluding any lock), and activate that host. Alternatively, while automation is paused, import the original keys with `--writer-key PATH --reviewer-key PATH` during setup. Key import requires all four numeric publishing bindings to already be recorded in the repository. Each key must be a private regular file owned by you (mode 600). Do not commit or attach this directory to a PR.
 
 For an SSH host, use `--no-browser` and forward the printed callback port to your browser machine, for example `ssh -L PORT:127.0.0.1:PORT HOST` in another terminal. Open the printed loopback URL, then finish GitHub's approvals. Setup uses the same saved port on retry.
 
 Run **one orchestrator host per Project**. Local command locks do not coordinate separate clones or machines. Stop the old host before moving coordination to another host. Separate worktrees provide file/branch isolation, not OS security boundaries; use isolated users or containers for untrusted code. See [architecture](architecture.md) and [setup reference](setup.md).
-
-## Migrate legacy publishing identity bindings
-
-On the existing host, keep the current writer and reviewer keys and their private setup state. Use a configured human administrator from the repository checkout after the updated workflow configuration is on the default branch and CI has passed.
-
-```sh
-npm run setup -- --activate --migrate-publishing-identities
-```
-
-Guided setup directs existing installations with legacy or incomplete bindings to this activation command. Activation authenticates both saved Apps, verifies their owners and installations and bot accounts, and records the numeric publishing bindings in the repository and private host state. Existing issue ledgers and review records stay associated with the same bot user IDs. A renamed App may display a different login. Keep the original keys and reconcile any mismatched, incomplete, or duplicate identity evidence before retrying. If the migration is interrupted during variable creation, rerun the same command on the same host.

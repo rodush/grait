@@ -18,11 +18,6 @@ function validate(state, repo) {
       "Setup recovery state is malformed or belongs to another target; inspect Git metadata before continuing",
     );
   if (
-    state.publishingIdentityMigrationPending !== undefined &&
-    typeof state.publishingIdentityMigrationPending !== "boolean"
-  )
-    throw new Error("Invalid publishing identity migration checkpoint");
-  if (
     state.setupPublishingBindingsPending !== undefined &&
     typeof state.setupPublishingBindingsPending !== "boolean"
   )

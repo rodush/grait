@@ -87,6 +87,11 @@ async function contents(root, path) {
   return { content: await readFile(destination, "utf8"), mode: value.mode & 0o777 };
 }
 
+/** Read current artifact text using the same path checks as staging. */
+export async function readArtifact(root, path) {
+  return (await contents(root, path)).content;
+}
+
 async function atomicWrite(path, content, mode = 0o600, hooks = {}) {
   await regularAncestors(path);
   const temporary = join(dirname(path), `.grait-${randomBytes(16).toString("hex")}.tmp`);
