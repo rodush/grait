@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import {
   copyFile,
   lstat,
@@ -123,6 +124,13 @@ globalThis.fetch = async (url, options = {}) => {
       status = 404;
       value = { message: "Not Found" };
     }
+  } else if (method === "GET" && endpoint === "commits") {
+    const ref = parsed.searchParams.get("sha");
+    const name = parsed.searchParams.get("path");
+    const sha = ref === state.defaultHead && name === ".grait/installation.json"
+      ? state.installationCommit
+      : null;
+    value = sha ? [{ sha }] : [];
   } else if (method === "GET" && /^commits\\/[^/]+\\/pulls$/.test(endpoint)) {
     const sha = endpoint.split("/")[1];
     value = state.configurationPR?.merge_commit_sha === sha ? [state.configurationPR] : [];
@@ -138,7 +146,9 @@ globalThis.fetch = async (url, options = {}) => {
     value = { workflow_runs: [{ head_sha: state.defaultHead, conclusion: state.ciConclusion }] };
   } else if (method === "GET" && endpoint.startsWith("contents/")) {
     const name = decodeURIComponent(endpoint.slice("contents/".length));
-    const content = state.defaultFiles[name];
+    const ref = parsed.searchParams.get("ref") || "main";
+    const sha = ref === "main" ? state.defaultHead : ref;
+    const content = state.committedFiles[sha]?.[name];
     if (typeof content === "string") {
       value = { content: Buffer.from(content).toString("base64") };
     } else {
@@ -223,10 +233,23 @@ async function installerFixture(t, overrides = {}) {
   const syncDefault = async (ciConclusion) => {
     const defaultHead = f.git(["rev-parse", "HEAD"]);
     const paths = f.git(["ls-tree", "-r", "--name-only", defaultHead]).split("\n");
-    const defaultFiles = Object.fromEntries(
-      await Promise.all(paths.map(async (path) => [path, await f.read(path)])),
+    const files = Object.fromEntries(
+      paths.map((file) => [
+        file,
+        execFileSync("git", ["show", defaultHead + ":" + file], {
+          cwd: f.directory,
+          encoding: "utf8",
+        }),
+      ]),
     );
-    await f.update({ defaultHead, defaultFiles, ciConclusion });
+    const installationCommit = f.git(["log", "-1", "--format=%H", defaultHead, "--", recordPath]);
+    const { committedFiles } = await f.state();
+    await f.update({
+      defaultHead,
+      committedFiles: { ...committedFiles, [defaultHead]: files },
+      installationCommit,
+      ciConclusion,
+    });
   };
   await f.update({
     runningCLI: cli,
@@ -236,11 +259,11 @@ async function installerFixture(t, overrides = {}) {
     previousDefaultHead: initialHead,
   });
   await syncDefault("success");
-  const commitConfiguration = async (viaPullRequest) => {
-    if (!viaPullRequest) f.git(["switch", "main"]);
-    f.git(["add", "--all"]);
+  const commitConfiguration = async (mode) => {
+    if (mode === "direct") f.git(["switch", "main"]);
+    f.git(mode === "record-only" ? ["add", "--", recordPath] : ["add", "--all"]);
     f.git(["commit", "--quiet", "-m", "test: configuration"]);
-    if (viaPullRequest) {
+    if (mode !== "direct") {
       const proposal = f.git(["rev-parse", "HEAD"]);
       f.git(["switch", "main"]);
       f.git(["merge", "--squash", "configuration"]);
@@ -248,9 +271,12 @@ async function installerFixture(t, overrides = {}) {
       const mergeCommit = f.git(["rev-parse", "HEAD"]);
       const actor = { login: "operator", id: 42, type: "User" };
       const configurationFiles = f
-        .git(["diff", "--name-only", initialHead, mergeCommit])
-        .split("\\n")
-        .map((filename) => ({ filename, status: "added" }));
+        .git(["diff", "--name-status", initialHead, mergeCommit])
+        .split("\n")
+        .map((line) => {
+          const [type, filename] = line.split("\t");
+          return { filename, status: type === "A" ? "added" : "modified" };
+        });
       await f.update({
         configurationPR: {
           number: 99,
@@ -267,14 +293,21 @@ async function installerFixture(t, overrides = {}) {
         configurationFiles,
       });
     }
-    await syncDefault(viaPullRequest ? "failure" : "success");
+    await syncDefault(mode === "direct" ? "success" : "failure");
+  };
+  const commitFollowup = async (message) => {
+    f.git(["add", "--all"]);
+    f.git(["commit", "--quiet", "-m", message]);
+    await syncDefault("success");
   };
   return {
     ...f,
     run,
     initialHead,
-    mergeConfiguration: () => commitConfiguration(true),
-    commitDirectly: () => commitConfiguration(false),
+    mergeConfiguration: () => commitConfiguration("merged"),
+    mergeRecordOnly: () => commitConfiguration("record-only"),
+    commitDirectly: () => commitConfiguration("direct"),
+    commitFollowup,
   };
 }
 
@@ -390,7 +423,8 @@ test("installed activation requires a human-merged configuration and successful 
   assert.match(failingCI.output, /\bCI\b|successful|check/i);
   await assertInactive(f);
 
-  await f.update({ ciConclusion: "success" });
+  await writeFile(join(f.directory, "app", "notes.md"), "Unrelated application change.\n");
+  await f.commitFollowup("test: unrelated application change");
   const activated = await f.run(["activate"]);
   assert.equal(activated.status, 0, "Current successful CI permits human activation");
   assert.equal((await f.localState()).enabled, true);
@@ -520,4 +554,19 @@ test("installed init accepts a twelve-character revision and persists the full v
     workflows.map((path) => f.read(join(".github/workflows", path))),
   );
   assert.ok(contents.some((text) => text.includes(".git#" + revision)));
+});
+
+test("installed activation rejects a record-only merge followed by direct configuration commits", async (t) => {
+  const f = await installerFixture(t);
+  assert.equal((await f.run([...init, "--yes"])).status, 0);
+  await f.mergeRecordOnly();
+  assert.throws(() => f.git(["cat-file", "-e", "HEAD:workflow.config.json"]));
+  await f.commitFollowup("test: commit the remaining configuration directly");
+  assert.equal(f.git(["status", "--porcelain"]), "");
+  assert.equal((await f.run(["validate"])).status, 0);
+
+  const activation = await f.run(["activate"]);
+  assert.notEqual(activation.status, 0, "The merged PR must establish the installed configuration");
+  assert.match(activation.output, /merge|pull request/i);
+  await assertInactive(f);
 });
