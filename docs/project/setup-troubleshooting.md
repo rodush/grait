@@ -13,22 +13,36 @@ Replace `OWNER/REPOSITORY` with the controller repository. The commands show acc
 ```sh
 repo='OWNER/REPOSITORY'
 
+repo_api() (
+  repo_token=${GH_TOKEN:-}
+  if [ -z "$repo_token" ]; then
+    repo_token=$(gh auth token) || exit 1
+    github_token=$(gh auth token --hostname github.com) || exit 1
+    if [ -z "$repo_token" ] || [ "$repo_token" != "$github_token" ]; then
+      printf '%s\n' 'Select the intended GitHub.com credential before retrying.' >&2
+      exit 1
+    fi
+  fi
+  GH_TOKEN="$repo_token" gh api --hostname github.com "$@"
+)
+
 project_api() {
   if [ -n "${PROJECT_TOKEN:-}" ]; then
     GH_TOKEN="$PROJECT_TOKEN" gh api --hostname github.com "$@"
   else
-    gh api --hostname github.com "$@"
+    repo_api "$@"
   fi
 }
 
-gh api --hostname github.com user --jq '"Repository login: " + .login'
+repo_api user --jq '"Repository login: " + .login'
 project_api user --jq '"Project login: " + .login'
 
 for name in PROJECT_ID PROJECT_OWNER PROJECT_NUMBER; do
-  gh api --hostname github.com "repos/$repo/actions/variables/$name" \
-    --jq '.name + "=" + .value'
+  repo_api "repos/$repo/actions/variables/$name" --jq '.name + "=" + .value'
 done
 ```
+
+An inherited `GH_HOST` can make `gh auth token` select a credential for another host. With no explicit `GH_TOKEN`, the repository check and the Project fallback compare the credential GRAIT would select with the active GitHub.com credential before sending any request. If either lookup fails or the credentials differ, explicitly select the intended GitHub.com credential in the failing environment and rerun the checks.
 
 A failure reading the repository variables points to the repository identity or permissions. Confirm the controller repository and repository login before using the values to diagnose the Project. If the Project login differs from what you intended, inspect which variables the launcher supplies. A stale `PROJECT_TOKEN` overrides both `GH_TOKEN` and the interactive login, and a stale `GH_TOKEN` overrides the stored login. Update the token selection in the launcher, restart it if needed to pick up the change, and rerun the login checks. If you intentionally switch to the stored login, confirm that it belongs to the intended account before retrying.
 
