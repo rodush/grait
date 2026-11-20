@@ -18,12 +18,15 @@ export async function targetRoot(cwd = process.cwd()) {
 }
 
 export async function runRuntime({ command, args = [], cwd = process.cwd() }) {
-  if (!["orchestrator", "github"].includes(command)) throw new Error("Unknown runtime command");
+  if (!["orchestrator", "github", "activate"].includes(command))
+    throw new Error("Unknown runtime command");
   const root = args.includes("--help") ? resolve(cwd) : await targetRoot(cwd);
   return new Promise((resolveResult, reject) => {
     const invocation = bundledRuntime
       ? [runtimeFile, "--grait-internal-runtime", command, ...args]
-      : [packageResource(`scripts/${command}.mjs`), ...args];
+      : command === "activate"
+        ? [packageResource("src/cli.mjs"), "--grait-internal-runtime", command, ...args]
+        : [packageResource(`scripts/${command}.mjs`), ...args];
     const child = spawn(process.execPath, invocation, {
       cwd: root,
       env: process.env,
