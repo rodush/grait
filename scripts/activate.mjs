@@ -3,7 +3,13 @@ import { execFile } from "node:child_process";
 import { parseArgs, promisify } from "node:util";
 import { GitHub } from "./lib/github.mjs";
 import { SetupState } from "./lib/setup-state.mjs";
-import { roleToken } from "./lib/local-auth.mjs";
+import {
+  assertPublishingBindings,
+  publishingBindings,
+  publishingRoles,
+  publishingVariableMap,
+  verifyPublishingIdentity,
+} from "./lib/local-auth.mjs";
 import { Project } from "./lib/project.mjs";
 import { digest, sameLogin, validateConfig } from "./lib/policy.mjs";
 import { repositoryRules, resolveActionsAppId } from "./lib/bootstrap.mjs";
@@ -12,7 +18,10 @@ import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
 let store;
 try {
   const { values } = parseArgs({
-    options: { "acknowledge-unenforced-rules": { type: "boolean" } },
+    options: {
+      "acknowledge-unenforced-rules": { type: "boolean" },
+      "migrate-publishing-identities": { type: "boolean" },
+    },
   });
   const localText = await readFile("workflow.config.json", "utf8");
   const config = validateConfig(JSON.parse(localText));
@@ -51,36 +60,43 @@ try {
   );
   if (digest(Buffer.from(remote.content, "base64")) !== digest(localText))
     throw new Error("Commit the configured files to the default branch before activation");
-  const variables = new Map(
-    (await api.list(`repos/${repo}/actions/variables`, "variables")).map((item) => [
-      item.name,
-      item.value,
-    ]),
+  const variables = publishingVariableMap(
+    await api.list(`repos/${repo}/actions/variables`, "variables"),
   );
-  for (const name of ["PROJECT_ID", "AUTOMATION_LOGIN", "REVIEW_LOGIN"])
-    if (!variables.get(name)) throw new Error(`Missing repository variable ${name}`);
-  if (
-    ![
-      ["writer", "AUTOMATION_LOGIN"],
-      ["reviewer", "REVIEW_LOGIN"],
-    ].every(
-      ([role, name]) =>
-        state.apps[role]?.slug && sameLogin(`${state.apps[role].slug}[bot]`, variables.get(name)),
+  if (!variables.get("PROJECT_ID")) throw new Error("Missing repository variable PROJECT_ID");
+  const migrate = values["migrate-publishing-identities"];
+  if (!migrate) assertPublishingBindings(variables, state.apps);
+  const verifiedApps = {};
+  for (const [role, names] of Object.entries(publishingRoles)) {
+    const app = state.apps[role];
+    const verified = await verifyPublishingIdentity(app, { repo, role });
+    if (migrate && !variables.has(names.app)) {
+      const recordedLogin = variables.get(names.login);
+      if (
+        !sameLogin(recordedLogin, `${app.slug}[bot]`) &&
+        !sameLogin(recordedLogin, verified.login)
+      )
+        throw new Error(`Legacy ${role} identity differs from the repository's recorded App`);
+    }
+    const { token: _token, login: _login, ...identity } = verified;
+    verifiedApps[role] = identity;
+  }
+  const bindings = publishingBindings(verifiedApps);
+  if (migrate) {
+    const recordedCount = Object.keys(bindings).filter((name) => variables.has(name)).length;
+    if (
+      recordedCount > 0 &&
+      recordedCount < Object.keys(bindings).length &&
+      !state.publishingIdentityMigrationPending
     )
-  )
-    throw new Error("Host publishing identities differ from the repository's recorded Apps");
-  if (
-    sameLogin(variables.get("AUTOMATION_LOGIN"), variables.get("REVIEW_LOGIN")) ||
-    config.humanOperators.some(
-      (login) =>
-        sameLogin(login, variables.get("AUTOMATION_LOGIN")) ||
-        sameLogin(login, variables.get("REVIEW_LOGIN")),
-    )
-  )
-    throw new Error("Human, implementation, and review identities must be separate");
-  // Credentials stay on the user host. Mint each scoped App token to verify both installations.
-  await roleToken(repo, "writer");
-  await roleToken(repo, "reviewer");
+      throw new Error("Partial repository publishing identities require operator reconciliation");
+    for (const [name, expected] of Object.entries(bindings)) {
+      if (variables.has(name) && variables.get(name) !== expected)
+        throw new Error(
+          `Host publishing identities differ from the repository's recorded Apps: ${name}`,
+        );
+    }
+  }
   const projectToken = process.env.PROJECT_TOKEN || token;
   const project = await new Project(
     new GitHub(projectToken),
@@ -106,6 +122,26 @@ try {
     const user = await api.request(`users/${encodeURIComponent(login)}`);
     if (user.type !== "User") throw new Error("A configured operator is a bot account");
     actors.push(user);
+  }
+  if (migrate) {
+    // Retain the legacy slugs until all repository variables are recorded so an
+    // interrupted migration can still verify the original display bindings.
+    for (const [role, app] of Object.entries(verifiedApps))
+      store.state.apps[role].botUserId = app.botUserId;
+    store.state.publishingIdentityMigrationPending = true;
+    await store.save();
+    for (const [name, value] of Object.entries(bindings)) {
+      if (!variables.has(name)) {
+        await api.request(`repos/${repo}/actions/variables`, {
+          method: "POST",
+          body: { name, value },
+        });
+        variables.set(name, value);
+      }
+    }
+    Object.assign(store.state.apps, verifiedApps);
+    delete store.state.publishingIdentityMigrationPending;
+    await store.save();
   }
   async function recordEnforcement(value) {
     await api.request(

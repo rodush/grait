@@ -1,8 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { GitHub } from "./github.mjs";
 import { Project } from "./project.mjs";
-import { sameLogin, validateConfig } from "./policy.mjs";
-import { humanToken, roleToken } from "./local-auth.mjs";
+import { validateConfig } from "./policy.mjs";
+import {
+  assertPublishingBindings,
+  humanToken,
+  publishingVariableMap,
+  verifyPublishingIdentity,
+} from "./local-auth.mjs";
 import { SetupState } from "./setup-state.mjs";
 
 export async function localContext({ reviewer = false, setupReview = false } = {}) {
@@ -27,24 +32,10 @@ export async function localContext({ reviewer = false, setupReview = false } = {
           "Staged setup review requires a configured human operator and the reviewer publishing operation",
         );
     }
-    const variables = new Map(
-      (await humanApi.list(`repos/${repo}/actions/variables`, "variables")).map((item) => [
-        item.name,
-        item.value,
-      ]),
+    const variables = publishingVariableMap(
+      await humanApi.list(`repos/${repo}/actions/variables`, "variables"),
     );
-    if (
-      ![
-        ["writer", "AUTOMATION_LOGIN"],
-        ["reviewer", "REVIEW_LOGIN"],
-      ].every(
-        ([role, name]) =>
-          state.apps[role]?.slug && sameLogin(`${state.apps[role].slug}[bot]`, variables.get(name)),
-      )
-    )
-      throw new Error(
-        "Host publishing identities differ from the repository's recorded Apps; reconcile before starting work",
-      );
+    assertPublishingBindings(variables, state.apps);
     if (variables.get("AUTOMATION_ENABLED") !== "true" && !setupReview)
       throw new Error("Repository automation is paused");
     const project = await new Project(
@@ -52,16 +43,27 @@ export async function localContext({ reviewer = false, setupReview = false } = {
       variables.get("PROJECT_ID"),
       config.statuses,
     ).load();
-    const api = new GitHub(await roleToken(repo, "writer"));
+    const writer = await verifyPublishingIdentity(state.apps.writer, {
+      repo,
+      role: "writer",
+    });
+    const reviewerIdentity = reviewer
+      ? await verifyPublishingIdentity(state.apps.reviewer, {
+          repo,
+          role: "reviewer",
+        })
+      : undefined;
     return {
       config,
       repo,
-      api,
+      api: new GitHub(writer.token),
       humanApi,
       project,
-      writer: variables.get("AUTOMATION_LOGIN"),
-      reviewer: variables.get("REVIEW_LOGIN"),
-      reviewerApi: reviewer ? new GitHub(await roleToken(repo, "reviewer")) : undefined,
+      writer: writer.login,
+      reviewer: reviewerIdentity?.login,
+      writerId: writer.botUserId,
+      reviewerId: state.apps.reviewer.botUserId,
+      reviewerApi: reviewerIdentity ? new GitHub(reviewerIdentity.token) : undefined,
       store,
     };
   } catch (error) {

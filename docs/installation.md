@@ -150,3 +150,13 @@ App credentials and local activation state live in `<git-common-dir>/grait-setup
 For an SSH host, use `--no-browser` and forward the printed callback port to your browser machine, for example `ssh -L PORT:127.0.0.1:PORT HOST` in another terminal. Open the printed loopback URL, then finish GitHub's approvals. Setup uses the same saved port on retry.
 
 Run **one orchestrator host per Project**. Local command locks do not coordinate separate clones or machines. Stop the old host before moving coordination to another host. Separate worktrees provide file/branch isolation, not OS security boundaries; use isolated users or containers for untrusted code. See [architecture](architecture.md) and [setup reference](setup.md).
+
+## Migrate legacy publishing identity bindings
+
+On the existing host, keep the current writer and reviewer keys and their private setup state. Use a configured human administrator from the repository checkout after the updated workflow configuration is on the default branch and CI has passed.
+
+```sh
+npm run setup -- --activate --migrate-publishing-identities
+```
+
+Activation authenticates both saved Apps, verifies their installations and bot accounts, and records the numeric publishing bindings in the repository and private host state. Existing issue ledgers and review records stay associated with the same bot user IDs. A renamed App may display a different login. Keep the original keys and reconcile any mismatched or duplicate identity evidence before retrying. If the migration is interrupted during variable creation, rerun the same command on the same host.

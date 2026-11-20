@@ -2,8 +2,16 @@ import { parseArgs } from "node:util";
 import { readFile, writeFile, lstat } from "node:fs/promises";
 import { command, confirm, withoutCredentials, requireSubscription } from "./lib/setup-process.mjs";
 import { SetupState } from "./lib/setup-state.mjs";
-import { humanToken, roleToken } from "./lib/local-auth.mjs";
-import { githubRequest, registerApp, validateApp, verifyInstallation } from "./lib/setup-apps.mjs";
+import {
+  humanToken,
+  identityNumber,
+  publishingBindings,
+  publishingRoles,
+  publishingVariableMap,
+  roleToken,
+  verifyPublishingIdentity,
+} from "./lib/local-auth.mjs";
+import { githubRequest, registerApp, validateApp } from "./lib/setup-apps.mjs";
 
 async function publishConfiguration(repo, repository, store) {
   const saved = store.state.configuration;
@@ -104,6 +112,7 @@ async function main() {
       "acknowledge-unenforced-rules": { type: "boolean" },
       "no-browser": { type: "boolean" },
       activate: { type: "boolean" },
+      "migrate-publishing-identities": { type: "boolean" },
       publish: { type: "boolean" },
       repo: { type: "string" },
       harness: { type: "string" },
@@ -116,7 +125,7 @@ async function main() {
   });
   if (values.help) {
     console.log(
-      "GRAIT local setup\n\nnpm run setup -- [--plan] [--repo OWNER/REPO] [--harness codex|claude|copilot]\n  --yes              Accept the displayed configuration plan\n  --acknowledge-unenforced-rules   Explicitly continue if GitHub rulesets cannot be configured\n  --no-browser       Print approval URLs (forward the localhost callback port over SSH)\n  --project-owner LOGIN --project-number NUMBER   Bind an existing Project\n  --maintainers LOGIN,LOGIN   Human code owners (default: signed-in GitHub user)\n  --writer-key PATH --reviewer-key PATH   Import private keys for existing Apps\n  --publish          Retry only the saved configuration push/PR after a failure\n  --activate         Activate after human merge and successful default-branch CI\n\nAll AI runs in your native harness using its own login. No provider API keys are requested. See docs/installation.md.",
+      "GRAIT local setup\n\nnpm run setup -- [--plan] [--repo OWNER/REPO] [--harness codex|claude|copilot]\n  --yes              Accept the displayed configuration plan\n  --acknowledge-unenforced-rules   Explicitly continue if GitHub rulesets cannot be configured\n  --no-browser       Print approval URLs (forward the localhost callback port over SSH)\n  --project-owner LOGIN --project-number NUMBER   Bind an existing Project\n  --maintainers LOGIN,LOGIN   Human code owners (default: signed-in GitHub user)\n  --writer-key PATH --reviewer-key PATH   Import private keys for existing Apps\n  --publish          Retry only the saved configuration push/PR after a failure\n  --activate         Activate after human merge and successful default-branch CI\n  --migrate-publishing-identities  Use with --activate to verify and migrate legacy App bindings\n\nAll AI runs in your native harness using its own login. No provider API keys are requested. See docs/installation.md.",
     );
     return;
   }
@@ -162,11 +171,14 @@ async function main() {
   };
   console.log(JSON.stringify(plan, null, 2));
   if (values.plan) return;
+  if (values["migrate-publishing-identities"] && !values.activate)
+    throw new Error("Use --migrate-publishing-identities with --activate");
   if (values.activate) {
     await command(
       process.execPath,
       [
         "scripts/activate.mjs",
+        ...(values["migrate-publishing-identities"] ? ["--migrate-publishing-identities"] : []),
         ...(values["acknowledge-unenforced-rules"] ? ["--acknowledge-unenforced-rules"] : []),
       ],
       { interactive: true },
@@ -236,17 +248,29 @@ async function main() {
     const variables = await githubRequest(`repos/${repo}/actions/variables?per_page=100`, {
       token,
     });
-    const variable = (name) => variables.variables?.find((entry) => entry.name === name)?.value;
+    const publishedVariables = publishingVariableMap(variables.variables || []);
+    const variable = (name) => publishedVariables.get(name);
     if (variable("AUTOMATION_ENABLED") === "true")
       throw new Error(
         "Pause the existing installation first: set AUTOMATION_ENABLED=false and stop any old hosted runs before upgrading",
       );
     store.state.enabled = false;
-    for (const role of ["writer", "reviewer"]) {
-      const existingLogin = variable(role === "writer" ? "AUTOMATION_LOGIN" : "REVIEW_LOGIN");
+    for (const [role, names] of Object.entries(publishingRoles)) {
+      const existingLogin = variable(names.login);
+      const recordedApp = variable(names.app);
+      const recordedBot = variable(names.bot);
+      const appId = identityNumber(recordedApp);
+      const botUserId = identityNumber(recordedBot);
+      if (
+        (recordedApp !== undefined && !appId) ||
+        (recordedBot !== undefined && !botUserId) ||
+        (botUserId && !appId)
+      )
+        throw new Error(`Invalid recorded ${role} publishing identity; reconcile it before setup`);
       const keyPath = values[`${role}-key`];
+      let saved = store.state.apps[role];
       if (keyPath) {
-        if (!existingLogin?.endsWith("[bot]"))
+        if (!appId && !existingLogin?.endsWith("[bot]"))
           throw new Error(
             `No recorded ${role} App to import; register through the normal setup instead`,
           );
@@ -260,36 +284,33 @@ async function main() {
           throw new Error(
             "Imported App keys must be private files owned by you (chmod 600), not symlinks",
           );
-        const slug = existingLogin.replace(/\[bot\]$/, "");
-        const app = await githubRequest(`apps/${slug}`, { token });
-        validateApp(app, { role, owner: repo.split("/")[0] });
-        const saved = {
-          name: slug,
-          id: app.id,
-          slug,
-          clientId: app.client_id,
+        const slug = existingLogin?.replace(/\[bot\]$/, "");
+        const app = appId
+          ? undefined
+          : await githubRequest(`apps/${encodeURIComponent(slug)}`, { token });
+        if (app) validateApp(app, { role, owner: repo.split("/")[0] });
+        const id = appId || app.id;
+        if (saved?.id && saved.id !== id)
+          throw new Error(`Imported ${role} App ID differs from the saved identity`);
+        saved = {
+          ...saved,
+          name: saved?.name || app?.slug || `grait-${role}-${id}`,
+          id,
+          slug: app?.slug || saved?.slug,
+          clientId: app?.client_id || saved?.clientId,
           pem: await readFile(keyPath, "utf8"),
           phase: "installed",
           installed: true,
         };
-        await verifyInstallation(saved, { repo, role });
-        store.state.apps[role] = saved;
-        await store.save();
       }
-      if (existingLogin && !store.state.apps[role]?.id)
+      if ((appId || existingLogin) && !saved?.id)
         throw new Error(
           `Existing ${role} identity found. Import its private key with --${role}-key PATH; GitHub Secrets cannot be downloaded. Setup will not create a duplicate App`,
         );
-      if (
-        store.state.apps[role]?.id &&
-        existingLogin &&
-        `${store.state.apps[role].slug}[bot]`.toLowerCase() !== existingLogin.toLowerCase()
-      )
-        throw new Error(`Saved ${role} App differs from the repository's identity`);
-      if (store.state.apps[role]?.installed)
-        await verifyInstallation(store.state.apps[role], { repo, role });
-      else
-        await registerApp({
+      if (appId && saved.id !== appId)
+        throw new Error(`Saved ${role} App ID differs from the repository's identity`);
+      if (!saved?.installed)
+        saved = await registerApp({
           role,
           repo,
           owner: repo.split("/")[0],
@@ -303,7 +324,26 @@ async function main() {
                 if (opened.code) console.log("Open the printed URL in your browser to continue.");
               },
         });
+      const {
+        token: _token,
+        login,
+        ...verified
+      } = await verifyPublishingIdentity(saved, { repo, role });
+      if (
+        (botUserId && verified.botUserId !== botUserId) ||
+        (!appId &&
+          existingLogin &&
+          ![login, `${saved.slug}[bot]`].some(
+            (candidate) => candidate.toLowerCase() === existingLogin.toLowerCase(),
+          ))
+      )
+        throw new Error(
+          `Verified ${role} publishing identity differs from the repository's identity`,
+        );
+      store.state.apps[role] = verified;
+      await store.save();
     }
+    publishingBindings(store.state.apps);
     config.engine = harness;
     config.schemaVersion = 2;
     config.execution = "local";
@@ -326,6 +366,12 @@ async function main() {
       `${store.state.apps.writer.slug}[bot]`,
       "--status-app-id",
       String(store.state.apps.writer.id),
+      "--writer-bot-user-id",
+      String(store.state.apps.writer.botUserId),
+      "--reviewer-app-id",
+      String(store.state.apps.reviewer.id),
+      "--reviewer-bot-user-id",
+      String(store.state.apps.reviewer.botUserId),
       "--reviewer-login",
       `${store.state.apps.reviewer.slug}[bot]`,
     ];

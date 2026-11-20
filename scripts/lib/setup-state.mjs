@@ -17,6 +17,11 @@ function validate(state, repo) {
     throw new Error(
       "Setup recovery state is malformed or belongs to another target; inspect Git metadata before continuing",
     );
+  if (
+    state.publishingIdentityMigrationPending !== undefined &&
+    typeof state.publishingIdentityMigrationPending !== "boolean"
+  )
+    throw new Error("Invalid publishing identity migration checkpoint");
   if (state.enabled !== undefined && typeof state.enabled !== "boolean")
     throw new Error("Local activation state must be boolean");
   if (
@@ -40,6 +45,11 @@ function validate(state, repo) {
         typeof app.clientId !== "string")
     )
       throw new Error("Invalid App identity in setup recovery state");
+    if (
+      app.botUserId !== undefined &&
+      (!Number.isSafeInteger(app.botUserId) || app.botUserId < 1 || app.id === undefined)
+    )
+      throw new Error("Invalid bot user ID in setup recovery state");
     if (
       app.pem !== undefined &&
       (typeof app.pem !== "string" || !app.pem.startsWith("-----BEGIN ") || app.pem.length > 20000)

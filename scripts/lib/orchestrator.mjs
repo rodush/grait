@@ -18,18 +18,27 @@ const labels = (item) =>
 // The CLI serializes mutations on the designated host. This class never invokes a model
 // or dispatches Actions; the signed-in native harness owns agent execution.
 export class LocalOrchestrator {
-  constructor({ api, reviewerApi, project, repo, writer, reviewer, config }) {
+  constructor({ api, reviewerApi, project, repo, writerId, reviewerId, config }) {
     if (!sameLogin(config.controllerRepository, repo) || !sameLogin(project.controller, repo))
       throw new Error("Repository and Project must be bound to this orchestrator");
     if (
-      !writer ||
-      !reviewer ||
-      sameLogin(writer, reviewer) ||
-      config.humanOperators.some((login) => sameLogin(login, writer) || sameLogin(login, reviewer))
+      !Number.isSafeInteger(writerId) ||
+      writerId < 1 ||
+      !Number.isSafeInteger(reviewerId) ||
+      reviewerId < 1 ||
+      writerId === reviewerId
     )
-      throw new Error("Human, writer, and reviewer identities must be separate");
-    Object.assign(this, { api, reviewerApi, project, repo, writer, reviewer, config });
-    this.ledger = new Ledger(api, repo, writer);
+      throw new Error("Writer and reviewer must have distinct verified bot user IDs");
+    Object.assign(this, {
+      api,
+      reviewerApi,
+      project,
+      repo,
+      writerId,
+      reviewerId,
+      config,
+    });
+    this.ledger = new Ledger(api, repo, writerId);
   }
 
   async issue(number) {
@@ -47,8 +56,9 @@ export class LocalOrchestrator {
     if (names.includes(this.config.labels.paused) || names.includes(this.config.labels.needsHuman))
       throw new Error("Work is paused or needs human resolution");
     if (
-      this.config.humanOperators.some((login) => sameLogin(login, item.user?.login)) ||
-      sameLogin(item.user?.login, this.writer) ||
+      (item.user?.type !== "Bot" &&
+        this.config.humanOperators.some((login) => sameLogin(login, item.user?.login))) ||
+      item.user?.id === this.writerId ||
       names.includes(this.config.labels.admitted)
     )
       return;
@@ -192,7 +202,7 @@ export class LocalOrchestrator {
       pr.draft ||
       pr.head?.sha !== data.head ||
       data.pr !== number ||
-      sameLogin(pr.user?.login, this.reviewer)
+      pr.user?.id === this.reviewerId
     )
       throw new Error(
         "Review requires an open ready PR at the exact requested head and an independent reviewer",
@@ -267,7 +277,7 @@ export class LocalOrchestrator {
       method: "POST",
       body: { commit_id: data.head, event: data.verdict, body, comments },
     });
-    if (!sameLogin(published.user?.login, this.reviewer))
+    if (published.user?.id !== this.reviewerId)
       throw new Error("Review was not published by the configured reviewer");
     validateReview(data, published, { number, head: data.head, round: data.round });
     history.push({
