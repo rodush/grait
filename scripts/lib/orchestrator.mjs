@@ -14,6 +14,7 @@ import {
 
 const labels = (item) =>
   (item.labels || []).map((label) => (typeof label === "string" ? label : label.name));
+const maxReadyStories = 5;
 
 // The CLI serializes mutations on the designated host. This class never invokes a model
 // or dispatches Actions; the signed-in native harness owns agent execution.
@@ -93,6 +94,13 @@ export class LocalOrchestrator {
       JSON.stringify([...new Set(assessment.blockers)].sort().map((ref) => ref.toLowerCase()))
     )
       throw new Error("Triage blockers must match the native GitHub blocking dependencies");
+    if (assessment.ready) {
+      const incomplete = actual.filter((item) => !dependencyComplete(item));
+      if (incomplete.length)
+        throw new Error(
+          `Ready requires completed blocking dependencies: ${incomplete.map((item) => this.reference(item)).join(", ")}`,
+        );
+    }
     const graph = new Map();
     const visit = async (repo, id) => {
       const key = `${repo.toLowerCase()}#${id}`;
@@ -116,6 +124,16 @@ export class LocalOrchestrator {
       ![this.config.statuses.backlog, this.config.statuses.ready].includes(existing.status)
     )
       throw new Error("Active work must be reconciled before re-triage");
+    if (assessment.ready && existing?.status !== this.config.statuses.ready) {
+      const readyCount = this.project.items.filter(
+        (item) =>
+          !item.isArchived &&
+          item.content?.__typename !== "PullRequest" &&
+          item.status === this.config.statuses.ready,
+      ).length;
+      if (readyCount >= maxReadyStories)
+        throw new Error("The five-story Ready capacity is exhausted");
+    }
     state.triagedDigest = issueDigest(issue);
     state.triage = assessment;
     await this.ledger.save(number);
