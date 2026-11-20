@@ -2,18 +2,26 @@ import { parseArgs } from "node:util";
 import { readFile, writeFile, lstat } from "node:fs/promises";
 import { command, confirm, withoutCredentials, requireSubscription } from "./lib/setup-process.mjs";
 import { SetupState } from "./lib/setup-state.mjs";
+import { GitHub } from "./lib/github.mjs";
 import {
+  assertPublishingBindings,
+  assertSetupPublishingBindings,
   humanToken,
   identityNumber,
   publishingBindings,
   publishingRoles,
   publishingVariableMap,
-  roleToken,
   verifyPublishingIdentity,
 } from "./lib/local-auth.mjs";
 import { githubRequest, registerApp, validateApp } from "./lib/setup-apps.mjs";
 
-async function publishConfiguration(repo, repository, store) {
+async function repositoryPublishingVariables(repo, token) {
+  return publishingVariableMap(
+    await new GitHub(token).list(`repos/${repo}/actions/variables`, "variables"),
+  );
+}
+
+async function publishConfiguration(repo, repository, store, operatorToken) {
   const saved = store.state.configuration;
   const branch = (await command("git", ["branch", "--show-current"])).stdout.trim();
   const head = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
@@ -27,7 +35,12 @@ async function publishConfiguration(repo, repository, store) {
     throw new Error(
       "Publish recovery requires the clean, exact configuration branch/head recorded by setup",
     );
-  const token = await roleToken(repo, "writer");
+  const variables = await repositoryPublishingVariables(repo, operatorToken);
+  assertPublishingBindings(variables, store.state.apps);
+  const { token } = await verifyPublishingIdentity(store.state.apps.writer, {
+    repo,
+    role: "writer",
+  });
   const env = { ...withoutCredentials(), GH_TOKEN: token, GIT_TERMINAL_PROMPT: "0" };
   const pushed = await command(
     "git",
@@ -199,7 +212,7 @@ async function main() {
     const store = new SetupState(directory, state);
     await store.acquire();
     try {
-      await publishConfiguration(repo, repository, store);
+      await publishConfiguration(repo, repository, store, token);
     } finally {
       await store.release();
     }
@@ -245,15 +258,13 @@ async function main() {
   const store = new SetupState(directory, state);
   await store.acquire();
   try {
-    const variables = await githubRequest(`repos/${repo}/actions/variables?per_page=100`, {
-      token,
-    });
-    const publishedVariables = publishingVariableMap(variables.variables || []);
+    const publishedVariables = await repositoryPublishingVariables(repo, token);
     const variable = (name) => publishedVariables.get(name);
     if (variable("AUTOMATION_ENABLED") === "true")
       throw new Error(
         "Pause the existing installation first: set AUTOMATION_ENABLED=false and stop any old hosted runs before upgrading",
       );
+    assertSetupPublishingBindings(publishedVariables, store.state);
     store.state.enabled = false;
     for (const [role, names] of Object.entries(publishingRoles)) {
       const existingLogin = variable(names.login);
@@ -340,10 +351,19 @@ async function main() {
         throw new Error(
           `Verified ${role} publishing identity differs from the repository's identity`,
         );
+      // A suspended first setup may already have written its display login.
+      if (store.state.setupPublishingBindingsPending && existingLogin === `${saved.slug}[bot]`)
+        verified.slug = saved.slug;
       store.state.apps[role] = verified;
       await store.save();
     }
-    publishingBindings(store.state.apps);
+    const bindings = publishingBindings(store.state.apps);
+    if (Object.keys(bindings).some((name) => !publishedVariables.has(name))) {
+      // Bootstrap creates repository variables one at a time. A retry may
+      // finish only the bindings this host prepared and verified.
+      store.state.setupPublishingBindingsPending = true;
+      await store.save();
+    }
     config.engine = harness;
     config.schemaVersion = 2;
     config.execution = "local";
@@ -395,6 +415,10 @@ async function main() {
           ? "Ruleset configuration is pending. Rerun this setup command after manual configuration, or add --acknowledge-unenforced-rules to explicitly continue without verified GitHub enforcement. Saved Apps and Project will be reused."
           : `Bootstrap command failed (exit ${bootstrap.code ?? "signal"}); resolve the reported step and rerun`,
       );
+    }
+    if (store.state.setupPublishingBindingsPending) {
+      delete store.state.setupPublishingBindingsPending;
+      await store.save();
     }
     await command("npm", ["exec", "--", "prettier", "--write", "workflow.config.json"], {
       interactive: true,
@@ -457,7 +481,7 @@ async function main() {
       head: (await command("git", ["rev-parse", "HEAD"])).stdout.trim(),
     };
     await store.save();
-    await publishConfiguration(repo, repository, store);
+    await publishConfiguration(repo, repository, store, token);
     console.log(
       "Configuration PR prepared. After human merge and successful default-branch CI, update this checkout and run npm run setup -- --activate.",
     );

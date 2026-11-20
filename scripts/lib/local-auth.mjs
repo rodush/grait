@@ -102,6 +102,30 @@ export function assertPublishingBindings(variables, apps) {
   }
 }
 
+export function assertSetupPublishingBindings(variables, state) {
+  const roles = Object.values(publishingRoles);
+  const hasIdentity = roles.some(({ app, bot, login }) =>
+    [app, bot, login].some((name) => variables.has(name)),
+  );
+  const fullyBound = roles.every(({ app, bot }) => variables.has(app) && variables.has(bot));
+  if (!hasIdentity || fullyBound) return;
+
+  if (state.setupPublishingBindingsPending) {
+    const expected = publishingBindings(state.apps);
+    for (const [role, { login }] of Object.entries(publishingRoles))
+      expected[login] = `${state.apps[role].slug}[bot]`;
+    if (
+      Object.entries(expected).every(
+        ([name, value]) => !variables.has(name) || variables.get(name) === value,
+      )
+    )
+      return;
+  }
+  throw new Error(
+    "Legacy or partial publishing identities require explicit migration. Run npm run setup -- --activate --migrate-publishing-identities from the updated default branch",
+  );
+}
+
 export async function verifyPublishingIdentity(app, { repo, role, fetcher = fetch }) {
   if (!app?.pem || !app.id || !app.installed)
     throw new Error(
@@ -115,6 +139,8 @@ export async function verifyPublishingIdentity(app, { repo, role, fetcher = fetc
     !/^[a-z0-9-]+$/.test(remote.slug || "")
   )
     throw new Error(`Authenticated ${role} App ID differs from the approved publishing identity`);
+  if (!sameLogin(remote.owner?.login, repo.split("/")[0]))
+    throw new Error(`Authenticated ${role} App owner differs from the approved repository owner`);
   const login = `${remote.slug}[bot]`;
   const identified = {
     ...app,

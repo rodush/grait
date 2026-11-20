@@ -9,12 +9,14 @@ import {
   preserveCodeowners,
 } from "./lib/bootstrap.mjs";
 import {
+  assertSetupPublishingBindings,
   identityNumber,
   publishingBindings,
   publishingRoles,
   publishingVariableMap,
 } from "./lib/local-auth.mjs";
 import { sameLogin } from "./lib/policy.mjs";
+import { SetupState } from "./lib/setup-state.mjs";
 import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
 
 const { values } = parseArgs({
@@ -127,6 +129,19 @@ if (!values.apply) {
     const publishedVariables = publishingVariableMap(currentVariables);
     const variable = (name) => publishedVariables.get(name);
     const bindingNames = Object.values(publishingRoles).flatMap(({ app, bot }) => [app, bot]);
+    if (numericIdentities && bindingNames.some((name) => !publishedVariables.has(name))) {
+      const { state } = await SetupState.read(repo);
+      assertSetupPublishingBindings(publishedVariables, state);
+      if (
+        state.setupPublishingBindingsPending &&
+        Object.entries(publishingBindings(state.apps)).some(
+          ([name, expected]) => bindings[name] !== expected,
+        )
+      )
+        throw new Error(
+          "Bootstrap publishing identities differ from the verified setup checkpoint",
+        );
+    }
     if (!numericIdentities && bindingNames.some((name) => publishedVariables.has(name))) {
       bindings = publishingBindings(
         Object.fromEntries(

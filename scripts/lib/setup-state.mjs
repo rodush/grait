@@ -22,6 +22,11 @@ function validate(state, repo) {
     typeof state.publishingIdentityMigrationPending !== "boolean"
   )
     throw new Error("Invalid publishing identity migration checkpoint");
+  if (
+    state.setupPublishingBindingsPending !== undefined &&
+    typeof state.setupPublishingBindingsPending !== "boolean"
+  )
+    throw new Error("Invalid initial publishing identity checkpoint");
   if (state.enabled !== undefined && typeof state.enabled !== "boolean")
     throw new Error("Local activation state must be boolean");
   if (
