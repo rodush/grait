@@ -13,7 +13,7 @@ import { bundledRuntime } from "./lib/runtime-resources.mjs";
 
 export async function activateMain(
   args = process.argv.slice(2),
-  { readInstalled, workflow = "ci.yml" } = {},
+  { readInstalled, verifyMerge, workflow = "ci.yml" } = {},
 ) {
   let store;
   try {
@@ -81,6 +81,7 @@ export async function activateMain(
       }
       if (path === ".github/CODEOWNERS") ownerText = text;
     }
+    if (packaged) await verifyMerge({ api, repo, defaultBranch: repository.default_branch, head });
     const variables = new Map(
       (await api.list(`repos/${repo}/actions/variables`, "variables")).map((item) => [
         item.name,

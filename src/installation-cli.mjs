@@ -56,7 +56,7 @@ export async function runInstallation({ command, args, cwd, version }) {
   if (values.help) {
     console.log(
       command === "init"
-        ? "grait init --plan --repo OWNER/REPO --revision COMMIT_SHA [--harness codex|claude|copilot]\nReview the complete artifact diff, then run the same command with --yes.\nOptional: --maintainers LOGIN,LOGIN --project-owner LOGIN --project-number N\n          --project-name TEXT --project-context TEXT --no-browser\n          --writer-key PATH --reviewer-key PATH --acknowledge-unenforced-rules\nNo GRAIT source or development dependencies are installed in the application."
+        ? "grait init --plan --repo OWNER/REPO --revision GIT_PIN [--harness codex|claude|copilot]\nUse the full Git commit SHA or its 12-character prefix. Review the plan, then run the same command with --yes.\nOptional: --maintainers LOGIN,LOGIN --project-owner LOGIN --project-number N\n          --project-name TEXT --project-context TEXT --no-browser\n          --writer-key PATH --reviewer-key PATH --acknowledge-unenforced-rules\nNo GRAIT source or development dependencies are installed in the application."
         : command === "activate"
           ? "grait activate [--acknowledge-unenforced-rules]\nRequires human merge of the installed artifacts, successful default-branch CI, and the configured administrator and App identities."
           : "grait validate\nCheck the installed workflow configuration and durable artifact ownership metadata. Run application tests separately.",
@@ -90,16 +90,29 @@ export async function runInstallation({ command, args, cwd, version }) {
   }
   if (command === "activate") return runRuntime({ command, args, cwd: root });
   const plan = await planInstallation(options);
-  console.log(renderInstallationPlan(plan));
+  console.log(
+    plan.pendingRecovery
+      ? "An interrupted installation needs recovery. A confirmed retry will recover its journal before previewing the remaining artifact changes."
+      : renderInstallationPlan(plan),
+  );
   if (values.plan) return 0;
   await confirm(
-    "Apply this plan and provision the local workflow? GitHub approvals remain interactive.",
+    plan.pendingRecovery
+      ? "Recover the interrupted installation and preview the remaining changes?"
+      : "Apply this plan and provision the local workflow? GitHub approvals remain interactive.",
     values.yes,
   );
   const result = await installWorkflow({
     ...options,
-    repo: plan.record.repository,
+    repo: plan.repo,
+    revision: plan.revision,
     preview: plan.changes,
+    pendingRecovery: plan.pendingRecovery,
+    onRecoveredPlan: async (recoveredPlan) => {
+      console.log(renderInstallationPlan(recoveredPlan));
+      if (recoveredPlan.changes.length)
+        await confirm("Apply this plan and provision the local workflow?", values.yes);
+    },
     onPlan: async (finalPlan) => {
       console.log(renderInstallationPlan(finalPlan));
       await confirm("Apply this complete configuration to the worktree?", values.yes);

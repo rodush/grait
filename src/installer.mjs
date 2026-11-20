@@ -12,12 +12,12 @@ import {
   installationPath,
   installerWorkflow,
   readInstallation,
-  validateRevision,
   validateTarget,
   verifyOwnership,
 } from "./installation-record.mjs";
 import { installerStore, privateStagingDirectory, provision } from "./installer-services.mjs";
 import { generateProjectArtifacts } from "./project-policy.mjs";
+import { resolveInstallRevision } from "./installation-revision.mjs";
 
 const configPath = "workflow.config.json";
 const ownersPath = ".github/CODEOWNERS";
@@ -102,7 +102,8 @@ async function installationInputs(input) {
   const repo = input.repo ?? prior?.repository ?? existingConfig.controllerRepository;
   const harness = input.harness ?? prior?.harness ?? existingConfig.engine ?? "codex";
   const version = input.version;
-  const revision = validateRevision(input.revision ?? prior?.revision);
+  const revision =
+    input.verifiedRevision ?? (await resolveInstallRevision(input.revision ?? prior?.revision));
   validateTarget({ repository: repo, harness, version });
   if (
     [prior?.repository, existingConfig.controllerRepository].some(
@@ -227,9 +228,28 @@ function plannedOwners(options, prepared) {
 
 /** Preview durable artifacts without provisioning or creating private state. */
 export async function planInstallation(input) {
-  const options = await installationInputs(input);
+  const root = await realpath(input.root);
+  const installation = await readInstallation(root);
+  const repo =
+    input.repo ??
+    installation?.record.repository ??
+    JSON.parse((await readArtifact(root, configPath)) ?? "{}").controllerRepository;
+  if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? "")) throw new Error("Provide --repo OWNER/REPOSITORY");
+  const store = await installerStore({ root, repo });
+  const transaction = store.state.artifactTransaction;
+  if (transaction) {
+    const revision = await resolveInstallRevision(
+      input.revision ?? transaction.revision ?? installation?.record.revision,
+    );
+    return { pendingRecovery: true, repo, revision };
+  }
+  const options = await installationInputs({ ...input, root, repo });
   const prepared = await prepareArtifacts(options);
-  return planFor(options, prepared, options.config, plannedOwners(options, prepared));
+  return {
+    ...planFor(options, prepared, options.config, plannedOwners(options, prepared)),
+    repo,
+    revision: options.revision,
+  };
 }
 
 function assertExpectedChanges(expected, staged) {
@@ -248,27 +268,30 @@ function assertExpectedChanges(expected, staged) {
 /** Provision privately, then apply one complete set of durable artifacts. */
 export async function installWorkflow(input) {
   const root = await realpath(input.root);
-  // Read the binding from private state first when a previous transaction may
-  // have written the record but not finished writing the other artifacts.
-  const repo = input.repo ?? (await readInstallation(root))?.record.repository;
-  if (!repo) throw new Error("Provide --repo OWNER/REPOSITORY");
+  const repo = input.repo;
+  const revision = await resolveInstallRevision(input.revision, { requireInstalled: true });
   const store = await installerStore({ root, repo });
+  const transaction = store.state.artifactTransaction;
+  if (Boolean(transaction) !== Boolean(input.pendingRecovery))
+    throw new Error("Installation recovery state changed since preview. Retry the same command.");
+  if (transaction?.revision && transaction.revision !== revision)
+    throw new Error("Retry the interrupted installation with its recorded GRAIT Git revision.");
   await store.acquire();
   try {
-    const transaction = store.state.artifactTransaction;
     if (transaction) {
       await recoverArtifacts({ root, stateDirectory: transaction.directory, id: transaction.id });
       delete store.state.artifactTransaction;
       await store.save();
       await rm(transaction.directory, { recursive: true, force: true });
     }
-    const options = await installationInputs({ ...input, root });
+    const options = await installationInputs({ ...input, root, verifiedRevision: revision });
     if (!sameLogin(options.repo, repo))
       throw new Error("The installation repository changed; review the preview and retry");
     const prepared = await prepareArtifacts(options);
     const existingOwners = plannedOwners(options, prepared);
     const preliminary = planFor(options, prepared, options.config, existingOwners);
-    if (!transaction) assertExpectedChanges(input.preview, preliminary.changes);
+    if (transaction) await input.onRecoveredPlan(preliminary);
+    else assertExpectedChanges(input.preview, preliminary.changes);
     if (options.prior && !preliminary.changes.length) return preliminary;
     const { config, codeowners } = options.prior
       ? { config: options.config, codeowners: existingOwners }
@@ -283,7 +306,7 @@ export async function installWorkflow(input) {
       });
       assertExpectedChanges(result.changes, plan.changes);
       await input.onPlan(plan);
-      store.state.artifactTransaction = { directory, id: plan.id };
+      store.state.artifactTransaction = { directory, id: plan.id, revision };
       await store.save();
       await applyArtifacts({ root, stateDirectory: directory, id: plan.id });
       delete store.state.artifactTransaction;

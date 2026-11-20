@@ -8,6 +8,7 @@ import reporter from "../scripts/adapters/node-test-reporter.mjs";
 import { runRuntime } from "./runtime.mjs";
 import { runInstallation } from "./installation-cli.mjs";
 import { installerWorkflow, validateInstallation } from "./installation-record.mjs";
+import { verifyInstallationMerge } from "./installation-merge.mjs";
 import { bootstrapMain } from "../scripts/bootstrap.mjs";
 import { activateMain } from "../scripts/activate.mjs";
 
@@ -28,6 +29,7 @@ async function main(args = process.argv.slice(2)) {
     if (command === "activate")
       return activateMain(options, {
         readInstalled: validateInstallation,
+        verifyMerge: verifyInstallationMerge,
         workflow: installerWorkflow,
       });
     process.argv = [process.execPath, process.argv[1], ...options];

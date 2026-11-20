@@ -30,31 +30,31 @@ GitHub rulesets provide optional server-side enforcement of the delivery policy.
 
 ## Existing repository
 
-Create an integration branch in the target repository. Choose a reviewed 40-character GRAIT commit SHA and use it both in the package reference and in `--revision`.
+Create an integration branch in the target repository. Choose a reviewed GRAIT commit and use its full SHA or 12-character prefix for `GIT_PIN` in both arguments. The installer checks the running package against npm's resolved Git revision and records the full SHA in the installation record and workflow.
 
 ```sh
 git switch -c chore/adopt-grait
 npm exec --yes --allow-git=root --ignore-scripts \
-  --package='git+https://github.com/rodush/grait.git#COMMIT_SHA' -- \
-  grait init --plan --repo OWNER/REPOSITORY --revision COMMIT_SHA \
+  --package='git+https://github.com/rodush/grait.git#GIT_PIN' -- \
+  grait init --plan --repo OWNER/REPOSITORY --revision GIT_PIN \
   --harness codex --maintainers OWNER
 ```
 
-The preview lists artifact changes without writing the target or contacting GitHub. To install from another directory, pass `--cwd PATH` before `init`. Choose `claude` or `copilot` to generate the corresponding harness integration. The CLI runs from the installed package, so the application can use any stack and keep its existing manifests and CI.
+The preview lists artifact changes without writing the target or contacting GitHub. When recovery is pending, it reports the interrupted transaction. A confirmed retry recovers the journal before calculating the next diff. To install from another directory, pass `--cwd PATH` before `init`. Choose `claude` or `copilot` to generate the corresponding harness integration. The CLI runs from the installed package, so the application can use any stack and keep its existing manifests and CI.
 
 Review the plan and repeat the command without `--plan`. The applying account needs repository administration and Project access. In a terminal, confirm the plan and the final artifact diff. For scripted use, pass the CLI's `--yes` after `grait init` to accept both. GitHub App registration and installation still require human approval. Use `--project-owner LOGIN --project-number N` to bind an existing Project or reconcile an interrupted Project creation. Use `--no-browser` to print approval URLs on a remote host.
 
-The installer reuses verified writer and reviewer Apps and the recorded Project on retry. It provisions using private staging and then applies the full set of artifacts together. These include the selected harness instructions, `workflow.config.json`, human CODEOWNERS, `.github/workflows/grait.yml`, and `.grait/installation.json`. The installation record tracks the GRAIT package version, pinned Git revision, and artifact ownership hashes. Publishing keys and operational recovery state live in the repository's private Git metadata. If setup is interrupted during a file transaction, preserve the journal and rerun the same installation. Review any recovery conflict before retrying. An unchanged repeat installation leaves artifacts and provisioning alone.
+The installer reuses verified writer and reviewer Apps and the recorded Project on retry. It provisions using private staging and then applies the full set of artifacts together. These include the selected harness instructions, `workflow.config.json`, human CODEOWNERS, `.github/workflows/grait.yml`, and `.grait/installation.json`. The installation record tracks the GRAIT package version, pinned Git revision, and artifact ownership hashes. Publishing keys and operational recovery state live in the repository's private Git metadata. If setup is interrupted during a file transaction, preserve the journal and rerun the same installation. If the setup lock remains, confirm that its recorded process has stopped before removing the stale lock. Review any recovery conflict before retrying. An unchanged repeat installation leaves artifacts and provisioning alone.
 
 Review and commit the result to one configuration PR. After a human merges it and the generated GRAIT workflow passes on the current default-branch head, run activation from the target repository with the same pinned CLI:
 
 ```sh
 npm exec --yes --allow-git=root --ignore-scripts \
-  --package='git+https://github.com/rodush/grait.git#COMMIT_SHA' -- \
+  --package='git+https://github.com/rodush/grait.git#GIT_PIN' -- \
   grait activate
 ```
 
-Activation verifies a configured human administrator, the committed artifacts, CI, Project access, CODEOWNERS, and both App installations. The generated workflow runs `grait validate` for GRAIT configuration and managed content. Keep your application checks and configure the application runner and write scopes in `workflow.config.json` before starting testable work.
+Activation verifies that a human merged the configuration PR into the default branch and checks the current committed artifacts, CI, Project access, CODEOWNERS, and both App installations. The generated workflow runs `grait validate` for GRAIT configuration and managed content. Keep your application checks and configure the application runner and write scopes in `workflow.config.json` before starting testable work.
 
 If init or activation pauses on GitHub rulesets, use the displayed settings link and configuration, then retry. If the repository cannot use rulesets, the separate `--acknowledge-unenforced-rules` option explicitly allows continuing. Ordinary `--yes` only confirms the installation plan. Human approval and merge remain required.
 
