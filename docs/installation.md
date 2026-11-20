@@ -54,7 +54,7 @@ npm exec --yes --allow-git=root --ignore-scripts \
   grait activate
 ```
 
-Activation verifies that a human merged the configuration PR into the default branch and checks the current committed artifacts, CI, Project access, CODEOWNERS, and both App installations. The generated workflow runs `grait validate` for GRAIT configuration and managed content. Keep your application checks and configure the application runner and write scopes in `workflow.config.json` before starting testable work.
+Activation verifies that a human merged the configuration PR into the default branch. The installed artifacts must match both the merge commit and the current default-branch head. Activation also checks current CI, Project access, CODEOWNERS, and both App installations. The generated workflow runs `grait validate` for GRAIT configuration and managed content. Keep your application checks and configure the application runner and write scopes in `workflow.config.json` before starting testable work.
 
 If init or activation pauses on GitHub rulesets, use the displayed settings link and configuration, then retry. If the repository cannot use rulesets, the separate `--acknowledge-unenforced-rules` option explicitly allows continuing. Ordinary `--yes` only confirms the installation plan. Human approval and merge remain required.
 

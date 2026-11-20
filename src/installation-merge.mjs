@@ -29,7 +29,7 @@ export async function verifyInstallationMerge({ api, repo, defaultBranch, head }
       sameLogin(details.base?.repo?.full_name, repo) &&
       details.merged_by?.type === "User"
     )
-      return;
+      return commit.sha;
   }
   throw new Error(failure);
 }

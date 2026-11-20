@@ -58,30 +58,36 @@ export async function activateMain(
       throw new Error(
         "Successful CI on the current default-branch head is required before activation",
       );
-    const ref = encodeURIComponent(packaged ? head.sha : repository.default_branch);
+    const ref = packaged ? head.sha : repository.default_branch;
     const committedFiles = installed?.artifacts || { [configPath]: localText };
-    let ownerText;
-    for (const [path, text] of Object.entries(committedFiles)) {
-      const remote = await api
-        .request(
-          `repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${ref}`,
-        )
-        .catch((error) => {
-          if (error.status !== 404 || !packaged) throw error;
-          throw new Error(
-            `Human merge of the current installed artifact is required before activation: ${path}`,
-          );
-        });
-      if (digest(Buffer.from(remote.content, "base64")) !== digest(text)) {
+    async function verifyCommittedFiles(at) {
+      for (const [path, text] of Object.entries(committedFiles)) {
+        const remote = await api
+          .request(
+            `repos/${repo}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(at)}`,
+          )
+          .catch((error) => {
+            if (error.status !== 404 || !packaged) throw error;
+            return null;
+          });
+        if (remote && digest(Buffer.from(remote.content, "base64")) === digest(text)) continue;
         if (packaged)
           throw new Error(
-            `Human merge of the current installed artifact is required before activation: ${path}`,
+            `Human merge of the current installed artifact is required before activation: ${path} does not match at ${at}`,
           );
         throw new Error("Commit the configured files to the default branch before activation");
       }
-      if (path === ".github/CODEOWNERS") ownerText = text;
     }
-    if (packaged) await verifyMerge({ api, repo, defaultBranch: repository.default_branch, head });
+    await verifyCommittedFiles(ref);
+    if (packaged) {
+      const mergeSha = await verifyMerge({
+        api,
+        repo,
+        defaultBranch: repository.default_branch,
+        head,
+      });
+      if (mergeSha !== head.sha) await verifyCommittedFiles(mergeSha);
+    }
     const variables = new Map(
       (await api.list(`repos/${repo}/actions/variables`, "variables")).map((item) => [
         item.name,
@@ -120,8 +126,11 @@ export async function activateMain(
     ).load();
     if (!sameLogin(project.controller, repo))
       throw new Error("Project is bound to a different orchestrator");
+    let ownerText = installed?.artifacts[".github/CODEOWNERS"];
     if (!installed) {
-      const owners = await api.request(`repos/${repo}/contents/.github/CODEOWNERS?ref=${ref}`);
+      const owners = await api.request(
+        `repos/${repo}/contents/.github/CODEOWNERS?ref=${encodeURIComponent(ref)}`,
+      );
       ownerText = Buffer.from(owners.content, "base64").toString();
     }
     if (
