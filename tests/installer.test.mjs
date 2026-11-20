@@ -1,7 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { copyFile, lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
@@ -11,20 +20,23 @@ import { setupFixture } from "./helpers/setup-fixture.mjs";
 const sourceRoot =
   process.env.GRAIT_TEST_SOURCE_ROOT || fileURLToPath(new URL("..", import.meta.url));
 const revision = "a1".repeat(20);
+const otherRevision = "b2".repeat(20);
 const target = "acme/service";
+const sourceRepository = "rodush/grait";
 const recordPath = ".grait/installation.json";
-const init = [
+const initAt = (pin) => [
   "init",
   "--repo",
   target,
   "--revision",
-  revision,
+  pin,
   "--harness",
   "codex",
   "--maintainers",
   "operator",
   "--no-browser",
 ];
+const init = initAt(revision);
 const application = {
   "AGENTS.md": "# Application conventions\n\nRun the documented application tests.\n",
   "app/build.gradle.kts": "// Existing Kotlin application\n",
@@ -50,17 +62,50 @@ const localApps = Object.fromEntries(
 // changes in the applying checkout, including GitHub's workflow run response.
 const remoteService = `
 import { readFileSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import { join } from "node:path";
+const stateFile = process.env.GRAIT_SETUP_FIXTURE_STATE;
+const stateAtStart = JSON.parse(readFileSync(stateFile, "utf8"));
+if (stateAtStart.interruptAtRecord) {
+  const originalRename = fs.rename;
+  fs.rename = async (source, destination) => {
+    await originalRename(source, destination);
+    if (destination === join(stateAtStart.targetRoot, ".grait/installation.json"))
+      process.kill(process.pid, "SIGKILL");
+  };
+  syncBuiltinESMExports();
+}
 const request = globalThis.fetch;
 globalThis.fetch = async (url, options = {}) => {
   const parsed = new URL(url);
   const path = parsed.pathname.slice(1);
   const prefix = "repos/acme/service/";
+  const artifactPrefix = "repos/rodush/grait/";
+  const method = options.method || "GET";
+  const state = JSON.parse(readFileSync(stateFile, "utf8"));
+  const raw = parsed.hostname === "raw.githubusercontent.com" && path.startsWith("rodush/grait/");
+  if (raw || (parsed.hostname === "api.github.com" && path.startsWith(artifactPrefix))) {
+    const endpoint = path.slice(raw ? "rodush/grait/".length : artifactPrefix.length);
+    const commitRef = endpoint.startsWith("commits/") ? endpoint.slice("commits/".length) : null;
+    const isContents = endpoint === "contents/dist/cli.mjs";
+    const rawRef = raw && endpoint.endsWith("/dist/cli.mjs") ? endpoint.split("/")[0] : null;
+    const ref = commitRef ?? (isContents ? parsed.searchParams.get("ref") : rawRef);
+    const sha = ref && state.sourceCommits.find((candidate) => candidate.startsWith(ref));
+    state.calls.push({ path, method, query: parsed.search });
+    writeFileSync(stateFile, JSON.stringify(state));
+    if (method !== "GET" || !sha) return Response.json({ message: "Not Found" }, { status: 404 });
+    if (commitRef) return Response.json({ sha });
+    let executable = readFileSync(state.runningCLI);
+    if (sha !== state.installedRevision)
+      executable = Buffer.concat([executable, Buffer.from("\\n// Bundle at the other commit\\n")]);
+    if (raw || options.headers?.Accept?.includes("raw"))
+      return new Response(executable);
+    return Response.json({ encoding: "base64", content: executable.toString("base64") });
+  }
   if (parsed.hostname !== "api.github.com" || !path.startsWith(prefix))
     return request(url, options);
   const endpoint = path.slice(prefix.length);
-  const method = options.method || "GET";
-  const stateFile = process.env.GRAIT_SETUP_FIXTURE_STATE;
-  const state = JSON.parse(readFileSync(stateFile, "utf8"));
   let value;
   let status = 200;
   if (state.rulesUnavailable && /^rulesets(?:\\/|$)/.test(endpoint)) {
@@ -78,8 +123,17 @@ globalThis.fetch = async (url, options = {}) => {
       status = 404;
       value = { message: "Not Found" };
     }
+  } else if (method === "GET" && /^commits\\/[^/]+\\/pulls$/.test(endpoint)) {
+    const sha = endpoint.split("/")[1];
+    value = state.configurationPR?.merge_commit_sha === sha ? [state.configurationPR] : [];
+  } else if (method === "GET" && endpoint === "pulls" && parsed.searchParams.get("state") === "closed") {
+    value = state.configurationPR ? [state.configurationPR] : [];
+  } else if (method === "GET" && endpoint === "pulls/99" && state.configurationPR) {
+    value = state.configurationPR;
+  } else if (method === "GET" && endpoint === "pulls/99/files" && state.configurationPR) {
+    value = state.configurationFiles;
   } else if (method === "GET" && endpoint === "commits/main") {
-    value = { sha: state.defaultHead };
+    value = { sha: state.defaultHead, parents: [{ sha: state.previousDefaultHead }] };
   } else if (method === "GET" && /^actions\\/workflows\\/[^/]+\\/runs$/.test(endpoint)) {
     value = { workflow_runs: [{ head_sha: state.defaultHead, conclusion: state.ciConclusion }] };
   } else if (method === "GET" && endpoint.startsWith("contents/")) {
@@ -101,8 +155,24 @@ globalThis.fetch = async (url, options = {}) => {
 async function installerFixture(t, overrides = {}) {
   const packageDirectory = await mkdtemp(join(tmpdir(), "grait-installer-package-"));
   t.after(() => rm(packageDirectory, { recursive: true, force: true }));
-  const cli = join(packageDirectory, "cli.mjs");
+  const installedPackage = join(packageDirectory, "node_modules", "grait");
+  await mkdir(join(installedPackage, "dist"), { recursive: true });
+  const cli = join(installedPackage, "dist", "cli.mjs");
   await copyFile(join(sourceRoot, "dist/cli.mjs"), cli);
+  await copyFile(join(sourceRoot, "package.json"), join(installedPackage, "package.json"));
+  const manifest = JSON.parse(await readFile(join(installedPackage, "package.json"), "utf8"));
+  const resolved = "git+https://github.com/" + sourceRepository + ".git#" + revision;
+  const packages = {
+    "node_modules/grait": { version: manifest.version, resolved, bin: manifest.bin },
+  };
+  await writeFile(
+    join(packageDirectory, "package-lock.json"),
+    JSON.stringify({ lockfileVersion: 3, packages: { "": {}, ...packages } }),
+  );
+  await writeFile(
+    join(packageDirectory, "node_modules", ".package-lock.json"),
+    JSON.stringify({ lockfileVersion: 3, packages }),
+  );
 
   const f = await setupFixture({
     localApps,
@@ -158,16 +228,54 @@ async function installerFixture(t, overrides = {}) {
     );
     await f.update({ defaultHead, defaultFiles, ciConclusion });
   };
+  await f.update({
+    runningCLI: cli,
+    sourceCommits: [revision, otherRevision],
+    installedRevision: revision,
+    targetRoot: f.directory,
+    previousDefaultHead: initialHead,
+  });
   await syncDefault("success");
-  const mergeConfiguration = async () => {
+  const commitConfiguration = async (viaPullRequest) => {
+    if (!viaPullRequest) f.git(["switch", "main"]);
     f.git(["add", "--all"]);
-    f.git(["commit", "--quiet", "-m", "test: proposed GRAIT configuration"]);
-    f.git(["switch", "main"]);
-    f.git(["merge", "--squash", "configuration"]);
-    f.git(["commit", "--quiet", "-m", "test: operator merges GRAIT configuration"]);
-    await syncDefault("failure");
+    f.git(["commit", "--quiet", "-m", "test: configuration"]);
+    if (viaPullRequest) {
+      const proposal = f.git(["rev-parse", "HEAD"]);
+      f.git(["switch", "main"]);
+      f.git(["merge", "--squash", "configuration"]);
+      f.git(["commit", "--quiet", "-m", "test: operator merges GRAIT configuration (#99)"]);
+      const mergeCommit = f.git(["rev-parse", "HEAD"]);
+      const actor = { login: "operator", id: 42, type: "User" };
+      const configurationFiles = f
+        .git(["diff", "--name-only", initialHead, mergeCommit])
+        .split("\\n")
+        .map((filename) => ({ filename, status: "added" }));
+      await f.update({
+        configurationPR: {
+          number: 99,
+          state: "closed",
+          merged: true,
+          merged_at: "2026-11-20T10:00:00Z",
+          merged_by: actor,
+          user: actor,
+          body: "Install GRAIT for this repository.",
+          merge_commit_sha: mergeCommit,
+          base: { ref: "main", sha: initialHead, repo: { full_name: target } },
+          head: { ref: "configuration", sha: proposal, repo: { full_name: target } },
+        },
+        configurationFiles,
+      });
+    }
+    await syncDefault(viaPullRequest ? "failure" : "success");
   };
-  return { ...f, run, initialHead, mergeConfiguration };
+  return {
+    ...f,
+    run,
+    initialHead,
+    mergeConfiguration: () => commitConfiguration(true),
+    commitDirectly: () => commitConfiguration(false),
+  };
 }
 
 async function assertInactive(f) {
@@ -188,7 +296,13 @@ test("installed init previews generated artifacts without changing the repositor
   assert.equal(f.git(["status", "--porcelain"]), "");
   assert.equal(f.git(["rev-parse", "HEAD"]), f.initialHead);
   assert.equal(existsSync(join(f.directory, ".git/grait-setup")), false);
-  assert.equal((await f.state()).calls.length, 0);
+  assert.ok(
+    (await f.state()).calls.every(
+      ({ path, method }) =>
+        method === "GET" &&
+        (path.startsWith("repos/rodush/grait/") || path.startsWith("rodush/grait/")),
+    ),
+  );
 });
 
 test("installed init requires explicit confirmation before provisioning in a noninteractive session", async (t) => {
@@ -198,7 +312,13 @@ test("installed init requires explicit confirmation before provisioning in a non
   assert.match(result.output, /confirm|--yes|authoriz/i);
   assert.equal(f.git(["status", "--porcelain"]), "");
   assert.equal(existsSync(join(f.directory, ".git/grait-setup")), false);
-  assert.equal((await f.state()).calls.length, 0);
+  assert.ok(
+    (await f.state()).calls.every(
+      ({ path, method }) =>
+        method === "GET" &&
+        (path.startsWith("repos/rodush/grait/") || path.startsWith("rodush/grait/")),
+    ),
+  );
 });
 
 test("installed init resumes interrupted provisioning with the known Apps and Project and replays unchanged", async (t) => {
@@ -309,4 +429,95 @@ test("installed ruleset fallback stays pending on init --yes and requires explic
     "unenforced",
   );
   assert.equal(state.variables.find(({ name }) => name === "AUTOMATION_ENABLED").value, "true");
+});
+
+test("installed init recovers a process interruption after publishing the installation record", async (t) => {
+  const f = await installerFixture(t, { interruptAtRecord: true });
+  const interrupted = await f.run([...init, "--yes"]);
+  assert.notEqual(interrupted.status, 0, "The interrupted process must exit unsuccessfully");
+  const partialRecord = await f.read(recordPath);
+  assert.equal(JSON.parse(partialRecord).revision, revision);
+  assert.equal(await f.read("AGENTS.md"), application["AGENTS.md"]);
+  assert.equal(existsSync(join(f.directory, "workflow.config.json")), false);
+  assert.equal((await f.state()).createdProjects, 1);
+
+  // Simulate the documented operator cleanup after confirming the process exited.
+  await rm(join(f.directory, ".git", "grait-setup", "lock"), { force: true });
+  await f.update({ interruptAtRecord: false });
+  const beforePreview = f.git(["status", "--porcelain"]);
+  const privateState = await f.localState();
+  await f.run([...init, "--plan"]);
+  assert.deepEqual(await f.localState(), privateState);
+  assert.equal(
+    await f.read(recordPath),
+    partialRecord,
+    "Preview must leave recovery to confirmed init",
+  );
+  assert.equal(f.git(["status", "--porcelain"]), beforePreview);
+  assert.equal(existsSync(join(f.directory, "workflow.config.json")), false);
+
+  const resumed = await f.run([...init, "--yes"]);
+  assert.equal(
+    resumed.status,
+    0,
+    "Confirmed init recovers before reading incomplete installed artifacts",
+  );
+  assert.match(await f.read("AGENTS.md"), /grait:policy:start/);
+  assert.equal((await f.run(["validate"])).status, 0);
+  assert.equal((await f.state()).createdProjects, 1);
+  await assertInactive(f);
+});
+
+test("installed activation rejects a direct default-branch commit despite matching artifacts and green CI", async (t) => {
+  const f = await installerFixture(t);
+  assert.equal((await f.run([...init, "--yes"])).status, 0);
+  await f.commitDirectly();
+  const activation = await f.run(["activate"]);
+  assert.notEqual(activation.status, 0, "Require a merged configuration PR before enabling");
+  assert.match(activation.output, /merge|pull request/i);
+  await assertInactive(f);
+});
+
+test("installed activation rejects a configuration PR merged by a bot", async (t) => {
+  const f = await installerFixture(t);
+  assert.equal((await f.run([...init, "--yes"])).status, 0);
+  await f.mergeConfiguration();
+  const { configurationPR } = await f.state();
+  await f.update({
+    ciConclusion: "success",
+    configurationPR: {
+      ...configurationPR,
+      merged_by: { login: "grait-writer[bot]", id: 101, type: "Bot" },
+    },
+  });
+  const activation = await f.run(["activate"]);
+  assert.notEqual(activation.status, 0, "A bot merge cannot establish human authorization");
+  await assertInactive(f);
+});
+
+test("installed init rejects a different Git pin before provisioning or changing application files", async (t) => {
+  const f = await installerFixture(t);
+  const rejected = await f.run([...initAt(otherRevision), "--yes"]);
+  assert.notEqual(
+    rejected.status,
+    0,
+    "The requested commit contains a different installed executable",
+  );
+  assert.match(rejected.output, /revision|commit|pin/i);
+  assert.equal((await f.state()).createdProjects, 0);
+  assert.equal(f.git(["status", "--porcelain"]), "");
+  await assertInactive(f);
+});
+
+test("installed init accepts a twelve-character revision and persists the full verified Git pin", async (t) => {
+  const f = await installerFixture(t);
+  const installed = await f.run([...initAt(revision.slice(0, 12)), "--yes"]);
+  assert.equal(installed.status, 0, "Accept an unambiguous twelve-character commit prefix");
+  const record = JSON.parse(await f.read(recordPath));
+  assert.equal(record.revision, revision);
+  const workflows = await readdir(join(f.directory, ".github", "workflows"));
+  const contents = await Promise.all(
+    workflows.map((path) => f.read(join(".github/workflows", path))),
+  );
+  assert.ok(contents.some((text) => text.includes(".git#" + revision)));
 });
