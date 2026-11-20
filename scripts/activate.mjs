@@ -10,16 +10,19 @@ import { repositoryRules, resolveActionsAppId } from "./lib/bootstrap.mjs";
 import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 import { bundledRuntime } from "./lib/runtime-resources.mjs";
-import { installerWorkflow, validateInstallation } from "../src/installation-record.mjs";
 
-export async function activateMain(args = process.argv.slice(2), { packaged = false } = {}) {
+export async function activateMain(
+  args = process.argv.slice(2),
+  { readInstalled, workflow = "ci.yml" } = {},
+) {
   let store;
   try {
     const { values } = parseArgs({
       args,
       options: { "acknowledge-unenforced-rules": { type: "boolean" } },
     });
-    const installed = packaged ? await validateInstallation(process.cwd()) : null;
+    const packaged = Boolean(readInstalled);
+    const installed = packaged ? await readInstalled(process.cwd()) : null;
     const configPath = "workflow.config.json";
     const localText = installed
       ? installed.artifacts[configPath]
@@ -48,7 +51,7 @@ export async function activateMain(args = process.argv.slice(2), { packaged = fa
       `repos/${repo}/commits/${encodeURIComponent(repository.default_branch)}`,
     );
     const ci = await api.list(
-      `repos/${repo}/actions/workflows/${packaged ? installerWorkflow : "ci.yml"}/runs?head_sha=${head.sha}&event=push`,
+      `repos/${repo}/actions/workflows/${workflow}/runs?head_sha=${head.sha}&event=push`,
       "workflow_runs",
     );
     if (!ci.some((run) => run.head_sha === head.sha && run.conclusion === "success"))

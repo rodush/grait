@@ -7,6 +7,7 @@ import { runNodeSuite } from "../scripts/adapters/node-suite.mjs";
 import reporter from "../scripts/adapters/node-test-reporter.mjs";
 import { runRuntime } from "./runtime.mjs";
 import { runInstallation } from "./installation-cli.mjs";
+import { installerWorkflow, validateInstallation } from "./installation-record.mjs";
 import { bootstrapMain } from "../scripts/bootstrap.mjs";
 import { activateMain } from "../scripts/activate.mjs";
 
@@ -24,7 +25,11 @@ async function main(args = process.argv.slice(2)) {
   if (args[0] === "--grait-internal-runtime") {
     const [, command, ...options] = args;
     if (command === "bootstrap") return bootstrapMain(options);
-    if (command === "activate") return activateMain(options, { packaged: true });
+    if (command === "activate")
+      return activateMain(options, {
+        readInstalled: validateInstallation,
+        workflow: installerWorkflow,
+      });
     process.argv = [process.execPath, process.argv[1], ...options];
     if (command === "orchestrator") return orchestratorMain();
     if (command === "github") return githubMain();
