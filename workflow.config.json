@@ -15,19 +15,35 @@
   "maxRepeatedBlockingReviews": 3,
   "controllerRepository": "rodush/grait",
   "humanOperators": ["rodush"],
-  "allowedWritePaths": ["src/**", "tests/**", "assets/**", "docs/project/**"],
+  "allowedWritePaths": [
+    "src/**",
+    "tests/**",
+    "assets/**",
+    "docs/project/**",
+    "scripts/setup.mjs",
+    "scripts/bootstrap.mjs",
+    "scripts/activate.mjs",
+    "scripts/lib/setup-apps.mjs",
+    "scripts/lib/setup-state.mjs",
+    "scripts/lib/local-auth.mjs",
+    "scripts/lib/local-context.mjs",
+    "scripts/lib/ledger.mjs",
+    "scripts/lib/orchestrator.mjs",
+    "scripts/lib/policy.mjs",
+    "dist/cli.mjs",
+    "docs/setup.md",
+    "docs/installation.md"
+  ],
   "protectedPaths": [
     ".github/",
     ".agents/",
     ".codex/",
     ".claude/",
-    "scripts/",
     "automation/",
     "config/",
     "docs/coding-guidelines.md",
     "docs/workflow.md",
     "docs/review-guidelines.md",
-    "docs/setup.md",
     "docs/operations.md",
     "docs/architecture.md",
     "docs/decisions.md",
@@ -40,8 +56,7 @@
     "package-lock.json",
     ".npmrc",
     "docs/worktrees.md",
-    "docs/tdd.md",
-    "docs/installation.md"
+    "docs/tdd.md"
   ],
   "labels": {
     "automated": "agent:managed",
@@ -50,7 +65,25 @@
     "admitted": "agent:admitted"
   },
   "tdd": {
-    "implementationPaths": ["src/**", "tests/**", "assets/**", "docs/project/**"],
+    "implementationPaths": [
+      "src/**",
+      "tests/**",
+      "assets/**",
+      "docs/project/**",
+      "scripts/setup.mjs",
+      "scripts/bootstrap.mjs",
+      "scripts/activate.mjs",
+      "scripts/lib/setup-apps.mjs",
+      "scripts/lib/setup-state.mjs",
+      "scripts/lib/local-auth.mjs",
+      "scripts/lib/local-context.mjs",
+      "scripts/lib/ledger.mjs",
+      "scripts/lib/orchestrator.mjs",
+      "scripts/lib/policy.mjs",
+      "dist/cli.mjs",
+      "docs/setup.md",
+      "docs/installation.md"
+    ],
     "profiles": {
       "tester": {
         "model": null,
