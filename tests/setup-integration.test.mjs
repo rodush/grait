@@ -572,7 +572,7 @@ const publishingIdVariables = variables.filter(
 const withoutNumericBinding = variables.filter(
   ({ name }) => !publishingIdVariables.some(({ name: numeric }) => numeric === name),
 );
-const legacyApps = Object.fromEntries(
+const provisionedApps = Object.fromEntries(
   Object.entries(installedApps).map(([role, { botUserId, ...app }]) => [role, app]),
 );
 
@@ -583,7 +583,7 @@ function assertPublishingIds(state) {
 
 test("setup records verified numeric App and bot IDs for both publishing roles", async (t) => {
   const f = await fixture(t, {
-    localApps: legacyApps,
+    localApps: provisionedApps,
     variables: withoutNumericBinding.filter(({ name }) => !name.endsWith("_LOGIN")),
   });
   const result = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"]);
@@ -643,31 +643,27 @@ test("activation rejects substituted App or bot IDs and equal bot identities", a
   }
 });
 
-test("activation migrates legacy publishing identities only on explicit verified request", async (t) => {
-  const f = await fixture(t, {
-    localApps: legacyApps,
-    variables: withoutNumericBinding,
-    remoteOwners: "* @operator\n",
-  });
-  const ordinary = await f.run("activate.mjs");
-  assert.notEqual(ordinary.status, 0, "Ordinary activation cannot infer consent to migrate");
-  assert.match(ordinary.output, /migrat/i);
-  assert.equal((await f.localState()).enabled, false);
-  assert.equal(
-    (await f.state()).variables.some(({ name }) => name === "AUTOMATION_APP_ID"),
-    false,
-  );
+function assertCleanSetupGuidance(output) {
+  assert.match(output, /setup/i);
+  assert.doesNotMatch(output, /migrat/i);
+}
 
-  const migration = await f.run("activate.mjs", ["--migrate-publishing-identities"]);
-  assert.equal(migration.status, 0);
-  const state = await f.state();
-  assertPublishingIds(state);
-  noCloudProvisioning(state);
-  assert.equal((await f.localState()).apps.writer.botUserId, installedApps.writer.botUserId);
-  assert.equal((await f.localState()).apps.reviewer.botUserId, installedApps.reviewer.botUserId);
-  assert.ok(
-    !state.calls.some(({ path }) => /\/issues\/.*\/comments|\/pulls\/.*\/reviews/.test(path)),
-  );
+test("activation directs operators to clean setup for missing numeric publishing bindings", async (t) => {
+  for (const change of [
+    { variables: withoutNumericBinding },
+    { localApps: { ...installedApps, writer: provisionedApps.writer } },
+  ]) {
+    const f = await fixture(t, { remoteOwners: "* @operator\n", ...change });
+    const original = await f.localState();
+    const result = await f.run("activate.mjs");
+
+    assert.notEqual(result.status, 0);
+    assertCleanSetupGuidance(result.output);
+    const local = await f.localState();
+    assert.equal(local.enabled, false);
+    assert.deepEqual(local.apps, original.apps);
+    assert.deepEqual((await f.state()).variables, change.variables || variables);
+  }
 });
 
 test("ordinary activation rejects partial, malformed or ambiguous numeric bindings", async (t) => {
@@ -689,21 +685,21 @@ test("ordinary activation rejects partial, malformed or ambiguous numeric bindin
   }
 });
 
-test("ordinary setup leaves legacy or partially migrated publishing bindings unchanged", async (t) => {
+test("setup directs operators to clean setup when repository publishing bindings are incomplete", async (t) => {
   for (const recordedVariables of [
     withoutNumericBinding,
     [...withoutNumericBinding, publishingIdVariables[0]],
   ]) {
-    const f = await fixture(t, { localApps: legacyApps, variables: recordedVariables });
+    const f = await fixture(t, { localApps: provisionedApps, variables: recordedVariables });
     const original = await f.localState();
     const result = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"]);
 
     assert.notEqual(
       result.status,
       0,
-      "Migrating an existing installation requires explicit consent",
+      "Incomplete existing bindings cannot be accepted as a clean setup",
     );
-    assert.match(result.output, /migrat/i);
+    assertCleanSetupGuidance(result.output);
     assert.deepEqual((await f.localState()).apps, original.apps);
     const state = await f.state();
     assert.deepEqual(state.variables, recordedVariables);
@@ -776,73 +772,4 @@ test("numeric setup key import rejects an installed App owned by another account
     !state.commands.some(({ command, args }) => command === "git" && args.includes("push")),
   );
   assert.equal(state.pullRequests?.length || 0, 0);
-});
-
-test("explicit setup migration imports the original legacy keys on a new host", async (t) => {
-  const f = await fixture(t, { localApps: undefined, variables: withoutNumericBinding });
-  await assert.rejects(() => f.localState(), { code: "ENOENT" });
-
-  const reviewerPem = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
-    type: "pkcs8",
-    format: "pem",
-  });
-  const writerKey = join(f.directory, ".git/legacy-writer.pem");
-  const reviewerKey = join(f.directory, ".git/legacy-reviewer.pem");
-  await writeFile(writerKey, pem, { mode: 0o600 });
-  await writeFile(reviewerKey, reviewerPem, { mode: 0o600 });
-  const args = [
-    "--repo",
-    "acme/service",
-    "--yes",
-    "--no-browser",
-    "--writer-key",
-    writerKey,
-    "--reviewer-key",
-    reviewerKey,
-  ];
-
-  const ordinaryHost = await fixture(t, { localApps: undefined, variables: withoutNumericBinding });
-  const ordinary = await ordinaryHost.run("setup.mjs", args);
-  assert.notEqual(ordinary.status, 0, "Key import does not imply migration consent");
-  assert.match(ordinary.output, /migrat/i);
-  const before = await ordinaryHost.state();
-  assert.deepEqual(before.variables, withoutNumericBinding);
-  assert.equal(before.pullRequests?.length || 0, 0);
-
-  const migration = await f.run("setup.mjs", [...args, "--migrate-publishing-identities"]);
-  assert.equal(
-    migration.status,
-    0,
-    "Explicit key import and migration must work without a saved host",
-  );
-
-  const state = await f.state();
-  assertPublishingIds(state);
-  noCloudProvisioning(state);
-  assertWriterStatusBinding(state);
-  for (const { name, value } of withoutNumericBinding) {
-    assert.equal(state.variables.find((variable) => variable.name === name)?.value, value, name);
-  }
-  assert.equal(state.pullRequests.length, 1);
-  assert.equal(state.pullRequests[0].user.id, installedApps.writer.botUserId);
-  assert.equal(state.pullRequests[0].base, "main");
-  assert.notEqual(state.pullRequests[0].head, "main");
-
-  const local = await f.localState();
-  assert.equal(local.enabled, false);
-  assert.equal(local.configuration.pr, state.pullRequests[0].number);
-  assert.equal(local.apps.writer.id, installedApps.writer.id);
-  assert.equal(local.apps.reviewer.id, installedApps.reviewer.id);
-  assert.equal(local.apps.writer.botUserId, installedApps.writer.botUserId);
-  assert.equal(local.apps.reviewer.botUserId, installedApps.reviewer.botUserId);
-  assert.ok(
-    local.apps.writer.pem === pem && local.apps.reviewer.pem === reviewerPem,
-    "Both original role keys must be retained",
-  );
-  assert.ok(
-    !state.calls.some(
-      ({ path, method }) =>
-        method !== "GET" && /\/issues\/\d+\/comments|\/pulls\/\d+\/reviews/.test(path),
-    ),
-  );
 });
