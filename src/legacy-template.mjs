@@ -112,7 +112,13 @@ export async function loadLegacyTemplate(root, revision) {
     if (fetched.trim() !== revision)
       throw new Error("The fetched GRAIT template commit does not match --legacy-revision");
     const { stdout } = await git(["ls-tree", "-r", "-z", "--full-tree", revision]);
-    return parseEntries(stdout, /^(100(?:644|755)) blob ([a-f0-9]{40})$/);
+    const files = parseEntries(stdout, /^(100(?:644|755)) blob ([a-f0-9]{40})$/);
+    const manifest = files.get("package.json");
+    const manifestContents =
+      manifest && files.has(legacyValidationWorkflow)
+        ? (await git(["cat-file", "blob", manifest.oid])).stdout
+        : null;
+    return { files, manifestContents };
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -126,32 +132,37 @@ export async function indexedFiles(root) {
   return parseEntries(stdout, /^(100(?:644|755)) ([a-f0-9]{40}) 0$/);
 }
 
-/** Find retained repository files with literal references to legacy scaffolding. */
-export async function retainedLegacyReferences(root, candidates, superseded) {
-  if (!candidates.length) return [];
-  const patterns = new Set(candidates.flatMap((path) => [path, `/${posix.basename(path)}`]));
-  const exclusions = superseded.map((path) => `:(top,exclude,literal)${path}`);
+async function grepReferences(root, patterns, pathspecs) {
   const result = await command(
     "git",
-    [
-      "grep",
-      "--untracked",
-      "-I",
-      "-l",
-      "-z",
-      "-F",
-      "-f",
-      "-",
-      "--",
-      ":(exclude,glob)**/*.md",
-      ":(exclude,glob)**/node_modules/**",
-      ...exclusions,
-    ],
+    ["grep", "--untracked", "-I", "-l", "-z", "-F", "-f", "-", "--", ...pathspecs],
     { cwd: root, env: gitEnvironment(), input: [...patterns].join("\n"), allowFailure: true },
   );
   if (result.code !== 0 && result.code !== 1)
     throw new Error("Could not check retained project files for legacy dependencies");
-  return result.stdout.split("\0").filter(Boolean).sort();
+  return result.stdout.split("\0").filter(Boolean);
+}
+
+/** Find retained repository files with literal references to legacy scaffolding. */
+export async function retainedLegacyReferences(root, candidates, superseded) {
+  if (!candidates.length) return [];
+  const exclusions = superseded.map((path) => `:(top,exclude,literal)${path}`);
+  const basenames = new Set(candidates.map((path) => posix.basename(path)));
+  const paths = new Set([...candidates, ...[...basenames].map((name) => `/${name}`)]);
+  // Retained workflows may use a filename relative to a step or job working directory.
+  const [references, workflowReferences] = await Promise.all([
+    grepReferences(root, paths, [
+      ":(exclude,glob)**/*.md",
+      ":(exclude,glob)**/node_modules/**",
+      ...exclusions,
+    ]),
+    grepReferences(root, basenames, [
+      ":(top,glob).github/workflows/*.yml",
+      ":(top,glob).github/workflows/*.yaml",
+      ...exclusions,
+    ]),
+  ]);
+  return [...new Set([...references, ...workflowReferences])].sort();
 }
 
 export async function verifiedTemplateFile(root, path, template, indexed) {

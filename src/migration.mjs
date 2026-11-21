@@ -37,6 +37,38 @@ const configPath = "workflow.config.json";
 const ownersPath = ".github/CODEOWNERS";
 const workflowPath = `.github/workflows/${installerWorkflow}`;
 
+function npmScriptsInvoked(source) {
+  return Array.from(
+    source.matchAll(
+      /\bnpm[ \t]+(?:(?:run(?:-script)?)[ \t]+([\w:.-]+)|(test|start|stop|restart)\b)/g,
+    ),
+    ([, runScript, lifecycleScript]) => runScript ?? lifecycleScript,
+  );
+}
+
+function assertStockCiRunsOnlyTemplateChecks(workflow, templateManifest, applicationManifest) {
+  if (applicationManifest === null || applicationManifest === templateManifest) return;
+  const scriptNames = new Set(npmScriptsInvoked(workflow));
+  if (!scriptNames.size) return;
+  const templateScripts = (templateManifest && JSON.parse(templateManifest)?.scripts) || {};
+  const applicationScripts = JSON.parse(applicationManifest)?.scripts || {};
+  for (const name of scriptNames) {
+    for (const command of [`pre${name}`, name, `post${name}`]) {
+      const value = applicationScripts[command];
+      if (typeof value !== "string") continue;
+      if (value !== templateScripts[command]) {
+        const invocation = ["test", "start", "stop", "restart"].includes(name)
+          ? `npm ${name}`
+          : `npm run ${name}`;
+        throw new Error(
+          `The stock workflow ${legacyValidationWorkflow} runs ${invocation} with a customized package.json script (${command}). Move the application checks to a dedicated workflow and retire the stock workflow before migrating.`,
+        );
+      }
+      for (const nested of npmScriptsInvoked(value)) scriptNames.add(nested);
+    }
+  }
+}
+
 async function migrationPlan({
   root,
   config,
@@ -68,7 +100,12 @@ async function migrationPlan({
   const replaced = [];
   for (const path of Object.keys(generated)) {
     before[path] = await readArtifact(root, path);
-    const stock = await verifiedTemplateFile(root, path, template.get(path), indexed.get(path));
+    const stock = await verifiedTemplateFile(
+      root,
+      path,
+      template.files.get(path),
+      indexed.get(path),
+    );
     if (before[path] === null) continue;
     if (path === ".codex/config.toml" || stock?.content !== before[path])
       existing[path] = before[path];
@@ -117,7 +154,7 @@ async function migrationPlan({
 
   const retained = [];
   const removable = new Map();
-  for (const [path, entry] of template) {
+  for (const [path, entry] of template.files) {
     if (!isLegacyScaffold(path) || Object.hasOwn(artifacts, path)) continue;
     const stock = await verifiedTemplateFile(root, path, entry, indexed.get(path));
     if (!stock) {
@@ -126,6 +163,13 @@ async function migrationPlan({
     }
     removable.set(path, stock);
   }
+  const stockCi = removable.get(legacyValidationWorkflow);
+  if (stockCi)
+    assertStockCiRunsOnlyTemplateChecks(
+      stockCi.content,
+      template.manifestContents,
+      await readArtifact(root, "package.json"),
+    );
   const runnerArgs = [runner?.install, runner?.command].filter(Array.isArray).flat();
   const findReferences = async (paths, superseded) => {
     // The workflow config also lists paths for policy and permissions. Only its
