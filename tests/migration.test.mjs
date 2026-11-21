@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -32,7 +41,7 @@ async function put(root, path, content, options) {
   await writeFile(destination, content, options);
 }
 
-async function fixture(t, { customized = {}, verifiedPackage = true } = {}) {
+async function fixture(t, { customized = {}, verifiedPackage = true, stockWorkflow = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "grait-migrate-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const home = join(directory, "home");
@@ -83,7 +92,6 @@ async function fixture(t, { customized = {}, verifiedPackage = true } = {}) {
   git(baseline, "init", "-q", "--initial-branch=main");
   for (const path of [
     legacyRunner,
-    legacyWorkflow,
     legacyDependency,
     codexSettings,
     "scripts/bootstrap.mjs",
@@ -95,6 +103,20 @@ async function fixture(t, { customized = {}, verifiedPackage = true } = {}) {
   ]) {
     await put(baseline, path, await readFile(join(source, path)));
   }
+  const toolingOnlyWorkflow = `name: Template CI
+on: [push, pull_request]
+jobs:
+  validate:
+    name: Template validation
+    runs-on: ubuntu-latest
+    steps:
+      - run: node ${legacyDependency}
+`;
+  await put(
+    baseline,
+    legacyWorkflow,
+    stockWorkflow ? await readFile(join(source, legacyWorkflow), "utf8") : toolingOnlyWorkflow,
+  );
   const legacyRevision = commit(baseline);
   for (const url of [
     canonical,
@@ -173,6 +195,14 @@ globalThis.fetch = () => {
       cli("migrate", "--revision", revision, "--legacy-revision", legacyRevision, mode),
     validate: () => cli("validate"),
     checkApplication: () => run("npm", ["run", "--silent", "check"]),
+    testApplication: () => run("npm", ["test", "--silent"]),
+    runFromScriptsDirectory: () =>
+      run(process.execPath, [basename(legacyDependency)], join(target, dirname(legacyDependency))),
+    async workflows() {
+      const directory = join(target, ".github/workflows");
+      const files = (await readdir(directory)).filter((name) => /\.ya?ml$/.test(name));
+      return Promise.all(files.map((file) => readFile(join(directory, file), "utf8")));
+    },
     async assertPreserved() {
       assert.equal(git(target, "rev-parse", "HEAD"), head, "Migration preserves Git history");
       assert.equal(
@@ -309,5 +339,68 @@ test("migration refuses to preview a full target SHA without verified package pi
   assert.match(preview.output, /revision|package.*pin|lockfile/i);
   assert.equal(f.status(), "");
   assert.equal(f.exists(installation), false);
+  await f.assertPreserved();
+});
+
+test("migration keeps the script used relative to a retained CI working directory", async (t) => {
+  const f = await fixture(t, {
+    customized: {
+      ".github/workflows/application.yml": `name: Application CI
+on: [push]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - working-directory: ${dirname(legacyDependency)}
+        run: node ${basename(legacyDependency)}
+`,
+    },
+  });
+  assertSuccess(f.runFromScriptsDirectory());
+
+  const result = f.migrate("--yes");
+  if (result.status === 0) {
+    assert.equal(f.exists(legacyDependency), true, "The retained workflow still has its script");
+    assertSuccess(f.validate());
+  } else {
+    assert.match(result.output, /application\.yml|entrypoint\.mjs/i);
+    assert.equal(f.status(), "");
+    assert.equal(f.exists(installation), false);
+  }
+  assertSuccess(f.runFromScriptsDirectory());
+  await f.assertPreserved();
+});
+
+test("migration keeps application tests invoked by stock CI or stops before changing artifacts", async (t) => {
+  const f = await fixture(t, {
+    stockWorkflow: true,
+    customized: {
+      "package.json":
+        JSON.stringify({
+          name: "app",
+          scripts: { test: "node --test app/application.test.mjs" },
+        }) + "\n",
+      "app/application.test.mjs": `import test from "node:test";
+import assert from "node:assert/strict";
+
+test("application check", () => assert.equal(process.version.startsWith("v"), true));
+`,
+    },
+  });
+  const invokesNpmTest = (workflow) => /^\s*-\s*run:\s*npm\s+(?:run\s+)?test\b/m.test(workflow);
+  assert.ok(invokesNpmTest(await f.read(legacyWorkflow)));
+  assertSuccess(f.testApplication());
+
+  const result = f.migrate("--yes");
+  if (result.status === 0) {
+    assert.ok((await f.workflows()).some(invokesNpmTest), "Application tests still run in CI");
+    assertSuccess(f.validate());
+  } else {
+    assert.match(result.output, /ci\.yml|application\s+(?:ci|workflow)/i);
+    assert.match(result.output, /npm\s+(?:run\s+)?test|test\s+script|application\s+tests?/i);
+    assert.equal(f.status(), "");
+    assert.equal(f.exists(installation), false);
+  }
+  assertSuccess(f.testApplication());
   await f.assertPreserved();
 });
