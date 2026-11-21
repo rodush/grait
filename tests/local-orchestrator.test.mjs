@@ -292,11 +292,16 @@ const operatorDecision = {
   action: "Confirm whether the legacy export must remain available.",
 };
 
+function readableIssueComments(f) {
+  return (f.comments.get(1) || []).map(({ body }) =>
+    body.replace(/^\`\`\`[^\n]*\n[\s\S]*?^\`\`\`[^\n]*$/gm, ""),
+  );
+}
+
 function hasReadableBlocker(f, report) {
-  return (f.comments.get(1) || []).some(({ body }) => {
-    const readable = body.replace(/^\`\`\`[^\n]*\n[\s\S]*?^\`\`\`[^\n]*$/gm, "");
-    return readable.includes(report.blocker) && readable.includes(report.action);
-  });
+  return readableIssueComments(f).some(
+    (comment) => comment.includes(report.blocker) && comment.includes(report.action),
+  );
 }
 
 test("dependency-only triage stays in Backlog without an operator signal", async () => {
@@ -306,6 +311,22 @@ test("dependency-only triage stays in Backlog without an operator signal", async
   assert.equal(f.item.status, f.config.statuses.backlog);
   assert.deepEqual(f.issue.labels, []);
   assert.deepEqual(f.blockers.get(1), [dependency]);
+});
+
+test("ordinary triage questions surface the operator decision on the issue", async () => {
+  const f = fixture();
+  const dependency = openNativeDependency(f);
+  const question = "Should the release retain the legacy export or remove it?";
+  await f.orchestrator.ready(
+    1,
+    f.assessment({ ready: false, blockers: [`${repo}#2`], questions: [question] }),
+  );
+
+  assert.equal(f.item.status, f.config.statuses.backlog);
+  assert.deepEqual(f.blockers.get(1), [dependency]);
+  assert.deepEqual(f.issue.labels, [{ name: f.config.labels.needsHuman }]);
+  assert.ok(readableIssueComments(f).some((comment) => comment.includes(question)));
+  await assert.rejects(() => f.newOrchestrator().claim(1), /paused|human/i);
 });
 
 test("triage publishes the configured label and a readable operator action only once", async () => {
@@ -518,6 +539,35 @@ test("local review stops conflicting instructions before another automatic fix",
   assert.ok(
     !f.requests.some(({ path, body }) => path.includes("/statuses/") && body.state === "success"),
   );
+});
+
+test("conflicting reviews surface the operator action on the linked issue and preserve the review pause", async () => {
+  const f = fixture();
+  f.config.labels.needsHuman = "team:operator-input";
+  await f.orchestrator.ready(1, f.assessment());
+  await f.orchestrator.claim(1);
+  await f.orchestrator.sync(7);
+
+  const result = await f.orchestrator.review(
+    7,
+    f.review({ verdict: "REQUEST_CHANGES", conflicts: true }),
+  );
+
+  assert.equal(result.action, "pause");
+  assert.equal(f.item.status, f.config.statuses.review);
+  assert.equal(f.publishedReviews.length, 1);
+  assert.deepEqual(f.issue.labels, [{ name: f.config.labels.needsHuman }]);
+  assert.ok(
+    readableIssueComments(f).some(
+      (comment) => /conflict/i.test(comment) && /reconcil|resolv|decide|clarif/i.test(comment),
+    ),
+  );
+
+  // Removing the issue label alone does not clear the separately recorded PR pause.
+  f.issue.labels = [];
+  f.pull.head.sha = "b".repeat(40);
+  await assert.rejects(() => f.newOrchestrator().review(7, f.review({ round: 2 })), /paused/i);
+  assert.equal(f.publishedReviews.length, 1);
 });
 
 test("local sync keeps drafts active, sends ready PRs to Review, and completes only merged work", async () => {
