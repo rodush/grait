@@ -84,7 +84,7 @@ export async function orchestratorMain() {
       harnessArguments(config.engine, {
         role: "orchestrator",
         reasoning: config.orchestrator.reasoning,
-        prompt: `Apply the grait-orchestrator skill at ${skillPath(config.engine, "orchestrator")}. Manage this repository's Project queue and delegate specialist sub-agents locally in assigned worktrees. Finish existing Review work before admitting new stories. Use the native subscription login. Check pause state before each stage; humans merge and release.`,
+        prompt: `Apply the grait-orchestrator skill at ${skillPath(config.engine, "orchestrator")}. Manage this repository's Project queue and delegate specialist sub-agents locally in assigned worktrees. Resume existing claims and prioritize Review. Select and claim eligible Ready stories independently while Project and worker capacity permit. Honor the claim command's admission checks. Use the native subscription login. Check pause state before each stage. Humans merge and release.`,
       }),
       { interactive: true, env },
     );

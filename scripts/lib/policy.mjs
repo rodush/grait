@@ -16,6 +16,8 @@ export function parseBlock(body, name) {
   return JSON.parse(matches[0][1]);
 }
 
+export const defaultMaxReady = 5;
+
 export function validateConfig(config) {
   if (config.schemaVersion !== 2 || config.execution !== "local")
     throw new Error(
@@ -39,6 +41,11 @@ export function validateConfig(config) {
     config.maxConcurrentWorkers > 5
   )
     throw new Error("Configure one to five concurrent local workers");
+  if (
+    config.maxReady !== undefined &&
+    (!Number.isSafeInteger(config.maxReady) || config.maxReady < 1)
+  )
+    throw new Error("Configure maxReady as a positive safe integer");
   if (!["low", "medium", "high"].includes(config.orchestrator?.reasoning))
     throw new Error("Configure the orchestrator reasoning level");
   if (

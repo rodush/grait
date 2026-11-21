@@ -47,6 +47,14 @@ Generation applies the value to `agents.max_concurrent_threads_per_session` in `
 
 Slots are shared across triage, testing, implementation, fixes, and review. Five slots allow active work on up to five independent stories when available. Each story's tester and implementer still take sequential exclusive ownership of its branch and worktree. The project-wide ceiling remains five In Progress stories, and existing Review work still blocks new claims.
 
+### Configure Ready queue capacity
+
+Set `maxReady` in `workflow.config.json` to a positive integer. The default is **5**. A reasonable starting point is to match the maximum number of concurrent workers or subagents configured for your harness. For example, with `"maxConcurrentWorkers": 3`, set `"maxReady": 3`.
+
+The limit applies across the Project. If you lower it below the current Ready count, claiming or returning existing Ready stories to Backlog frees space for new ones.
+
+### Configure role settings
+
 The default orchestrator uses medium reasoning. The reviewer uses high reasoning. `config/codex.toml` is the canonical Codex project config; its installed `.codex/config.toml` copy is generated. Tester/implementer model and reasoning overrides remain under `tdd.profiles`; `null` inherits the selected harness model/settings. Overrides are emitted only for the matching provider, so a Codex model name does not leak into Claude agents. Select models available on your account. Role settings grant no extra permissions. Copilot uses its native `--effort` setting and custom-agent `reasoningEffort`; worker profiles must name Copilot-served models rather than provider-qualified BYOK models. The default launcher explicitly selects Copilot Auto and strips provider override variables instead of passing an LLM API key. When a Copilot parent uses Auto, native sub-agents inherit the resolved parent model regardless of their authored model preference; use an explicit `npm run orchestrator -- worker --issue N --role implement` session when a role profile must select a particular model. That session passes the profile through the native `--model` option.
 
 Claude triage/review roles use native worktree isolation. Tester, implementer, and fix stages use the orchestrator's pre-created issue worktree sequentially; they must not create independent default-branch worktrees. `npm run orchestrator -- worker --issue N --role implement` launches a native session in that existing worktree. Native delegation can instead assign its absolute path and exact committed handoff explicitly.

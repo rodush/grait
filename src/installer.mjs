@@ -1,6 +1,6 @@
 import { realpath, rm } from "node:fs/promises";
 import { preserveCodeowners } from "../scripts/lib/bootstrap.mjs";
-import { sameLogin, validateConfig } from "../scripts/lib/policy.mjs";
+import { defaultMaxReady, sameLogin, validateConfig } from "../scripts/lib/policy.mjs";
 import {
   applyArtifacts,
   readArtifact,
@@ -38,6 +38,7 @@ function defaultConfig() {
       review: "Review",
       done: "Done",
     },
+    maxReady: defaultMaxReady,
     maxInProgress: 5,
     maxReviewRounds: 10,
     maxRepeatedBlockingReviews: 3,

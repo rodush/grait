@@ -10,6 +10,7 @@
     "review": "Review",
     "done": "Done"
   },
+  "maxReady": 5,
   "maxInProgress": 5,
   "maxReviewRounds": 10,
   "maxRepeatedBlockingReviews": 3,
