@@ -1,0 +1,248 @@
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { copyFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const source = fileURLToPath(new URL("..", import.meta.url));
+const canonical = "https://github.com/rodush/grait.git";
+const repository = "acme/service";
+const origin = `https://github.com/${repository}.git`;
+const revision = "a1".repeat(20);
+const installation = ".grait/installation.json";
+const session = ".git/grait-setup/session.json";
+const legacyRunner = "scripts/setup.mjs";
+const legacyWorkflow = ".github/workflows/ci.yml";
+const application = {
+  "app/main.py": "print('app')\n",
+  "package.json": '{"name":"app","scripts":{"test":"python -m unittest"}}\n',
+  "package-lock.json": '{"name":"app","lockfileVersion":3,"packages":{}}\n',
+  ".github/workflows/application.yml": "name: Application\non: [push]\njobs: {}\n",
+  ".github/CODEOWNERS": "* @operator\n/app/ @team-owner\n",
+};
+
+async function put(root, path, content, options) {
+  const destination = join(root, path);
+  await mkdir(dirname(destination), { recursive: true });
+  await writeFile(destination, content, options);
+}
+
+async function fixture(t, customized = {}) {
+  const directory = await mkdtemp(join(tmpdir(), "grait-migrate-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const home = join(directory, "home");
+  const baseline = join(directory, "template");
+  const target = join(directory, "target");
+  const installed = join(directory, "package", "node_modules");
+  const entry = join(installed, "grait/dist/cli.mjs");
+  const version = JSON.parse(await readFile(join(source, "package.json"), "utf8")).version;
+  for (const path of [home, baseline, dirname(entry)]) await mkdir(path, { recursive: true });
+  await copyFile(join(source, "dist/cli.mjs"), entry);
+  await put(
+    installed,
+    ".package-lock.json",
+    JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        "node_modules/grait": {
+          version,
+          resolved: `git+${canonical}#${revision}`,
+        },
+      },
+    }),
+  );
+
+  const env = {
+    PATH: process.env.PATH,
+    HOME: home,
+    USERPROFILE: home,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_ALLOW_PROTOCOL: "file",
+  };
+  const git = (cwd, ...args) => execFileSync("git", args, { cwd, env, encoding: "utf8" }).trim();
+  const commit = (cwd) => {
+    git(cwd, "add", "--all");
+    git(
+      cwd,
+      "-c",
+      "user.name=GRAIT Tests",
+      "-c",
+      "user.email=tests@example.invalid",
+      "commit",
+      "-qm",
+      "fixture",
+    );
+    return git(cwd, "rev-parse", "HEAD");
+  };
+  git(baseline, "init", "-q", "--initial-branch=main");
+  for (const path of [
+    legacyRunner,
+    legacyWorkflow,
+    "scripts/bootstrap.mjs",
+    "scripts/check.mjs",
+    "automation/agents.json",
+    "AGENTS.md",
+    "workflow.config.json",
+    "package.json",
+  ]) {
+    await put(baseline, path, await readFile(join(source, path)));
+  }
+  const legacyRevision = commit(baseline);
+  for (const url of [
+    canonical,
+    "https://github.com/rodush/grait",
+    "git@github.com:rodush/grait.git",
+    "ssh://git@github.com/rodush/grait.git",
+  ]) {
+    git(baseline, "config", "--global", "--add", `url.${baseline}.insteadOf`, url);
+  }
+  git(directory, "clone", "-q", "--no-hardlinks", baseline, target);
+  git(target, "remote", "set-url", "origin", origin);
+
+  const config = {
+    ...JSON.parse(await readFile(join(source, "workflow.config.json"), "utf8")),
+    controllerRepository: repository,
+    humanOperators: ["operator"],
+    applicationMarker: "keep project configuration",
+  };
+  const projectFiles = { ...application, ...customized };
+  for (const [path, content] of Object.entries(projectFiles)) await put(target, path, content);
+  await put(target, "workflow.config.json", JSON.stringify(config, null, 2) + "\n");
+  const head = commit(target);
+
+  const app = (role, id) => ({
+    id,
+    name: `existing-${role}`,
+    slug: `existing-${role}`,
+    clientId: `client-${role}`,
+    botUserId: id + 1000,
+    pem: "-----BEGIN TEST FIXTURE-----\nfixture-credential\n-----END TEST FIXTURE-----\n",
+  });
+  const checkpoint = {
+    version: 1,
+    repo: repository,
+    enabled: true,
+    project: { id: "existing-project", owner: "acme", number: 9 },
+    apps: { writer: app("writer", 100), reviewer: app("reviewer", 200) },
+  };
+  await mkdir(join(target, dirname(session)), { mode: 0o700 });
+  await put(target, session, JSON.stringify(checkpoint, null, 2) + "\n", {
+    mode: 0o600,
+  });
+
+  // Only Git's rewritten template transport is available. Repository and Project
+  // provisioning would call a real service, so fail and record those attempts.
+  const accessLog = join(directory, "remote-access");
+  await put(directory, "bin/gh", `#!/bin/sh\necho gh >> "${accessLog}"\nexit 1\n`, { mode: 0o700 });
+  const preload = join(directory, "deny-live-api.mjs");
+  await put(
+    directory,
+    "deny-live-api.mjs",
+    `import { appendFileSync } from "node:fs";
+globalThis.fetch = () => {
+  appendFileSync(${JSON.stringify(accessLog)}, "fetch\\n");
+  throw new Error("Live API disabled in migration fixture");
+};\n`,
+  );
+  const run = (...args) => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", preload, entry, "--cwd", join(target, "app"), ...args],
+      {
+        cwd: directory,
+        env: { ...env, PATH: join(directory, "bin") + ":" + env.PATH },
+        encoding: "utf8",
+      },
+    );
+    if (result.error || result.signal) throw result.error || new Error("GRAIT CLI was interrupted");
+    return { status: result.status, output: result.stdout + result.stderr };
+  };
+  return {
+    exists: (path) => existsSync(join(target, path)),
+    read: (path) => readFile(join(target, path), "utf8"),
+    status: () => git(target, "status", "--porcelain", "--untracked-files=all"),
+    migrate: (mode) =>
+      run("migrate", "--revision", revision, "--legacy-revision", legacyRevision, mode),
+    validate: () => run("validate"),
+    async assertPreserved() {
+      assert.equal(git(target, "rev-parse", "HEAD"), head, "Migration preserves Git history");
+      assert.equal(
+        git(target, "diff", "--cached", "--name-only"),
+        "",
+        "Migration leaves the Git index to the operator",
+      );
+      assert.equal(git(target, "remote", "get-url", "origin"), origin);
+      for (const [path, content] of Object.entries(projectFiles)) {
+        if (path !== "AGENTS.md")
+          assert.equal(await readFile(join(target, path), "utf8"), content, path);
+      }
+      assert.deepEqual(
+        JSON.parse(await readFile(join(target, "workflow.config.json"), "utf8")),
+        config,
+      );
+      assert.deepEqual(JSON.parse(await readFile(join(target, session), "utf8")), checkpoint);
+      assert.equal((await lstat(join(target, session))).mode & 0o777, 0o600);
+      assert.equal(
+        existsSync(accessLog),
+        false,
+        "Migration leaves Project and publishing services alone",
+      );
+    },
+  };
+}
+
+function assertSuccess(result) {
+  assert.equal(result.status, 0, result.output);
+  assert.doesNotMatch(result.output, /fixture-credential/);
+}
+
+test("migration previews and applies verified template removals and a pinned installation", async (t) => {
+  const f = await fixture(t);
+  const preview = f.migrate("--plan");
+  assertSuccess(preview);
+  assert.match(preview.output, /scripts\/setup\.mjs/);
+  assert.match(preview.output, /\.github\/workflows\/ci\.yml/);
+  assert.match(preview.output, /\.grait\/installation\.json/);
+  assert.equal(f.status(), "");
+  assert.equal(f.exists(installation), false);
+  await f.assertPreserved();
+
+  assertSuccess(f.migrate("--yes"));
+  assert.equal(f.exists(legacyRunner), false);
+  assert.equal(f.exists(legacyWorkflow), false);
+  assert.match(await f.read("AGENTS.md"), /grait:policy:start/);
+  assert.match(await f.read(".github/workflows/grait.yml"), new RegExp(revision));
+  const record = JSON.parse(await f.read(installation));
+  assert.equal(record.revision, revision);
+  assert.equal(record.repository, repository);
+  assert.equal(record.harness, "codex");
+  assertSuccess(f.validate());
+  await f.assertPreserved();
+});
+
+test("migration retains customized legacy files and files absent from the template pin", async (t) => {
+  const f = await fixture(t, {
+    "AGENTS.md": "# Application instructions\n\nRun python -m unittest.\n",
+    "scripts/bootstrap.mjs": "export const projectBootstrap = true;\n",
+    "scripts/project-helper.mjs": "export const projectHelper = true;\n",
+    [legacyWorkflow]: "name: Customized application pipeline\non: [push]\njobs: {}\n",
+  });
+  const preview = f.migrate("--plan");
+  assertSuccess(preview);
+  assert.equal(f.status(), "");
+  assert.equal(f.exists(legacyRunner), true);
+  assert.equal(f.exists(installation), false);
+
+  assertSuccess(f.migrate("--yes"));
+  assert.equal(f.exists(legacyRunner), false);
+  assert.match(
+    await f.read("AGENTS.md"),
+    /^# Application instructions\n\nRun python -m unittest\.\n/,
+  );
+  assert.match(await f.read("AGENTS.md"), /grait:policy:start/);
+  assertSuccess(f.validate());
+  await f.assertPreserved();
+});
