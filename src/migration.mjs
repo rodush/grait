@@ -1,4 +1,4 @@
-import { realpath, rm } from "node:fs/promises";
+import { glob, realpath, rm } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { preserveCodeowners } from "../scripts/lib/bootstrap.mjs";
 import { validateConfig } from "../scripts/lib/policy.mjs";
@@ -46,23 +46,54 @@ function npmScriptsInvoked(source) {
   );
 }
 
-function assertStockCiRunsOnlyTemplateChecks(workflow, templateManifest, applicationManifest) {
-  if (applicationManifest === null || applicationManifest === templateManifest) return;
+async function assertStockCiRunsOnlyTemplateChecks({
+  root,
+  workflow,
+  template,
+  indexed,
+  manifest,
+}) {
+  if (manifest === null) return;
   const scriptNames = new Set(npmScriptsInvoked(workflow));
   if (!scriptNames.size) return;
-  const templateScripts = (templateManifest && JSON.parse(templateManifest)?.scripts) || {};
-  const applicationScripts = JSON.parse(applicationManifest)?.scripts || {};
+  const templateScripts =
+    (template.manifestContents && JSON.parse(template.manifestContents)?.scripts) || {};
+  const applicationScripts = JSON.parse(manifest)?.scripts || {};
+  const remediation =
+    "Move the application checks to a dedicated workflow and retire the stock workflow before migrating.";
   for (const name of scriptNames) {
+    const invocation = ["test", "start", "stop", "restart"].includes(name)
+      ? `npm ${name}`
+      : `npm run ${name}`;
     for (const command of [`pre${name}`, name, `post${name}`]) {
       const value = applicationScripts[command];
       if (typeof value !== "string") continue;
-      if (value !== templateScripts[command]) {
-        const invocation = ["test", "start", "stop", "restart"].includes(name)
-          ? `npm ${name}`
-          : `npm run ${name}`;
+      if (value !== templateScripts[command])
         throw new Error(
-          `The stock workflow ${legacyValidationWorkflow} runs ${invocation} with a customized package.json script (${command}). Move the application checks to a dedicated workflow and retire the stock workflow before migrating.`,
+          `The stock workflow ${legacyValidationWorkflow} runs ${invocation} with a customized package.json script (${command}). ${remediation}`,
         );
+      // An inherited Node test command can select project tests even when its text is stock.
+      const selection = value.match(
+        /^node[ \t]+--test(?:[ \t]+--[\w-]+(?:=[\w-]+)?)*[ \t]+((?:\.\/)?tests\/[\w.*?/-]+(?:[ \t]+(?:\.\/)?tests\/[\w.*?/-]+)*)$/,
+      );
+      if (selection) {
+        const patterns = selection[1].split(/[ \t]+/).map((path) => path.replace(/^\.\//, ""));
+        if (patterns.some((path) => path.split("/").includes("..")))
+          throw new Error(
+            `Could not verify test paths selected by ${invocation} in ${legacyValidationWorkflow}. ${remediation}`,
+          );
+        for await (const path of glob(patterns, { cwd: root })) {
+          const templateTest = await verifiedTemplateFile(
+            root,
+            path,
+            template.files.get(path),
+            indexed.get(path),
+          );
+          if (!templateTest)
+            throw new Error(
+              `The stock workflow ${legacyValidationWorkflow} runs ${invocation}, which selects application test ${JSON.stringify(path)}. ${remediation}`,
+            );
+        }
       }
       for (const nested of npmScriptsInvoked(value)) scriptNames.add(nested);
     }
@@ -165,11 +196,13 @@ async function migrationPlan({
   }
   const stockCi = removable.get(legacyValidationWorkflow);
   if (stockCi)
-    assertStockCiRunsOnlyTemplateChecks(
-      stockCi.content,
-      template.manifestContents,
-      await readArtifact(root, "package.json"),
-    );
+    await assertStockCiRunsOnlyTemplateChecks({
+      root,
+      workflow: stockCi.content,
+      template,
+      indexed,
+      manifest: await readArtifact(root, "package.json"),
+    });
   const runnerArgs = [runner?.install, runner?.command].filter(Array.isArray).flat();
   const findReferences = async (paths, superseded) => {
     // The workflow config also lists paths for policy and permissions. Only its
