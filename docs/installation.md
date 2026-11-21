@@ -159,7 +159,19 @@ Each invocation attempts automatic ruleset configuration again. The repository v
 
 ## Upgrade an existing GRAIT installation
 
-Install this version using [guided configuration](#guided-configuration). A repository that only records App logins or has incomplete numeric bindings requires clean setup before activation. Stop previous automation before configuring the repository.
+For a packaged installation, start on an integration branch and run the CLI from the reviewed **target** Git revision. Use the same full SHA or 12-character prefix in both arguments.
+
+```sh
+npm exec --yes --allow-git=root --ignore-scripts \
+  --package='git+https://github.com/rodush/grait.git#GIT_PIN' -- \
+  grait upgrade --plan --revision GIT_PIN
+```
+
+Review the proposed diff, then repeat the command without `--plan` and confirm, or use `--yes` for scripted application. The upgrade preserves your workflow configuration, CODEOWNERS, and text outside GRAIT-managed policy blocks. If managed content has changed, the command identifies the conflicting file before applying anything. Restore the recorded managed content and move any intended customization outside its managed block before retrying.
+
+The upgrade updates the managed instructions, the validation workflow pin, and the installation record in one recoverable transaction. It reuses the installed harness, Project binding, and publishing Apps. Review and commit the complete diff in one PR. A repeat with the same pin and unchanged files reports no changes. If execution is interrupted, preserve the journal and retry from the same worktree with the same pin.
+
+For a source-based installation, use [guided configuration](#guided-configuration). A repository that only records App logins or has incomplete numeric bindings requires clean setup before activation. Stop previous automation before configuring the repository.
 
 ## Resume, remote hosts, and credentials
 
