@@ -15,7 +15,12 @@ const repo = "acme/service";
 const head = "a".repeat(40);
 
 function fixture() {
-  const config = { ...baseConfig, controllerRepository: repo, humanOperators: ["operator"] };
+  const config = {
+    ...baseConfig,
+    controllerRepository: repo,
+    humanOperators: ["operator"],
+    labels: { ...baseConfig.labels },
+  };
   const issue = {
     number: 1,
     node_id: "issue-node",
@@ -104,7 +109,15 @@ function fixture() {
         }
       }
       if (method === "POST" && /\/statuses\//.test(path)) return { state: options.body.state };
-      if (method === "POST" && /\/issues\/\d+\/labels$/.test(path)) return [];
+      const labelsMatch = path.match(/\/issues\/(\d+)\/labels$/);
+      if (method === "POST" && labelsMatch) {
+        const labeledIssue = issues.get(Number(labelsMatch[1]));
+        for (const name of options.body.labels) {
+          if (!labeledIssue.labels.some((label) => label.name === name))
+            labeledIssue.labels.push({ name });
+        }
+        return labeledIssue.labels;
+      }
       throw new Error(`Unsupported local API operation: ${method} ${path}`);
     },
     async list(path) {
@@ -142,17 +155,18 @@ function fixture() {
       return response;
     },
   };
-  const orchestrator = new LocalOrchestrator({
-    api,
-    reviewerApi,
-    project,
-    repo,
-    writer: "writer[bot]",
-    reviewer: "reviewer[bot]",
-    writerId: 10101,
-    reviewerId: 10102,
-    config,
-  });
+  const newOrchestrator = () =>
+    new LocalOrchestrator({
+      api,
+      reviewerApi,
+      project,
+      repo,
+      writer: "writer[bot]",
+      reviewer: "reviewer[bot]",
+      writerId: 10101,
+      reviewerId: 10102,
+      config,
+    });
   const assessment = (overrides = {}) => ({
     version: 1,
     issue: 1,
@@ -185,7 +199,8 @@ function fixture() {
     config,
     api,
     reviewerApi,
-    orchestrator,
+    orchestrator: newOrchestrator(),
+    newOrchestrator,
     project,
     item,
     issue,
@@ -248,12 +263,7 @@ test("local claiming rejects stale scope and native blocker-set changes", async 
 
 test("local readiness keeps a blocked issue in Backlog until its dependencies complete", async () => {
   const f = fixture();
-  const blocker = {
-    number: 2,
-    repository_url: "https://api.github.com/repos/acme/service",
-    state: "open",
-  };
-  f.blockers.set(1, [blocker]);
+  const blocker = openNativeDependency(f);
   const assessment = f.assessment({ blockers: [`${repo}#2`] });
   for (const state of ["open", "closed"]) {
     blocker.state = state;
@@ -265,6 +275,136 @@ test("local readiness keeps a blocked issue in Backlog until its dependencies co
   blocker.state_reason = "completed";
   await f.orchestrator.ready(1, assessment);
   assert.equal(f.item.status, f.config.statuses.ready);
+});
+
+function openNativeDependency(f) {
+  const dependency = {
+    number: 2,
+    repository_url: "https://api.github.com/repos/acme/service",
+    state: "open",
+  };
+  f.blockers.set(1, [dependency]);
+  return dependency;
+}
+
+const operatorDecision = {
+  blocker: "The acceptance criteria require both retaining and removing the legacy export.",
+  action: "Confirm whether the legacy export must remain available.",
+};
+
+function hasReadableBlocker(f, report) {
+  return (f.comments.get(1) || []).some(({ body }) => {
+    const readable = body.replace(/^\`\`\`[^\n]*\n[\s\S]*?^\`\`\`[^\n]*$/gm, "");
+    return readable.includes(report.blocker) && readable.includes(report.action);
+  });
+}
+
+test("dependency-only triage stays in Backlog without an operator signal", async () => {
+  const f = fixture();
+  const dependency = openNativeDependency(f);
+  await f.orchestrator.ready(1, f.assessment({ ready: false, blockers: [`${repo}#2`] }));
+  assert.equal(f.item.status, f.config.statuses.backlog);
+  assert.deepEqual(f.issue.labels, []);
+  assert.deepEqual(f.blockers.get(1), [dependency]);
+});
+
+test("triage publishes the configured label and a readable operator action only once", async () => {
+  const f = fixture();
+  f.config.labels.needsHuman = "team:operator-input";
+  f.issue.labels.push({ name: "existing-label" });
+  const report = f.assessment({
+    ready: false,
+    humanAttention: operatorDecision,
+  });
+
+  await f.orchestrator.ready(1, report);
+  assert.deepEqual(f.issue.labels.map(({ name }) => name).sort(), [
+    "existing-label",
+    "team:operator-input",
+  ]);
+  assert.equal(f.item.status, f.config.statuses.backlog);
+  assert.ok(hasReadableBlocker(f, operatorDecision));
+  await assert.rejects(() => f.newOrchestrator().ready(1, f.assessment()), /paused|human/i);
+  await assert.rejects(() => f.newOrchestrator().claim(1), /paused|human/i);
+
+  const firstComments = structuredClone(f.comments.get(1));
+  await f.newOrchestrator().ready(1, report);
+  assert.deepEqual(f.comments.get(1), firstComments);
+  assert.equal(
+    f.requests.filter(({ method, path }) => method === "POST" && path.endsWith("/labels")).length,
+    1,
+  );
+});
+
+test("operator clearance permits fresh triage while native dependencies still gate Ready", async () => {
+  const f = fixture();
+  const dependency = openNativeDependency(f);
+  const nativeRefs = { blockers: [`${repo}#2`] };
+  await f.orchestrator.ready(
+    1,
+    f.assessment({
+      ...nativeRefs,
+      ready: false,
+      humanAttention: operatorDecision,
+    }),
+  );
+  assert.deepEqual(f.issue.labels, [{ name: f.config.labels.needsHuman }]);
+  assert.deepEqual(f.blockers.get(1), [dependency]);
+
+  // An authorized GitHub operator removes the human-attention label in GitHub.
+  f.issue.labels = [];
+  await assert.rejects(
+    () => f.newOrchestrator().ready(1, f.assessment(nativeRefs)),
+    /acme\/service#2/,
+  );
+  await f.newOrchestrator().ready(1, f.assessment({ ...nativeRefs, ready: false }));
+  assert.equal(f.item.status, f.config.statuses.backlog);
+  assert.deepEqual(f.issue.labels, []);
+
+  f.issue.labels = [{ name: f.config.labels.paused }];
+  await assert.rejects(
+    () =>
+      f
+        .newOrchestrator()
+        .ready(1, f.assessment({ ...nativeRefs, ready: false, humanAttention: operatorDecision })),
+    /paused/i,
+  );
+  assert.deepEqual(f.issue.labels, [{ name: f.config.labels.paused }]);
+  dependency.state = "closed";
+  dependency.state_reason = "completed";
+  await assert.rejects(() => f.newOrchestrator().ready(1, f.assessment(nativeRefs)), /paused/i);
+  f.issue.labels = [];
+  await f.newOrchestrator().ready(1, f.assessment(nativeRefs));
+  assert.equal(f.item.status, f.config.statuses.ready);
+});
+
+test("delivery can report a blocker without dropping the current claim", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  const claim = await f.orchestrator.claim(1);
+  const publishingScope = {
+    blocker: "The accepted change requires a protected workflow file.",
+    action: "Make the workflow change through the maintainer process.",
+  };
+
+  await assert.doesNotReject(() =>
+    f.newOrchestrator().ready(1, f.assessment({ ready: false, humanAttention: publishingScope })),
+  );
+  assert.equal(f.item.status, f.config.statuses.inProgress);
+  assert.deepEqual(f.issue.labels, [{ name: f.config.labels.needsHuman }]);
+  assert.ok(hasReadableBlocker(f, publishingScope));
+  await assert.rejects(() => f.newOrchestrator().claim(1), /paused|human/i);
+  f.issue.labels = [];
+  assert.deepEqual(await f.newOrchestrator().claim(1), claim);
+});
+
+test("review honors the linked issue's human-attention label", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  await f.orchestrator.claim(1);
+  f.issue.labels.push({ name: f.config.labels.needsHuman });
+  await assert.rejects(() => f.orchestrator.review(7, f.review()), /paused|human/i);
+  assert.equal(f.publishedReviews.length, 0);
 });
 
 for (const configuredLimit of [undefined, 3, 7]) {
