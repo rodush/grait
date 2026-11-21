@@ -89,6 +89,7 @@ async function installedFixture(t) {
     read,
     write,
     snapshot,
+    removePackageLock: () => rm(lockfile),
     upgrade: (...args) => run("upgrade", "--revision", newRevision, ...args),
   };
 }
@@ -196,6 +197,18 @@ test("a pinned upgrade rejects a different Git revision than the running package
   const result = f.run("upgrade", "--revision", oldRevision, "--yes");
   assert.notEqual(result.status, 0);
   assert.match(result.output, /revision|commit|pin/i);
+  assert.deepEqual(await f.snapshot(), before);
+  assert.equal(f.git("status", "--porcelain"), "");
+});
+
+test("an upgrade preview rejects a full SHA without package revision metadata", async (t) => {
+  const f = await installedFixture(t);
+  await f.removePackageLock();
+  const before = await f.snapshot();
+
+  const preview = f.upgrade("--plan");
+  assert.notEqual(preview.status, 0, "A full SHA alone does not verify the running package");
+  assert.match(preview.output, /verif.*(?:revision|pin)|package.*(?:revision|pin)/i);
   assert.deepEqual(await f.snapshot(), before);
   assert.equal(f.git("status", "--porcelain"), "");
 });
