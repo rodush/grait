@@ -16,6 +16,8 @@ const installation = ".grait/installation.json";
 const session = ".git/grait-setup/session.json";
 const legacyRunner = "scripts/setup.mjs";
 const legacyWorkflow = ".github/workflows/ci.yml";
+const legacyDependency = "scripts/lib/entrypoint.mjs";
+const codexSettings = ".codex/config.toml";
 const application = {
   "app/main.py": "print('app')\n",
   "package.json": '{"name":"app","scripts":{"test":"python -m unittest"}}\n',
@@ -30,7 +32,7 @@ async function put(root, path, content, options) {
   await writeFile(destination, content, options);
 }
 
-async function fixture(t, customized = {}) {
+async function fixture(t, { customized = {}, verifiedPackage = true } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "grait-migrate-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const home = join(directory, "home");
@@ -41,19 +43,20 @@ async function fixture(t, customized = {}) {
   const version = JSON.parse(await readFile(join(source, "package.json"), "utf8")).version;
   for (const path of [home, baseline, dirname(entry)]) await mkdir(path, { recursive: true });
   await copyFile(join(source, "dist/cli.mjs"), entry);
-  await put(
-    installed,
-    ".package-lock.json",
-    JSON.stringify({
-      lockfileVersion: 3,
-      packages: {
-        "node_modules/grait": {
-          version,
-          resolved: `git+${canonical}#${revision}`,
+  if (verifiedPackage)
+    await put(
+      installed,
+      ".package-lock.json",
+      JSON.stringify({
+        lockfileVersion: 3,
+        packages: {
+          "node_modules/grait": {
+            version,
+            resolved: `git+${canonical}#${revision}`,
+          },
         },
-      },
-    }),
-  );
+      }),
+    );
 
   const env = {
     PATH: process.env.PATH,
@@ -81,6 +84,8 @@ async function fixture(t, customized = {}) {
   for (const path of [
     legacyRunner,
     legacyWorkflow,
+    legacyDependency,
+    codexSettings,
     "scripts/bootstrap.mjs",
     "scripts/check.mjs",
     "automation/agents.json",
@@ -147,26 +152,27 @@ globalThis.fetch = () => {
   throw new Error("Live API disabled in migration fixture");
 };\n`,
   );
-  const run = (...args) => {
-    const result = spawnSync(
-      process.execPath,
-      ["--import", preload, entry, "--cwd", join(target, "app"), ...args],
-      {
-        cwd: directory,
-        env: { ...env, PATH: join(directory, "bin") + ":" + env.PATH },
-        encoding: "utf8",
-      },
-    );
-    if (result.error || result.signal) throw result.error || new Error("GRAIT CLI was interrupted");
+  const run = (program, args, cwd = target, environment = env) => {
+    const result = spawnSync(program, args, { cwd, env: environment, encoding: "utf8" });
+    if (result.error || result.signal)
+      throw result.error || new Error("Fixture command interrupted");
     return { status: result.status, output: result.stdout + result.stderr };
   };
+  const cli = (...args) =>
+    run(
+      process.execPath,
+      ["--import", preload, entry, "--cwd", join(target, "app"), ...args],
+      directory,
+      { ...env, PATH: join(directory, "bin") + ":" + env.PATH },
+    );
   return {
     exists: (path) => existsSync(join(target, path)),
     read: (path) => readFile(join(target, path), "utf8"),
     status: () => git(target, "status", "--porcelain", "--untracked-files=all"),
     migrate: (mode) =>
-      run("migrate", "--revision", revision, "--legacy-revision", legacyRevision, mode),
-    validate: () => run("validate"),
+      cli("migrate", "--revision", revision, "--legacy-revision", legacyRevision, mode),
+    validate: () => cli("validate"),
+    checkApplication: () => run("npm", ["run", "--silent", "check"]),
     async assertPreserved() {
       assert.equal(git(target, "rev-parse", "HEAD"), head, "Migration preserves Git history");
       assert.equal(
@@ -176,7 +182,7 @@ globalThis.fetch = () => {
       );
       assert.equal(git(target, "remote", "get-url", "origin"), origin);
       for (const [path, content] of Object.entries(projectFiles)) {
-        if (path !== "AGENTS.md")
+        if (path !== "AGENTS.md" && path !== codexSettings)
           assert.equal(await readFile(join(target, path), "utf8"), content, path);
       }
       assert.deepEqual(
@@ -224,11 +230,15 @@ test("migration previews and applies verified template removals and a pinned ins
 });
 
 test("migration retains customized legacy files and files absent from the template pin", async (t) => {
+  const customSettings = 'approval_policy = "never"\nsandbox_mode = "workspace-write"\n';
   const f = await fixture(t, {
-    "AGENTS.md": "# Application instructions\n\nRun python -m unittest.\n",
-    "scripts/bootstrap.mjs": "export const projectBootstrap = true;\n",
-    "scripts/project-helper.mjs": "export const projectHelper = true;\n",
-    [legacyWorkflow]: "name: Customized application pipeline\non: [push]\njobs: {}\n",
+    customized: {
+      "AGENTS.md": "# Application instructions\n\nRun python -m unittest.\n",
+      "scripts/bootstrap.mjs": "export const projectBootstrap = true;\n",
+      "scripts/project-helper.mjs": "export const projectHelper = true;\n",
+      [legacyWorkflow]: "name: Customized application pipeline\non: [push]\njobs: {}\n",
+      [codexSettings]: customSettings,
+    },
   });
   const preview = f.migrate("--plan");
   assertSuccess(preview);
@@ -243,6 +253,61 @@ test("migration retains customized legacy files and files absent from the templa
     /^# Application instructions\n\nRun python -m unittest\.\n/,
   );
   assert.match(await f.read("AGENTS.md"), /grait:policy:start/);
+  assert.ok((await f.read(codexSettings)).includes(customSettings));
   assertSuccess(f.validate());
+  await f.assertPreserved();
+});
+
+test("migration preserves a retained CI command or rejects the migration before changing artifacts", async (t) => {
+  const f = await fixture(t, {
+    customized: {
+      "package.json":
+        JSON.stringify({
+          name: "app",
+          scripts: { check: `node ${legacyDependency}` },
+        }) + "\n",
+      ".github/workflows/application.yml":
+        "name: Application\non: [push]\njobs:\n  check:\n    runs-on: ubuntu-latest\n    steps:\n      - run: npm run check\n",
+    },
+  });
+  assertSuccess(f.checkApplication());
+
+  const result = f.migrate("--yes");
+  if (result.status === 0) {
+    assertSuccess(f.checkApplication());
+    assertSuccess(f.validate());
+  } else {
+    assert.match(result.output, /scripts\/lib\/entrypoint\.mjs|npm run check/i);
+    assert.equal(f.status(), "");
+    assert.equal(f.exists(installation), false);
+    assertSuccess(f.checkApplication());
+  }
+  await f.assertPreserved();
+});
+
+test("migration preserves existing Codex settings that match the template", async (t) => {
+  const f = await fixture(t);
+  const before = await f.read(codexSettings);
+
+  assertSuccess(f.migrate("--yes"));
+  const after = await f.read(codexSettings);
+  assert.ok(after.includes(before), "The migrated config retains the existing Codex settings");
+  assert.match(after, /grait:policy:start/);
+  assertSuccess(f.validate());
+});
+
+test("migration refuses to preview a full target SHA without verified package pin metadata", async (t) => {
+  const f = await fixture(t, { verifiedPackage: false });
+  const preview = f.migrate("--plan");
+
+  assert.notEqual(
+    preview.status,
+    0,
+    "A supplied full SHA cannot establish the running package pin",
+  );
+  assert.match(preview.output, /could not|cannot|unable|missing/i);
+  assert.match(preview.output, /revision|package.*pin|lockfile/i);
+  assert.equal(f.status(), "");
+  assert.equal(f.exists(installation), false);
   await f.assertPreserved();
 });
