@@ -86,6 +86,14 @@ test("unchanged patches and unrelated pushes do not count as code reversals or c
   assert.equal(loopDecision(pushes, config).action, "fix");
 });
 
+test("Ready capacity accepts positive safe integers and remains optional", () => {
+  assert.doesNotThrow(() => validateConfig({ ...config, maxReady: undefined }));
+  assert.doesNotThrow(() => validateConfig({ ...config, maxReady: 7 }));
+  for (const maxReady of [0, -1, 1.5, "3", null, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => validateConfig({ ...config, maxReady }), /maxReady/);
+  }
+});
+
 test("automated write scopes cannot include shared policy or automation", () => {
   assert.doesNotThrow(() => validateConfig(config));
   const protectedConfig = {
