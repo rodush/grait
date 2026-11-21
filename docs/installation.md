@@ -62,6 +62,25 @@ If init or activation pauses on GitHub rulesets, use the displayed settings link
 
 ## Existing template-based repository
 
+### Migrate a configured template to the pinned CLI
+
+In the existing configured repository, create an integration branch and stop the local orchestrator for the migration. Choose a reviewed package revision for `GIT_PIN` and the full SHA of the original GRAIT template commit for `TEMPLATE_SHA`.
+
+```sh
+git switch -c chore/migrate-grait
+npm exec --yes --allow-git=root --ignore-scripts \
+  --package='git+https://github.com/rodush/grait.git#GIT_PIN' -- \
+  grait migrate --plan --revision GIT_PIN --legacy-revision TEMPLATE_SHA
+```
+
+The preview fetches the template pin from the canonical GRAIT repository into temporary storage. It shows additions, replacements, and removals without changing the target. A removable legacy file must match the selected template's path, tracked blob, executable mode, and worktree bytes. Migration keeps existing Codex settings and customized policy text and appends the packaged policy blocks. Literal references in retained project files keep the legacy tooling and its dependencies in place. The scan skips Markdown documentation and installed npm dependencies. The plan lists the referencing files. The pinned workflow takes over the legacy template validation check. Update references to the original stock workflow before migrating. If that workflow runs customized npm scripts or its inherited Node test command selects application tests, move the application checks to a dedicated workflow and retire the original workflow before retrying. Check dynamically constructed paths against the proposed removals before applying. Both preview and apply verify the running package revision using npm's lock metadata.
+
+Repeat the command without `--plan` to confirm interactively, or use `--yes` after `migrate`. Use `--cwd PATH` before `migrate` to target another checkout. Migration adds the pinned validation workflow and installation record. It uses the current workflow configuration and CODEOWNERS and leaves the Git history, Project binding, publishing identities, and private host credentials in place. Commit the file changes together, open a PR for human merge, and verify the GRAIT and application checks before resuming operations with the pinned CLI.
+
+If migration is interrupted during file application, preserve the recovery journal and retry with both original pins. Confirm that the previous process has stopped before removing a stale setup lock.
+
+### Repair the source-based workflow
+
 Use this path when installing or repairing the source-based template workflow.
 
 1. Clone the target and create an integration branch. Preserve the existing application's code, history, and policies:

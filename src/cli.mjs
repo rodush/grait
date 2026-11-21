@@ -8,6 +8,7 @@ import reporter from "../scripts/adapters/node-test-reporter.mjs";
 import { runRuntime } from "./runtime.mjs";
 import { runInstallation } from "./installation-cli.mjs";
 import { runUpgrade } from "./upgrade.mjs";
+import { runMigration } from "./migration.mjs";
 import { installerWorkflow, validateInstallation } from "./installation-record.mjs";
 import { verifyInstallationMerge } from "./installation-merge.mjs";
 import { bootstrapMain } from "../scripts/bootstrap.mjs";
@@ -48,7 +49,7 @@ async function main(args = process.argv.slice(2)) {
   }
   if (!args.length || (args.length === 1 && ["--help", "-h"].includes(args[0]))) {
     console.log(
-      `GRAIT ${version}\n\nUsage: grait [--cwd PATH] COMMAND [OPTIONS]\n\nCommands:\n  init             Preview and install a pinned GRAIT workflow\n  activate         Enable an installed workflow after human merge\n  validate         Validate installed project artifacts\n  upgrade          Preview and apply a pinned workflow upgrade\n  orchestrator     Coordinate the local Project workflow\n  github           Publish through the configured writer identity\n\nOptions:\n  --cwd PATH       Select a target Git repository or subdirectory\n  --help, -h       Show this help\n  --version, -v    Show the installed package version`,
+      `GRAIT ${version}\n\nUsage: grait [--cwd PATH] COMMAND [OPTIONS]\n\nCommands:\n  init             Preview and install a pinned GRAIT workflow\n  activate         Enable an installed workflow after human merge\n  validate         Validate installed project artifacts\n  upgrade          Preview and apply a pinned workflow upgrade\n  migrate          Migrate a configured GRAIT template repository\n  orchestrator     Coordinate the local Project workflow\n  github           Publish through the configured writer identity\n\nOptions:\n  --cwd PATH       Select a target Git repository or subdirectory\n  --help, -h       Show this help\n  --version, -v    Show the installed package version`,
     );
   } else if (args.length === 1 && ["--version", "-v"].includes(args[0])) {
     console.log(version);
@@ -56,6 +57,8 @@ async function main(args = process.argv.slice(2)) {
     process.exitCode = await runInstallation({ command: args.shift(), args, cwd, version });
   } else if (args[0] === "upgrade") {
     process.exitCode = await runUpgrade({ args: args.slice(1), cwd, version });
+  } else if (args[0] === "migrate") {
+    process.exitCode = await runMigration({ args: args.slice(1), cwd, version });
   } else if (["orchestrator", "github"].includes(args[0])) {
     process.exitCode = await runRuntime({ command: args.shift(), args, cwd });
   } else throw new Error("Unknown command or option. Run grait --help for available commands.");
