@@ -3,6 +3,7 @@ import { Ledger } from "./ledger.mjs";
 import {
   availableSlots,
   assertAcyclic,
+  defaultMaxReady,
   dependencyComplete,
   issueDigest,
   loopDecision,
@@ -14,7 +15,6 @@ import {
 
 const labels = (item) =>
   (item.labels || []).map((label) => (typeof label === "string" ? label : label.name));
-const maxReadyStories = 5;
 
 // The CLI serializes mutations on the designated host. This class never invokes a model
 // or dispatches Actions; the signed-in native harness owns agent execution.
@@ -131,8 +131,9 @@ export class LocalOrchestrator {
           item.content?.__typename !== "PullRequest" &&
           item.status === this.config.statuses.ready,
       ).length;
-      if (readyCount >= maxReadyStories)
-        throw new Error("The five-story Ready capacity is exhausted");
+      const maxReady = this.config.maxReady ?? defaultMaxReady;
+      if (readyCount >= maxReady)
+        throw new Error(`The Ready capacity is exhausted at ${maxReady} stories (maxReady)`);
     }
     state.triagedDigest = issueDigest(issue);
     state.triage = assessment;

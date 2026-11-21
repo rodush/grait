@@ -46,6 +46,8 @@ Review the plan and repeat the command without `--plan`. The applying account ne
 
 The installer reuses verified writer and reviewer Apps and the recorded Project on retry. It provisions using private staging and then applies the full set of artifacts together. These include the selected harness instructions, `workflow.config.json`, human CODEOWNERS, `.github/workflows/grait.yml`, and `.grait/installation.json`. The installation record tracks the GRAIT package version, pinned Git revision, and artifact ownership hashes. Publishing keys and operational recovery state live in the repository's private Git metadata. If setup is interrupted during a file transaction, preserve the journal and rerun the same installation. If the setup lock remains, confirm that its recorded process has stopped before removing the stale lock. Review any recovery conflict before retrying. An unchanged repeat installation leaves artifacts and provisioning alone.
 
+Review `maxReady` in `workflow.config.json` before committing. It defaults to five, and matching your harness's maximum concurrent workers or subagents is a reasonable starting point. See [Ready queue capacity](setup.md#configure-ready-queue-capacity).
+
 Review and commit the result to one configuration PR. After a human merges it and the generated GRAIT workflow passes on the current default-branch head, run activation from the target repository with the same pinned CLI:
 
 ```sh

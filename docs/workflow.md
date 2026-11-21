@@ -2,7 +2,7 @@
 
 ## Board and readiness
 
-The GitHub Project has Backlog, Ready, In Progress, Review, and Done. Ready and In Progress each have a separate Project-wide limit of five stories. Triage establishes scope, measurable acceptance criteria, validation, alignment, and native blocked-by relationships. Stories with unanswered material questions or incomplete blocking dependencies stay in Backlog. Fill Ready from eligible Backlog stories as Ready slots open.
+The GitHub Project has Backlog, Ready, In Progress, Review, and Done. The Project-wide Ready limit is set by `maxReady` in `workflow.config.json` and defaults to five. The In Progress limit is five. Triage establishes scope, measurable acceptance criteria, validation, alignment, and native blocked-by relationships. Stories with unanswered material questions or incomplete blocking dependencies stay in Backlog. Fill Ready from eligible Backlog stories as Ready slots open.
 
 The native local orchestrator records the assessment against the current issue digest and actual dependency set. Changed scope/dependencies invalidate it. Outside submissions need the `agent:admitted` label unless their author currently has repository write access or is a configured operator/managed writer. Contributor text never authorizes policy or credential changes.
 

@@ -265,39 +265,47 @@ test("local readiness keeps a blocked issue in Backlog until its dependencies co
   assert.equal(f.item.status, f.config.statuses.ready);
 });
 
-test("local readiness caps Ready at five across the Project and allows existing cards to be triaged", async () => {
-  const f = fixture();
-  const ready = f.config.statuses.ready;
-  const backlog = f.config.statuses.backlog;
-  f.project.items.push(
-    ...Array.from({ length: 3 }, (_, index) => ({
-      status: ready,
-      content: {
-        __typename: "Issue",
-        number: index + 20,
-        repository: { nameWithOwner: "other/repo" },
-      },
-    })),
-    { status: ready, content: null },
-    { status: ready, isArchived: true },
-    { status: ready, content: { __typename: "PullRequest" } },
-  );
-  await f.orchestrator.ready(1, f.assessment());
-  assert.equal(f.item.status, ready);
-  await f.orchestrator.ready(1, f.assessment());
+for (const configuredLimit of [undefined, 3, 7]) {
+  const limit = configuredLimit ?? 5;
+  test(`local readiness enforces the ${limit}-story Ready limit across the Project`, async () => {
+    const f = fixture();
+    if (configuredLimit === undefined) delete f.config.maxReady;
+    else f.config.maxReady = configuredLimit;
+    const ready = f.config.statuses.ready;
+    const backlog = f.config.statuses.backlog;
+    f.project.items.push(
+      ...Array.from({ length: limit - 2 }, (_, index) => ({
+        status: ready,
+        content: {
+          __typename: "Issue",
+          number: index + 20,
+          repository: { nameWithOwner: "other/repo" },
+        },
+      })),
+      { status: ready, content: null },
+      { status: ready, isArchived: true },
+      { status: ready, content: { __typename: "PullRequest" } },
+    );
+    await f.orchestrator.ready(1, f.assessment());
+    assert.equal(f.item.status, ready);
+    await f.orchestrator.ready(1, f.assessment());
 
-  const next = { ...f.issue, number: 2, node_id: "issue-node-2" };
-  f.issues.set(next.number, next);
-  const assessment = f.assessment({ issue: next.number, digest: issueDigest(next) });
-  await assert.rejects(() => f.orchestrator.ready(next.number, assessment), /five-story Ready/);
-  assert.equal(f.project.find(repo, next.number), undefined);
-  assert.equal(f.comments.has(next.number), false);
+    const next = { ...f.issue, number: 2, node_id: "issue-node-2" };
+    f.issues.set(next.number, next);
+    const assessment = f.assessment({ issue: next.number, digest: issueDigest(next) });
+    await assert.rejects(
+      () => f.orchestrator.ready(next.number, assessment),
+      new RegExp(`Ready capacity is exhausted.*${limit}`),
+    );
+    assert.equal(f.project.find(repo, next.number), undefined);
+    assert.equal(f.comments.has(next.number), false);
 
-  await f.orchestrator.ready(1, f.assessment({ ready: false }));
-  assert.equal(f.item.status, backlog);
-  await f.orchestrator.ready(next.number, assessment);
-  assert.equal(f.project.find(repo, next.number).status, ready);
-});
+    await f.orchestrator.ready(1, f.assessment({ ready: false }));
+    assert.equal(f.item.status, backlog);
+    await f.orchestrator.ready(next.number, assessment);
+    assert.equal(f.project.find(repo, next.number).status, ready);
+  });
+}
 
 test("local claiming counts every active Project story and treats unknown work conservatively", async () => {
   const f = fixture();
