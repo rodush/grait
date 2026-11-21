@@ -71,7 +71,7 @@ function defaultConfig() {
   };
 }
 
-function workflow(revision) {
+export function pinnedValidationWorkflow(revision) {
   return `name: GRAIT validation
 on:
   push:
@@ -178,7 +178,7 @@ async function prepareArtifacts(options) {
   }
   if (options.prior) verifyOwnership(options.prior, before);
   const currentWorkflow = before[workflowPath];
-  const generatedWorkflow = workflow(options.revision);
+  const generatedWorkflow = pinnedValidationWorkflow(options.revision);
   if (currentWorkflow !== null && currentWorkflow !== generatedWorkflow)
     throw new Error("The existing grait.yml conflicts with the pinned installation workflow");
   const owners =
@@ -238,6 +238,10 @@ export async function planInstallation(input) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? "")) throw new Error("Provide --repo OWNER/REPOSITORY");
   const store = await installerStore({ root, repo });
   const transaction = store.state.artifactTransaction;
+  if (transaction?.operation && transaction.operation !== "init")
+    throw new Error(
+      `An artifact operation is interrupted. Retry grait ${transaction.operation} first.`,
+    );
   if (transaction) {
     const revision = await resolveInstallRevision(
       input.revision ?? transaction.revision ?? installation?.record.revision,
@@ -273,6 +277,10 @@ export async function installWorkflow(input) {
   const revision = await resolveInstallRevision(input.revision, { requireInstalled: true });
   const store = await installerStore({ root, repo });
   const transaction = store.state.artifactTransaction;
+  if (transaction?.operation && transaction.operation !== "init")
+    throw new Error(
+      `An artifact operation is interrupted. Retry grait ${transaction.operation} first.`,
+    );
   if (Boolean(transaction) !== Boolean(input.pendingRecovery))
     throw new Error("Installation recovery state changed since preview. Retry the same command.");
   if (transaction?.revision && transaction.revision !== revision)
