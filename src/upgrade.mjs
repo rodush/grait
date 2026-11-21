@@ -79,13 +79,13 @@ export async function runUpgrade({ args, cwd, version }) {
   });
   if (values.help) {
     console.log(
-      "grait upgrade --plan --revision GIT_PIN\nRun the CLI pinned to the target revision. Inspect the plan, then rerun without --plan or use --yes to apply it.",
+      "grait upgrade --plan --revision GIT_PIN\nRun the Git-pinned package for both preview and apply. Inspect the plan, then rerun without --plan or use --yes to apply it.",
     );
     return 0;
   }
   if (values.plan && values.yes) throw new Error("Choose either --plan or --yes");
   const revision = await resolveInstallRevision(values.revision, {
-    requireInstalled: !values.plan,
+    requireInstalled: true,
   });
   const root = await realpath(await targetRoot(cwd));
   const config = await readArtifact(root, configPath);

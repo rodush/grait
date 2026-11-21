@@ -159,7 +159,7 @@ Each invocation attempts automatic ruleset configuration again. The repository v
 
 ## Upgrade an existing GRAIT installation
 
-For a packaged installation, start on an integration branch and run the CLI from the reviewed **target** Git revision. Use the same full SHA or 12-character prefix in both arguments.
+For a packaged installation, start on an integration branch and run the CLI from the reviewed **target** Git revision. Use the same full SHA or 12-character prefix in both arguments. Both preview and apply verify the running package revision against npm’s lockfile.
 
 ```sh
 npm exec --yes --allow-git=root --ignore-scripts \
