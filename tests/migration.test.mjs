@@ -404,3 +404,50 @@ test("application check", () => assert.equal(process.version.startsWith("v"), tr
   assertSuccess(f.testApplication());
   await f.assertPreserved();
 });
+
+test("migration protects application tests selected by the unmodified template test command", async (t) => {
+  const applicationTest = "tests/project-behavior.test.mjs";
+  const f = await fixture(t, {
+    stockWorkflow: true,
+    customized: {
+      "package.json": await readFile(join(source, "package.json"), "utf8"),
+      [applicationTest]: `import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+
+test("runs project behavior from the inherited test glob", async () => {
+  const program = await readFile(new URL("../app/main.py", import.meta.url), "utf8");
+  assert.equal(program.trim(), "print('app')");
+});
+`,
+    },
+  });
+  const invokesNpmTest = (workflow) => /^\s*-\s*run:\s*npm\s+(?:run\s+)?test\b/m.test(workflow);
+  assert.ok(invokesNpmTest(await f.read(legacyWorkflow)));
+  const before = f.testApplication();
+  assertSuccess(before);
+  assert.match(before.output, /runs project behavior from the inherited test glob/);
+
+  const result = f.migrate("--yes");
+  if (result.status === 0) {
+    const invokesApplicationTest = (workflow) =>
+      invokesNpmTest(workflow) ||
+      /^\s*-\s*run:\s*node\s+--test\b[^\r\n]*tests\/(?:project-behavior|\*)\.test\.mjs\b/m.test(
+        workflow,
+      );
+    assert.ok(
+      (await f.workflows()).some(invokesApplicationTest),
+      "Application tests reached by the inherited command still run in CI",
+    );
+    assertSuccess(f.validate());
+  } else {
+    assert.match(result.output, /ci\.yml|application\s+(?:ci|workflow)/i);
+    assert.match(result.output, /npm\s+(?:run\s+)?test|tests\/project-behavior\.test\.mjs/i);
+    assert.equal(f.status(), "");
+    assert.equal(f.exists(installation), false);
+  }
+  const after = f.testApplication();
+  assertSuccess(after);
+  assert.match(after.output, /runs project behavior from the inherited test glob/);
+  await f.assertPreserved();
+});
