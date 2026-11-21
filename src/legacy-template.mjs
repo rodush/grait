@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { lstat, readFile, realpath, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 import { command, withoutCredentials } from "../scripts/lib/setup-process.mjs";
 import { privateStagingDirectory } from "./installer-services.mjs";
 
@@ -39,8 +39,9 @@ const legacyScripts = new Set([
   "lib/tdd",
   "lib/verification",
 ]);
+export const legacyValidationWorkflow = ".github/workflows/ci.yml";
 const legacyFiles = new Set([
-  ".github/workflows/ci.yml",
+  legacyValidationWorkflow,
   "automation/agents.json",
   "automation/policy/shared.md",
   "config/codex.toml",
@@ -123,6 +124,34 @@ export async function indexedFiles(root) {
     env: gitEnvironment(),
   });
   return parseEntries(stdout, /^(100(?:644|755)) ([a-f0-9]{40}) 0$/);
+}
+
+/** Find retained repository files with literal references to legacy scaffolding. */
+export async function retainedLegacyReferences(root, candidates, superseded) {
+  if (!candidates.length) return [];
+  const patterns = new Set(candidates.flatMap((path) => [path, `/${posix.basename(path)}`]));
+  const exclusions = superseded.map((path) => `:(top,exclude,literal)${path}`);
+  const result = await command(
+    "git",
+    [
+      "grep",
+      "--untracked",
+      "-I",
+      "-l",
+      "-z",
+      "-F",
+      "-f",
+      "-",
+      "--",
+      ":(exclude,glob)**/*.md",
+      ":(exclude,glob)**/node_modules/**",
+      ...exclusions,
+    ],
+    { cwd: root, env: gitEnvironment(), input: [...patterns].join("\n"), allowFailure: true },
+  );
+  if (result.code !== 0 && result.code !== 1)
+    throw new Error("Could not check retained project files for legacy dependencies");
+  return result.stdout.split("\0").filter(Boolean).sort();
 }
 
 export async function verifiedTemplateFile(root, path, template, indexed) {

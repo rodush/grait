@@ -24,7 +24,9 @@ import { pinnedValidationWorkflow } from "./installer.mjs";
 import {
   indexedFiles,
   isLegacyScaffold,
+  legacyValidationWorkflow,
   loadLegacyTemplate,
+  retainedLegacyReferences,
   validateLegacyRevision,
   verifiedTemplateFile,
 } from "./legacy-template.mjs";
@@ -41,6 +43,7 @@ async function migrationPlan({
   repo,
   harness,
   maintainers,
+  runner,
   version,
   revision,
   template,
@@ -51,7 +54,7 @@ async function migrationPlan({
       throw new Error(
         "GRAIT is already installed. Use grait upgrade to change its pinned revision",
       );
-    return { changes: [], retained: [] };
+    return { changes: [], retained: [], references: [] };
   }
   if ((await readArtifact(root, configPath)) !== config)
     throw new Error("Workflow configuration changed during migration. Review the plan and retry");
@@ -62,10 +65,14 @@ async function migrationPlan({
   const indexed = await indexedFiles(root);
   const before = { [configPath]: config, [installationPath]: null };
   const existing = {};
+  const replaced = [];
   for (const path of Object.keys(generated)) {
     before[path] = await readArtifact(root, path);
     const stock = await verifiedTemplateFile(root, path, template.get(path), indexed.get(path));
-    if (before[path] !== null && stock?.content !== before[path]) existing[path] = before[path];
+    if (before[path] === null) continue;
+    if (path === ".codex/config.toml" || stock?.content !== before[path])
+      existing[path] = before[path];
+    else replaced.push(path);
   }
 
   before[ownersPath] = await readArtifact(root, ownersPath);
@@ -109,7 +116,7 @@ async function migrationPlan({
   artifacts[installationPath] = `${JSON.stringify(record, null, 2)}\n`;
 
   const retained = [];
-  const modes = new Map();
+  const removable = new Map();
   for (const [path, entry] of template) {
     if (!isLegacyScaffold(path) || Object.hasOwn(artifacts, path)) continue;
     const stock = await verifiedTemplateFile(root, path, entry, indexed.get(path));
@@ -117,19 +124,57 @@ async function migrationPlan({
       if (indexed.has(path)) retained.push(path);
       continue;
     }
+    removable.set(path, stock);
+  }
+  const runnerArgs = [runner?.install, runner?.command].filter(Array.isArray).flat();
+  const findReferences = async (paths, superseded) => {
+    // The workflow config also lists paths for policy and permissions. Only its
+    // actual runner commands make a legacy file an execution dependency.
+    const references = await retainedLegacyReferences(root, paths, [configPath, ...superseded]);
+    if (
+      runnerArgs.some((arg) => typeof arg === "string" && paths.some((path) => arg.includes(path)))
+    )
+      references.push(configPath);
+    return references;
+  };
+  const candidates = [...removable.keys()];
+  const references = await findReferences(candidates, [...replaced, ...candidates]);
+  if (references.length && removable.has(legacyValidationWorkflow)) {
+    // The pinned validation workflow publishes the same required check name.
+    const workflowReferences = await findReferences(
+      [legacyValidationWorkflow],
+      [...replaced, legacyValidationWorkflow],
+    );
+    if (workflowReferences.length)
+      throw new Error(
+        `Update references to ${legacyValidationWorkflow} before migrating (${workflowReferences.join(", ")}). The pinned workflow replaces its required validation check.`,
+      );
+  }
+  // Keep the whole tooling group when retained project code uses an entry point.
+  // Legacy scripts can import one another or load supporting config at runtime.
+  for (const [path, stock] of removable) {
+    if (references.length && path !== legacyValidationWorkflow) continue;
     before[path] = stock.content;
     artifacts[path] = null;
-    modes.set(path, stock.mode);
   }
   const changes = Object.keys(artifacts)
     .sort()
     .filter((path) => before[path] !== artifacts[path])
-    .map((path) => ({ path, before: before[path], after: artifacts[path], mode: modes.get(path) }));
-  return { artifacts, changes, retained };
+    .map((path) => ({
+      path,
+      before: before[path],
+      after: artifacts[path],
+      mode: removable.get(path)?.mode,
+    }));
+  return { artifacts, changes, retained, references };
 }
 
 function printPlan(plan) {
   console.log(renderInstallationPlan(plan));
+  if (plan.references.length)
+    console.log(
+      `Retained legacy tooling referenced by project files:\n${plan.references.join("\n")}`,
+    );
   if (plan.retained.length)
     console.log(
       `Retained legacy files that differ from the pinned template:\n${plan.retained.join("\n")}`,
@@ -201,14 +246,14 @@ export async function runMigration({ args, cwd, version }) {
   });
   if (values.help) {
     console.log(
-      "grait migrate --plan --revision GIT_PIN --legacy-revision TEMPLATE_SHA\nPreview migration of a configured template repository. Use the full SHA of its original GRAIT template commit. Review the plan, then rerun without --plan or use --yes to apply it.",
+      "grait migrate --plan --revision GIT_PIN --legacy-revision TEMPLATE_SHA\nPreview migration of a configured template repository. Run the Git-pinned npm package at GIT_PIN and use the full SHA of the original GRAIT template commit. Review the plan, then rerun without --plan or use --yes to apply it.",
     );
     return 0;
   }
   if (values.plan && values.yes) throw new Error("Choose either --plan or --yes");
   const legacyRevision = validateLegacyRevision(values["legacy-revision"]);
   const revision = await resolveInstallRevision(values.revision, {
-    requireInstalled: !values.plan,
+    requireInstalled: true,
   });
   const root = await realpath(await targetRoot(cwd));
   const config = await readArtifact(root, configPath);
@@ -218,6 +263,7 @@ export async function runMigration({ args, cwd, version }) {
     controllerRepository: repo,
     engine: harness,
     humanOperators: maintainers = [],
+    tdd,
   } = validateConfig(JSON.parse(config));
   validateTarget({ repository: repo, harness, version });
 
@@ -242,7 +288,17 @@ export async function runMigration({ args, cwd, version }) {
     return 0;
   }
   const template = await loadLegacyTemplate(root, legacyRevision);
-  const inputs = { root, config, repo, harness, maintainers, version, revision, template };
+  const inputs = {
+    root,
+    config,
+    repo,
+    harness,
+    maintainers,
+    runner: tdd?.runner,
+    version,
+    revision,
+    template,
+  };
   const preview = transaction ? null : await migrationPlan(inputs);
   if (preview) printPlan(preview);
   if (values.plan || (preview && !preview.changes.length)) return 0;
