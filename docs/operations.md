@@ -34,7 +34,7 @@ Create the issue with its problem, acceptance criteria, validation, and native b
 }
 ```
 
-Compute the digest with `issueDigest` from `scripts/lib/policy.mjs` using the current API issue object (`number`, `title`, `body`); never guess it from copied text. Blocker references use `owner/repository#N` and must exactly match native GitHub blockers. An exemption uses `"tdd": {"required": false, "reason": "Concrete reason testing is inapplicable"}`. An outsider needs maintainer admission via `agent:admitted` unless current write access or configured identity makes them trusted.
+Compute the digest with `issueDigest` from `scripts/lib/policy.mjs` using the current API issue object (`number`, `title`, `body`). Blocker references use `owner/repository#N` and must exactly match native GitHub blockers. Use `ready: false` while any blocker remains incomplete. Ready holds up to five stories across the Project. Claiming a Ready story frees a Ready slot for another eligible Backlog story. An exemption uses `"tdd": {"required": false, "reason": "Concrete reason testing is inapplicable"}`. An outsider needs maintainer admission via `agent:admitted` unless current write access or configured identity makes them trusted.
 
 ```sh
 npm run orchestrator -- ready --issue 123 --file /tmp/triage.json
@@ -42,7 +42,7 @@ npm run orchestrator -- claim --issue 123
 npm run orchestrator -- worktree --issue 123
 ```
 
-Any unarchived Project story in Review blocks admission of a new story, including Review work awaiting humans or external dependencies. Finish or resolve that work first; existing claims, review/fix stages, and redesign under an existing claim may continue. The five-story limit is a ceiling, not a target to fill.
+The orchestrator selects and dispatches eligible Ready stories while the Project has room under the five-story limit and workers are available. Any unarchived Project story in Review blocks admission of a new story, including Review work awaiting humans or external dependencies. Existing claims, review and fix stages, and redesign under an existing claim may continue.
 
 The command reserves In Progress before work. Repeated accepted claims return the same issue branch. Fresh scope/dependencies and the five-story cap are checked; inaccessible active items count against capacity. The worktree command prints the assigned absolute path and head. Give that path, acceptance digest, committed SHA, scope, and next owner to each specialist.
 

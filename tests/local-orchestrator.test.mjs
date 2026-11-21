@@ -244,6 +244,61 @@ test("local claiming rejects stale scope and native blocker-set changes", async 
   assert.equal(g.item.status, g.config.statuses.ready);
 });
 
+test("local readiness keeps a blocked issue in Backlog until its dependencies complete", async () => {
+  const f = fixture();
+  const blocker = {
+    number: 2,
+    repository_url: "https://api.github.com/repos/acme/service",
+    state: "open",
+  };
+  f.blockers.set(1, [blocker]);
+  const assessment = f.assessment({ blockers: [`${repo}#2`] });
+  for (const state of ["open", "closed"]) {
+    blocker.state = state;
+    blocker.state_reason = "not_planned";
+    await assert.rejects(() => f.orchestrator.ready(1, assessment), /acme\/service#2/);
+    assert.equal(f.item.status, f.config.statuses.backlog);
+    assert.equal(f.comments.size, 0);
+  }
+  blocker.state_reason = "completed";
+  await f.orchestrator.ready(1, assessment);
+  assert.equal(f.item.status, f.config.statuses.ready);
+});
+
+test("local readiness caps Ready at five across the Project and allows existing cards to be triaged", async () => {
+  const f = fixture();
+  const ready = f.config.statuses.ready;
+  const backlog = f.config.statuses.backlog;
+  f.project.items.push(
+    ...Array.from({ length: 3 }, (_, index) => ({
+      status: ready,
+      content: {
+        __typename: "Issue",
+        number: index + 20,
+        repository: { nameWithOwner: "other/repo" },
+      },
+    })),
+    { status: ready, content: null },
+    { status: ready, isArchived: true },
+    { status: ready, content: { __typename: "PullRequest" } },
+  );
+  await f.orchestrator.ready(1, f.assessment());
+  assert.equal(f.item.status, ready);
+  await f.orchestrator.ready(1, f.assessment());
+
+  const next = { ...f.issue, number: 2, node_id: "issue-node-2" };
+  f.issues.set(next.number, next);
+  const assessment = f.assessment({ issue: next.number, digest: issueDigest(next) });
+  await assert.rejects(() => f.orchestrator.ready(next.number, assessment), /five-story Ready/);
+  assert.equal(f.project.find(repo, next.number), undefined);
+  assert.equal(f.comments.has(next.number), false);
+
+  await f.orchestrator.ready(1, f.assessment({ ready: false }));
+  assert.equal(f.item.status, backlog);
+  await f.orchestrator.ready(next.number, assessment);
+  assert.equal(f.project.find(repo, next.number).status, ready);
+});
+
 test("local claiming counts every active Project story and treats unknown work conservatively", async () => {
   const f = fixture();
   await f.orchestrator.ready(1, f.assessment());
