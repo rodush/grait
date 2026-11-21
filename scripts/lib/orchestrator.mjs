@@ -16,6 +16,14 @@ import {
 const labels = (item) =>
   (item.labels || []).map((label) => (typeof label === "string" ? label : label.name));
 
+const closingIssues = (pr) => [
+  ...new Set(
+    [
+      ...(pr.body || "").matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#([1-9]\d*)\b/gi),
+    ].map((match) => Number(match[1])),
+  ),
+];
+
 // The CLI serializes mutations on the designated host. This class never invokes a model
 // or dispatches Actions; the signed-in native harness owns agent execution.
 export class LocalOrchestrator {
@@ -115,10 +123,9 @@ export class LocalOrchestrator {
   }
 
   async ready(number, assessment) {
-    const issue = await this.issue(number, {
-      reportingHumanAttention: assessment?.humanAttention !== undefined,
-    });
+    const issue = await this.issue(number, { reportingHumanAttention: true });
     const { humanAttention, ...triage } = validateTriage(assessment, issue);
+    this.checkControlLabels(issue, { reportingHumanAttention: Boolean(humanAttention) });
     const actual = await this.blockers(this.repo, number);
     const refs = actual.map((item) => this.reference(item)).sort();
     if (
@@ -311,13 +318,12 @@ export class LocalOrchestrator {
     const files = await this.api.list(`repos/${this.repo}/pulls/${number}/files`);
     if (Number.isInteger(pr.changed_files) && files.length !== pr.changed_files)
       throw new Error("PR diff is incomplete; cannot safely review this revision");
-    const linked = (pr.body || "").match(
-      /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#([1-9]\d*)\b/i,
-    );
-    if (linked) {
-      const issueNumber = Number(linked[1]);
-      const issue = await this.api.request(`repos/${this.repo}/issues/${issueNumber}`);
-      this.checkControlLabels(issue);
+    const issues = closingIssues(pr);
+    const [issueNumber] = issues;
+    let linkedIssue;
+    if (issueNumber) {
+      linkedIssue = await this.api.request(`repos/${this.repo}/issues/${issueNumber}`);
+      this.checkControlLabels(linkedIssue);
       const { state: issueState } = await this.ledger.load(issueNumber);
       this.checkState(issueState);
       if (
@@ -372,6 +378,18 @@ export class LocalOrchestrator {
             : (decision.reason || "Review findings require corrections").slice(0, 140),
       },
     });
+    if (
+      data.conflicts &&
+      issues.length === 1 &&
+      linkedIssue &&
+      !linkedIssue.pull_request &&
+      linkedIssue.state !== "closed"
+    ) {
+      await this.publishHumanAttention(linkedIssue, {
+        blocker: decision.reason,
+        action: `Reconcile the conflicting reviewer instructions on PR #${number} and verify the review ledger before resuming.`,
+      });
+    }
     return decision;
   }
 
@@ -379,10 +397,7 @@ export class LocalOrchestrator {
     if (!Number.isSafeInteger(number) || number < 1)
       throw new Error("A positive PR number is required");
     const pr = await this.api.request(`repos/${this.repo}/pulls/${number}`);
-    const matches = [
-      ...(pr.body || "").matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#([1-9]\d*)\b/gi),
-    ];
-    const issues = [...new Set(matches.map((match) => Number(match[1])))];
+    const issues = closingIssues(pr);
     if (issues.length !== 1)
       throw new Error("PR must close exactly one issue in this repository, using Closes #N");
     const issueNumber = issues[0];

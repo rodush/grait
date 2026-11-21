@@ -74,7 +74,7 @@ Project API access uses the host user's GitHub CLI authorization, or an explicit
 
 ## Operator blockers
 
-Triage assessments indicate an operator blocker with `humanAttention`. Submit the [usual triage fields](operations.md#triage-and-claim) with `ready: false`, the current issue digest, actual native dependencies, and both fields below.
+Submit the [usual triage fields](operations.md#triage-and-claim) with `ready: false`, the current issue digest, and actual native dependencies. Use `questions` for public questions that require an operator decision. GRAIT records those questions as the action to take. To supply a specific blocker and action, include both `humanAttention` fields below.
 
 ```json
 {
@@ -89,11 +89,13 @@ Triage assessments indicate an operator blocker with `humanAttention`. Submit th
 npm run orchestrator -- ready --issue 123 --file /tmp/triage.json
 ```
 
-GRAIT applies the label configured in `labels.needsHuman` (default `agent:needs-human`) and records the blocker and requested action in its issue comment. Repeated reports update the same comment. Issues in triage stay in Backlog. A wait on native dependencies alone uses the existing dependency links. Include `humanAttention` when an issue also needs a separate operator action.
+GRAIT applies the label configured in `labels.needsHuman` (default `agent:needs-human`) and records the blocker and requested action in its issue comment. Repeated reports update the same comment. Issues in triage stay in Backlog. A wait on native dependencies alone uses the existing dependency links. Include public `questions` or `humanAttention` when an issue also needs a separate operator action.
 
 Use the same command for a blocker found during delivery, such as a required edit outside the writer's publishing scope. The report preserves the accepted claim and Project status. Write both fields for readers of the issue and omit credentials, private setup details, and raw command output.
 
 The label pauses new claims and further automation on the issue, including review of its linked PR. An operator with permission to manage its labels resolves the blocker and removes the human-attention label in GitHub. Submit a fresh assessment for a Backlog issue or retry the blocked step for a claimed issue. Explicit `agent:paused` labels and native dependency requirements still apply.
+
+Conflicting reviewer instructions also label the linked issue and record the action there. The recorded PR review pause still applies after label removal. Follow [pause and recovery](operations.md#pause-and-recovery) to reconcile the PR review ledger before resuming.
 
 ## Advanced bootstrap
 

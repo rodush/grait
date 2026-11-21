@@ -100,7 +100,8 @@ export function validateTriage(data, issue) {
   if (
     typeof data.ready !== "boolean" ||
     !Array.isArray(data.blockers) ||
-    !Array.isArray(data.questions)
+    !Array.isArray(data.questions) ||
+    data.questions.some((question) => typeof question !== "string" || !question.trim())
   )
     throw new Error("Invalid triage metadata");
   for (const ref of data.blockers) {
@@ -115,7 +116,17 @@ export function validateTriage(data, issue) {
   ) {
     throw new Error("Ready requires a complete triage checklist and no open questions");
   }
-  if (data.humanAttention === undefined) return data;
+  if (data.humanAttention === undefined) {
+    if (!data.questions.length) return data;
+    const questions = data.questions.map((question) => question.trim().replace(/\s+/g, " "));
+    return {
+      ...data,
+      humanAttention: {
+        blocker: "Triage found unresolved questions that require an operator decision.",
+        action: `Answer the triage questions: ${questions.join(" ")}`,
+      },
+    };
+  }
   const { blocker, action } = data.humanAttention || {};
   if (
     data.ready ||
