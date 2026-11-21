@@ -1,12 +1,13 @@
-import { realpath, rm } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { preserveCodeowners } from "../scripts/lib/bootstrap.mjs";
 import { defaultMaxReady, sameLogin, validateConfig } from "../scripts/lib/policy.mjs";
+import { readArtifact } from "./artifact-stage.mjs";
 import {
-  applyArtifacts,
-  readArtifact,
-  recoverArtifacts,
-  stageArtifacts,
-} from "./artifact-stage.mjs";
+  applyArtifactTransaction,
+  assertExpectedChanges,
+  pendingArtifactTransaction,
+  recoverArtifactTransaction,
+} from "./artifact-transaction.mjs";
 import {
   artifactOwnership,
   installationPath,
@@ -15,7 +16,7 @@ import {
   validateTarget,
   verifyOwnership,
 } from "./installation-record.mjs";
-import { installerStore, privateStagingDirectory, provision } from "./installer-services.mjs";
+import { installerStore, provision } from "./installer-services.mjs";
 import { generateProjectArtifacts } from "./project-policy.mjs";
 import { resolveInstallRevision } from "./installation-revision.mjs";
 
@@ -237,11 +238,7 @@ export async function planInstallation(input) {
     JSON.parse((await readArtifact(root, configPath)) ?? "{}").controllerRepository;
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? "")) throw new Error("Provide --repo OWNER/REPOSITORY");
   const store = await installerStore({ root, repo });
-  const transaction = store.state.artifactTransaction;
-  if (transaction?.operation && transaction.operation !== "init")
-    throw new Error(
-      `An artifact operation is interrupted. Retry grait ${transaction.operation} first.`,
-    );
+  const transaction = pendingArtifactTransaction(store, "init");
   if (transaction) {
     const revision = await resolveInstallRevision(
       input.revision ?? transaction.revision ?? installation?.record.revision,
@@ -257,42 +254,20 @@ export async function planInstallation(input) {
   };
 }
 
-function assertExpectedChanges(expected, staged) {
-  if (
-    staged.length !== expected.length ||
-    staged.some(
-      ({ path, before, after }, index) =>
-        path !== expected[index].path ||
-        before !== expected[index].before ||
-        after !== expected[index].after,
-    )
-  )
-    throw new Error("Project artifacts changed since preview. Review the plan and retry.");
-}
-
 /** Provision privately, then apply one complete set of durable artifacts. */
 export async function installWorkflow(input) {
   const root = await realpath(input.root);
   const repo = input.repo;
   const revision = await resolveInstallRevision(input.revision, { requireInstalled: true });
   const store = await installerStore({ root, repo });
-  const transaction = store.state.artifactTransaction;
-  if (transaction?.operation && transaction.operation !== "init")
-    throw new Error(
-      `An artifact operation is interrupted. Retry grait ${transaction.operation} first.`,
-    );
+  const transaction = pendingArtifactTransaction(store, "init");
   if (Boolean(transaction) !== Boolean(input.pendingRecovery))
     throw new Error("Installation recovery state changed since preview. Retry the same command.");
   if (transaction?.revision && transaction.revision !== revision)
     throw new Error("Retry the interrupted installation with its recorded GRAIT Git revision.");
   await store.acquire();
   try {
-    if (transaction) {
-      await recoverArtifacts({ root, stateDirectory: transaction.directory, id: transaction.id });
-      delete store.state.artifactTransaction;
-      await store.save();
-      await rm(transaction.directory, { recursive: true, force: true });
-    }
+    if (transaction) await recoverArtifactTransaction({ root, store, transaction });
     const options = await installationInputs({ ...input, root, verifiedRevision: revision });
     if (!sameLogin(options.repo, repo))
       throw new Error("The installation repository changed; review the preview and retry");
@@ -306,24 +281,16 @@ export async function installWorkflow(input) {
       ? { config: options.config, codeowners: existingOwners }
       : await provision({ ...options, codeowners: prepared.owners, store });
     const result = planFor(options, prepared, config, codeowners);
-    const directory = await privateStagingDirectory(root, "grait-artifacts-");
-    try {
-      const plan = await stageArtifacts({
-        root,
-        artifacts: result.artifacts,
-        stateDirectory: directory,
-      });
-      assertExpectedChanges(result.changes, plan.changes);
-      await input.onPlan(plan);
-      store.state.artifactTransaction = { directory, id: plan.id, revision };
-      await store.save();
-      await applyArtifacts({ root, stateDirectory: directory, id: plan.id });
-      delete store.state.artifactTransaction;
-      await store.save();
-      return result;
-    } finally {
-      if (!store.state.artifactTransaction) await rm(directory, { recursive: true, force: true });
-    }
+    await applyArtifactTransaction({
+      root,
+      store,
+      revision,
+      operation: "init",
+      artifacts: result.artifacts,
+      changes: result.changes,
+      onPlan: input.onPlan,
+    });
+    return result;
   } finally {
     await store.release();
   }
