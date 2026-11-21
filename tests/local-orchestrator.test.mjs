@@ -29,7 +29,7 @@ function fixture() {
     number: 7,
     title: "feat: deliver outcome",
     body: "Closes #1",
-    user: { login: "writer[bot]" },
+    user: { login: "writer[bot]", id: 10101, type: "Bot" },
     head: { sha: head, repo: { full_name: repo } },
     base: { repo: { full_name: repo } },
     state: "open",
@@ -87,7 +87,7 @@ function fixture() {
         const number = Number(path.match(/\/issues\/(\d+)\/comments$/)[1]);
         const comment = {
           id: commentId++,
-          user: { login: "writer[bot]" },
+          user: { login: "writer[bot]", id: 10101, type: "Bot" },
           body: options.body.body,
         };
         comments.set(number, [...(comments.get(number) || []), comment]);
@@ -132,7 +132,7 @@ function fixture() {
       assert.equal(options.method, "POST");
       const response = {
         id: publishedReviews.length + 1,
-        user: { login: "reviewer[bot]" },
+        user: { login: "reviewer[bot]", id: 10102, type: "Bot" },
         commit_id: options.body.commit_id,
         state: { APPROVE: "APPROVED", REQUEST_CHANGES: "CHANGES_REQUESTED", COMMENT: "COMMENTED" }[
           options.body.event
@@ -149,6 +149,8 @@ function fixture() {
     repo,
     writer: "writer[bot]",
     reviewer: "reviewer[bot]",
+    writerId: 10101,
+    reviewerId: 10102,
     config,
   });
   const assessment = (overrides = {}) => ({
@@ -361,7 +363,7 @@ test("local review rejects stale heads and the PR author's own reviewer identity
   const f = fixture();
   await assert.rejects(() => f.orchestrator.review(7, f.review({ head: "b".repeat(40) })));
   assert.equal(f.publishedReviews.length, 0);
-  f.pull.user.login = "reviewer[bot]";
+  f.pull.user = { login: "reviewer[bot]", id: 10102, type: "Bot" };
   await assert.rejects(() => f.orchestrator.review(7, f.review()));
   assert.equal(f.publishedReviews.length, 0);
 });
@@ -422,7 +424,7 @@ function seedState(f, number, state) {
   f.comments.set(number, [
     {
       id: 500 + number,
-      user: { login: "writer[bot]" },
+      user: { login: "writer[bot]", id: 10101, type: "Bot" },
       body:
         "<!-- workflow-state:v1 -->\n\n```json\n" +
         JSON.stringify({ version: 1, number, ...state }) +

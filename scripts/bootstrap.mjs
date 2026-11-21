@@ -8,7 +8,15 @@ import {
   resolveActionsAppId,
   preserveCodeowners,
 } from "./lib/bootstrap.mjs";
+import {
+  assertSetupPublishingBindings,
+  identityNumber,
+  publishingBindings,
+  publishingRoles,
+  publishingVariableMap,
+} from "./lib/local-auth.mjs";
 import { sameLogin } from "./lib/policy.mjs";
+import { SetupState } from "./lib/setup-state.mjs";
 import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 import { bundledRuntime } from "./lib/runtime-resources.mjs";
@@ -23,6 +31,10 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
       maintainers: { type: "string" },
       "writer-login": { type: "string" },
       "reviewer-login": { type: "string" },
+      "writer-bot-user-id": { type: "string" },
+      "reviewer-app-id": { type: "string" },
+      "reviewer-bot-user-id": { type: "string" },
+      "setup-root": { type: "string" },
       "release-app-id": { type: "string" },
       "status-app-id": { type: "string" },
       apply: { type: "boolean", default: false },
@@ -86,12 +98,25 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
       if (values["project-number"] && !/^[1-9]\d*$/.test(values["project-number"]))
         throw new Error("Invalid project number");
       const suppliedStatusAppId = values["status-app-id"];
-      if (
-        suppliedStatusAppId !== undefined &&
-        (!/^[1-9]\d*$/.test(suppliedStatusAppId) ||
-          !Number.isSafeInteger(Number(suppliedStatusAppId)))
-      )
+      if (suppliedStatusAppId !== undefined && !identityNumber(suppliedStatusAppId))
         throw new Error("Status App ID must be a positive safe integer");
+      const hasNumericOptions = [
+        "writer-bot-user-id",
+        "reviewer-app-id",
+        "reviewer-bot-user-id",
+      ].some((name) => values[name] !== undefined);
+      const suppliedBindings = hasNumericOptions
+        ? publishingBindings({
+            writer: {
+              id: identityNumber(suppliedStatusAppId),
+              botUserId: identityNumber(values["writer-bot-user-id"]),
+            },
+            reviewer: {
+              id: identityNumber(values["reviewer-app-id"]),
+              botUserId: identityNumber(values["reviewer-bot-user-id"]),
+            },
+          })
+        : null;
       const token =
         process.env.GH_TOKEN ||
         (await promisify(execFile)("gh", ["auth", "token"], { encoding: "utf8" })).stdout.trim();
@@ -107,7 +132,32 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
       }
       const repository = await api.request(`repos/${repo}`);
       const currentVariables = await api.list(`repos/${repo}/actions/variables`, "variables");
-      const variable = (name) => currentVariables.find((item) => item.name === name)?.value;
+      const publishedVariables = publishingVariableMap(currentVariables);
+      const variable = (name) => publishedVariables.get(name);
+      const roles = Object.values(publishingRoles);
+      const bindingNames = roles.flatMap(({ app, bot }) => [app, bot]);
+      const hasPublishingVariables = roles.some(({ app, bot, login }) =>
+        [app, bot, login].some((name) => publishedVariables.has(name)),
+      );
+      if (hasPublishingVariables) {
+        const partial = bindingNames.some((name) => !publishedVariables.has(name));
+        const { state } =
+          partial && suppliedBindings
+            ? await SetupState.read(repo, values["setup-root"])
+            : { state: {} };
+        assertSetupPublishingBindings(publishedVariables, state);
+        if (partial)
+          for (const [name, expected] of Object.entries(publishingBindings(state.apps)))
+            if (suppliedBindings[name] !== expected)
+              throw new Error(
+                "Bootstrap publishing identities differ from the verified setup checkpoint",
+              );
+      }
+      for (const [name, expected] of Object.entries(suppliedBindings ?? {}))
+        if (publishedVariables.has(name) && variable(name) !== expected)
+          throw new Error(
+            `Bootstrap publishing identity differs from the recorded value for ${name}`,
+          );
       async function setVariable(name, value) {
         const existing = currentVariables.find((item) => item.name === name);
         await api.request(
@@ -116,6 +166,7 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
         );
         if (existing) existing.value = String(value);
         else currentVariables.push({ name, value: String(value) });
+        publishedVariables.set(name, String(value));
       }
       if (config.controllerRepository && !sameLogin(config.controllerRepository, repo))
         throw new Error("Configured orchestrator belongs to another repository");
@@ -275,17 +326,20 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
       );
       await setVariable("PROJECT_SETUP_STATUS", "initialized");
       await api.request(`repos/${repo}`, { method: "PATCH", body: repositorySettings });
+      const recordedWriter = variable(publishingRoles.writer.app);
+      if (recordedWriter && suppliedStatusAppId && recordedWriter !== suppliedStatusAppId)
+        throw new Error("Status App ID differs from the recorded writer identity");
       const statusAppId =
-        suppliedStatusAppId !== undefined
-          ? Number(suppliedStatusAppId)
-          : values["writer-login"].endsWith("[bot]")
-            ? (await api.request(`apps/${values["writer-login"].replace(/\[bot\]$/, "")}`)).id
-            : null;
+        identityNumber(suppliedStatusAppId ?? recordedWriter) ??
+        (values["writer-login"].endsWith("[bot]")
+          ? (await api.request(`apps/${values["writer-login"].replace(/\[bot\]$/, "")}`)).id
+          : null);
       if (values["release-app-id"]) {
-        const reviewerApp = await api.request(
-          `apps/${values["reviewer-login"].replace(/\[bot\]$/, "")}`,
-        );
-        if ([Number(statusAppId), reviewerApp.id].includes(Number(values["release-app-id"])))
+        const reviewerAppId =
+          identityNumber(
+            suppliedBindings?.REVIEW_APP_ID ?? variable(publishingRoles.reviewer.app),
+          ) ?? (await api.request(`apps/${values["reviewer-login"].replace(/\[bot\]$/, "")}`)).id;
+        if ([statusAppId, reviewerAppId].includes(Number(values["release-app-id"])))
           throw new Error("Release App must be separate from implementation and review Apps");
       }
       await setVariable("RULESET_ENFORCEMENT", "pending");
@@ -322,20 +376,14 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
         PROJECT_ID: project.id,
         PROJECT_NUMBER: String(project.number),
         PROJECT_OWNER: projectOwner,
-        AUTOMATION_LOGIN: values["writer-login"],
-        REVIEW_LOGIN: values["reviewer-login"],
+        ...(suppliedBindings && {
+          ...suppliedBindings,
+          AUTOMATION_LOGIN: values["writer-login"],
+          REVIEW_LOGIN: values["reviewer-login"],
+        }),
         AUTOMATION_ENABLED: "false",
       };
-      for (const [name, value] of Object.entries(variables))
-        await api.request(
-          currentVariables.some((item) => item.name === name)
-            ? `repos/${repo}/actions/variables/${name}`
-            : `repos/${repo}/actions/variables`,
-          {
-            method: currentVariables.some((item) => item.name === name) ? "PATCH" : "POST",
-            body: { name, value },
-          },
-        );
+      for (const [name, value] of Object.entries(variables)) await setVariable(name, value);
       config.controllerRepository = repo;
       config.humanOperators = actors.map((actor) => actor.login);
       await writeFile("workflow.config.json", `${JSON.stringify(config, null, 2)}\n`);

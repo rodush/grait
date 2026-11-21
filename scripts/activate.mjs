@@ -3,7 +3,12 @@ import { execFile } from "node:child_process";
 import { parseArgs, promisify } from "node:util";
 import { GitHub } from "./lib/github.mjs";
 import { SetupState } from "./lib/setup-state.mjs";
-import { roleToken } from "./lib/local-auth.mjs";
+import {
+  assertPublishingBindings,
+  publishingRoles,
+  publishingVariableMap,
+  verifyPublishingIdentity,
+} from "./lib/local-auth.mjs";
 import { Project } from "./lib/project.mjs";
 import { digest, sameLogin, validateConfig } from "./lib/policy.mjs";
 import { repositoryRules, resolveActionsAppId } from "./lib/bootstrap.mjs";
@@ -88,36 +93,13 @@ export async function activateMain(
       });
       if (mergeSha !== head.sha) await verifyCommittedFiles(mergeSha);
     }
-    const variables = new Map(
-      (await api.list(`repos/${repo}/actions/variables`, "variables")).map((item) => [
-        item.name,
-        item.value,
-      ]),
+    const variables = publishingVariableMap(
+      await api.list(`repos/${repo}/actions/variables`, "variables"),
     );
-    for (const name of ["PROJECT_ID", "AUTOMATION_LOGIN", "REVIEW_LOGIN"])
-      if (!variables.get(name)) throw new Error(`Missing repository variable ${name}`);
-    if (
-      ![
-        ["writer", "AUTOMATION_LOGIN"],
-        ["reviewer", "REVIEW_LOGIN"],
-      ].every(
-        ([role, name]) =>
-          state.apps[role]?.slug && sameLogin(`${state.apps[role].slug}[bot]`, variables.get(name)),
-      )
-    )
-      throw new Error("Host publishing identities differ from the repository's recorded Apps");
-    if (
-      sameLogin(variables.get("AUTOMATION_LOGIN"), variables.get("REVIEW_LOGIN")) ||
-      config.humanOperators.some(
-        (login) =>
-          sameLogin(login, variables.get("AUTOMATION_LOGIN")) ||
-          sameLogin(login, variables.get("REVIEW_LOGIN")),
-      )
-    )
-      throw new Error("Human, implementation, and review identities must be separate");
-    // Credentials stay on the user host. Mint each scoped App token to verify both installations.
-    await roleToken(repo, "writer");
-    await roleToken(repo, "reviewer");
+    if (!variables.get("PROJECT_ID")) throw new Error("Missing repository variable PROJECT_ID");
+    assertPublishingBindings(variables, state.apps);
+    for (const role of Object.keys(publishingRoles))
+      await verifyPublishingIdentity(state.apps[role], { repo, role });
     const projectToken = process.env.PROJECT_TOKEN || token;
     const project = await new Project(
       new GitHub(projectToken),

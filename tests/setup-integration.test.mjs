@@ -15,6 +15,7 @@ const installedApps = Object.fromEntries(
       name: `grait-${role}`,
       slug: `grait-${role}`,
       id: role === "writer" ? 100 : 200,
+      botUserId: role === "writer" ? 10001 : 20001,
       clientId: `Iv1.${role}`,
       pem,
       phase: "installed",
@@ -29,6 +30,10 @@ const variables = [
   { name: "PROJECT_OWNER", value: "acme" },
   { name: "AUTOMATION_LOGIN", value: "grait-writer[bot]" },
   { name: "REVIEW_LOGIN", value: "grait-reviewer[bot]" },
+  { name: "AUTOMATION_APP_ID", value: "100" },
+  { name: "AUTOMATION_BOT_USER_ID", value: "10001" },
+  { name: "REVIEW_APP_ID", value: "200" },
+  { name: "REVIEW_BOT_USER_ID", value: "20001" },
 ];
 const rules = [
   "Required delivery gates",
@@ -301,7 +306,12 @@ test("staged setup review permits only an explicit configured-human reviewer con
 test("staged review and activation refuse host credentials that differ from recorded repository identities", async (t) => {
   const changedApps = {
     ...installedApps,
-    writer: { ...installedApps.writer, name: "different-writer", slug: "different-writer" },
+    writer: {
+      ...installedApps.writer,
+      id: 101,
+      name: "different-writer",
+      slug: "different-writer",
+    },
   };
   for (const operation of ["context", "activate"]) {
     const f = await fixture(t, { localApps: changedApps, remoteOwners: "* @operator\n" });
@@ -498,7 +508,7 @@ test("Copilot implementation launches in the accepted shared issue worktree with
     title: "Implement the accepted local outcome",
     body: "Accepted public behavior",
     state: "open",
-    user: { login: "operator" },
+    user: { login: "operator", id: 42, type: "User" },
     labels: [],
   };
   const digest = issueDigest(issue);
@@ -525,7 +535,7 @@ test("Copilot implementation launches in the accepted shared issue worktree with
     issueComments: [
       {
         id: 701,
-        user: { login: "grait-writer[bot]" },
+        user: { login: "grait-writer[bot]", id: 10001, type: "Bot" },
         body: "<!-- workflow-state:v1 -->\n\n```json\n" + JSON.stringify(recorded) + "\n```",
       },
     ],
@@ -554,4 +564,212 @@ test("Copilot implementation launches in the accepted shared issue worktree with
   assert.ok(
     !state.commands.some(({ command, args }) => command === "git" && args.includes("fetch")),
   );
+});
+
+const publishingIdVariables = variables.filter(
+  ({ name }) => name.endsWith("_ID") && name !== "PROJECT_ID",
+);
+const withoutNumericBinding = variables.filter(
+  ({ name }) => !publishingIdVariables.some(({ name: numeric }) => numeric === name),
+);
+const provisionedApps = Object.fromEntries(
+  Object.entries(installedApps).map(([role, { botUserId, ...app }]) => [role, app]),
+);
+
+function assertPublishingIds(state) {
+  const remote = new Map(state.variables.map(({ name, value }) => [name, value]));
+  for (const { name, value } of publishingIdVariables) assert.equal(remote.get(name), value, name);
+}
+
+test("setup records verified numeric App and bot IDs for both publishing roles", async (t) => {
+  const f = await fixture(t, {
+    localApps: provisionedApps,
+    variables: withoutNumericBinding.filter(({ name }) => !name.endsWith("_LOGIN")),
+  });
+  const result = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"]);
+  assert.equal(result.status, 0);
+  const state = await f.state();
+  assertPublishingIds(state);
+  noCloudProvisioning(state);
+  assertWriterStatusBinding(state);
+  const local = await f.localState();
+  assert.equal(local.apps.writer.botUserId, installedApps.writer.botUserId);
+  assert.equal(local.apps.reviewer.botUserId, installedApps.reviewer.botUserId);
+});
+
+test("activation accepts renamed Apps when both authenticated identities retain their IDs", async (t) => {
+  const f = await fixture(t, {
+    localApps: {
+      writer: { ...installedApps.writer, slug: "renamed-writer" },
+      reviewer: { ...installedApps.reviewer, slug: "renamed-reviewer" },
+    },
+    remoteApps: { writer: { slug: "renamed-writer" }, reviewer: { slug: "renamed-reviewer" } },
+    remoteOwners: "* @operator\n",
+  });
+  const result = await f.run("activate.mjs");
+  assert.equal(
+    result.status,
+    0,
+    "A display rename cannot invalidate an unchanged verified identity",
+  );
+  const state = await f.state();
+  assertPublishingIds(state);
+  assertWriterStatusBinding(state);
+  assert.equal((await f.localState()).enabled, true);
+});
+
+test("activation rejects substituted App or bot IDs and equal bot identities", async (t) => {
+  for (const change of [
+    { remoteApps: { writer: { id: 5678 } } },
+    { remoteInstallations: { reviewer: { app_id: 5678 } } },
+    { remoteBots: { writer: { id: 9876 } } },
+    {
+      localApps: {
+        ...installedApps,
+        reviewer: { ...installedApps.reviewer, botUserId: installedApps.writer.botUserId },
+      },
+      variables: variables.map((variable) =>
+        variable.name === "REVIEW_BOT_USER_ID" ? { ...variable, value: "10001" } : variable,
+      ),
+      remoteBots: { reviewer: { id: installedApps.writer.botUserId } },
+    },
+  ]) {
+    const f = await fixture(t, { remoteOwners: "* @operator\n", ...change });
+    const result = await f.run("activate.mjs");
+    assert.notEqual(result.status, 0, "Publishing identities must remain verified and distinct");
+    const state = await f.state();
+    assert.equal(state.variables.find(({ name }) => name === "AUTOMATION_ENABLED").value, "false");
+    assert.equal((await f.localState()).enabled, false);
+  }
+});
+
+function assertCleanSetupGuidance(output) {
+  assert.match(output, /setup/i);
+  assert.doesNotMatch(output, /migrat/i);
+}
+
+test("activation directs operators to clean setup for missing numeric publishing bindings", async (t) => {
+  for (const change of [
+    { variables: withoutNumericBinding },
+    { localApps: { ...installedApps, writer: provisionedApps.writer } },
+  ]) {
+    const f = await fixture(t, { remoteOwners: "* @operator\n", ...change });
+    const original = await f.localState();
+    const result = await f.run("activate.mjs");
+
+    assert.notEqual(result.status, 0);
+    assertCleanSetupGuidance(result.output);
+    const local = await f.localState();
+    assert.equal(local.enabled, false);
+    assert.deepEqual(local.apps, original.apps);
+    assert.deepEqual((await f.state()).variables, change.variables || variables);
+  }
+});
+
+test("ordinary activation rejects partial, malformed or ambiguous numeric bindings", async (t) => {
+  for (const remoteVariables of [
+    variables.filter(({ name }) => name !== "REVIEW_BOT_USER_ID"),
+    variables.map((variable) =>
+      variable.name === "AUTOMATION_APP_ID" ? { ...variable, value: "100invalid" } : variable,
+    ),
+    [...variables, { name: "AUTOMATION_APP_ID", value: "100" }],
+  ]) {
+    const f = await fixture(t, { remoteOwners: "* @operator\n", variables: remoteVariables });
+    const result = await f.run("activate.mjs");
+    assert.notEqual(
+      result.status,
+      0,
+      "An incomplete or ambiguous identity binding cannot activate",
+    );
+    assert.equal((await f.localState()).enabled, false);
+  }
+});
+
+test("setup directs operators to clean setup when repository publishing bindings are incomplete", async (t) => {
+  for (const recordedVariables of [
+    withoutNumericBinding,
+    [...withoutNumericBinding, publishingIdVariables[0]],
+  ]) {
+    const f = await fixture(t, { localApps: provisionedApps, variables: recordedVariables });
+    const original = await f.localState();
+    const result = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"]);
+
+    assert.notEqual(
+      result.status,
+      0,
+      "Incomplete existing bindings cannot be accepted as a clean setup",
+    );
+    assertCleanSetupGuidance(result.output);
+    assert.deepEqual((await f.localState()).apps, original.apps);
+    const state = await f.state();
+    assert.deepEqual(state.variables, recordedVariables);
+    assert.ok(
+      !state.commands.some(({ command, args }) => command === "git" && args.includes("push")),
+    );
+    assert.equal(state.pullRequests?.length || 0, 0);
+  }
+});
+
+test("configuration publication recovery refuses a superseded writer App or bot ID", async (t) => {
+  const f = await fixture(t, { failPush: true });
+  const initial = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"]);
+  assert.notEqual(initial.status, 0);
+  assert.match(initial.output, /--publish/);
+  const saved = await f.localState();
+  assert.ok(saved.configuration.head);
+  assert.equal(saved.configuration.pr, undefined);
+
+  const staged = await f.state();
+  for (const identity of ["AUTOMATION_APP_ID", "AUTOMATION_BOT_USER_ID"]) {
+    await f.update({
+      failPush: false,
+      calls: [],
+      commands: [],
+      variables: staged.variables.map((variable) =>
+        variable.name === identity ? { ...variable, value: "7654" } : variable,
+      ),
+    });
+    const result = await f.run("setup.mjs", ["--repo", "acme/service", "--publish"]);
+
+    assert.notEqual(result.status, 0, "Recovery cannot publish with a superseded writer");
+    assert.match(result.output, /identit|binding|app id|writer/i);
+    const state = await f.state();
+    assert.ok(
+      !state.commands.some(({ command, args }) => command === "git" && args.includes("push")),
+    );
+    assert.equal(state.pullRequests?.length || 0, 0);
+    assert.deepEqual((await f.localState()).configuration, saved.configuration);
+  }
+});
+
+test("numeric setup key import rejects an installed App owned by another account", async (t) => {
+  const f = await fixture(t, {
+    localApps: { reviewer: installedApps.reviewer },
+    remoteApps: { writer: { owner: { login: "different-owner", id: 888, type: "Organization" } } },
+  });
+  const key = join(f.directory, ".git/writer-import.pem");
+  await writeFile(key, pem, { mode: 0o600 });
+
+  const result = await f.run("setup.mjs", [
+    "--repo",
+    "acme/service",
+    "--yes",
+    "--no-browser",
+    "--writer-key",
+    key,
+  ]);
+
+  assert.notEqual(
+    result.status,
+    0,
+    "Installation on the repository does not establish App ownership",
+  );
+  assert.match(result.output, /owner/i);
+  const state = await f.state();
+  assert.equal((await f.localState()).apps.writer, undefined);
+  assert.deepEqual(state.variables, variables);
+  assert.ok(
+    !state.commands.some(({ command, args }) => command === "git" && args.includes("push")),
+  );
+  assert.equal(state.pullRequests?.length || 0, 0);
 });

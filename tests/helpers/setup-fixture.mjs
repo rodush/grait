@@ -200,14 +200,51 @@ globalThis.fetch = async (url, options = {}) => {
   const body = options.body ? JSON.parse(options.body) : undefined;
   const bearer = options.headers?.Authorization || "";
   const identity = bearer.includes("synthetic-writer-installation") ? "writer" : bearer.includes("synthetic-reviewer-installation") ? "reviewer" : "human";
+  const jwt = bearer.replace(/^Bearer /, "");
+  let issuer;
+  try { issuer = JSON.parse(Buffer.from(jwt.split(".")[1], "base64url")).iss; } catch {}
+  const role = String(issuer).includes("reviewer") || String(issuer) === "200" ? "reviewer" : "writer";
+  const app = (role) => {
+    const defaultId = role === "writer" ? 100 : 200;
+    const saved = state.localApps?.[role];
+    return {
+      id: saved?.id || defaultId,
+      slug: "grait-" + role,
+      client_id: saved?.clientId || "Iv1." + role,
+      owner: state.repository.owner,
+      permissions: { contents: role === "writer" ? "write" : "read", issues: "write", pull_requests: "write", metadata: "read", ...(role === "writer" ? { statuses: "write" } : {}) },
+      ...state.remoteApps?.[role],
+    };
+  };
+  const bot = (role) => ({
+    id: role === "writer" ? 10001 : 20001,
+    login: app(role).slug + "[bot]",
+    type: "Bot",
+    ...state.remoteBots?.[role],
+  });
   state.calls.push({ path, method, body, identity, query: parsed.search });
   let value;
   let status = 200;
   if (method === "GET" && path === "apps/github-actions") value = { id: 7, slug: "github-actions" };
-  else if (method === "GET" && path === "user") value = state.actor;
+  else if (method === "GET" && path === "user") value = identity === "human" ? state.actor : bot(identity);
+  else if (method === "GET" && path === "app" && issuer) value = app(role);
   else if (method === "GET" && path.startsWith("users/")) {
-    const login = path.split("/")[1];
-    value = login === "acme" ? state.repository.owner : { login, id: 42, type: "User", node_id: "human-node" };
+    const login = decodeURIComponent(path.split("/")[1]);
+    const botRole = ["writer", "reviewer"].find((candidate) => bot(candidate).login === login);
+    if (botRole) value = bot(botRole);
+    else if (login.endsWith("[bot]")) {
+      status = 404;
+      value = { message: "Unknown App bot" };
+    } else value = login === "acme" ? state.repository.owner : { login, id: 42, type: "User", node_id: "human-node" };
+  }
+  else if (method === "GET" && path.startsWith("user/")) {
+    const id = Number(path.split("/")[1]);
+    const botRole = ["writer", "reviewer"].find((candidate) => bot(candidate).id === id);
+    if (botRole) value = bot(botRole);
+    else {
+      status = 404;
+      value = { message: "Unknown App bot" };
+    }
   }
   else if (method === "GET" && path === "repos/acme/service") value = state.repository;
   else if (method === "GET" && path === "repos/acme/service/issues/1") value = state.issue;
@@ -217,12 +254,8 @@ globalThis.fetch = async (url, options = {}) => {
   else if (method === "GET" && path === "repos/acme/service/actions/secrets") value = { secrets: state.secrets || [] };
   else if (method === "GET" && path.endsWith("/environments/release/secrets")) value = { secrets: state.releaseSecrets || [] };
   else if (method === "GET" && path === "repos/acme/service/installation") {
-    const jwt = bearer.replace(/^Bearer /, "");
-    let issuer;
-    try { issuer = JSON.parse(Buffer.from(jwt.split(".")[1], "base64url")).iss; } catch { issuer = "unknown"; }
-    const role = String(issuer).includes("reviewer") ? "reviewer" : "writer";
     const saved = state.localApps?.[role];
-    value = { id: (saved?.id || 100) + 1000, app_id: saved?.id || 100, account: { login: "acme" }, suspended_at: null, permissions: { contents: role === "writer" ? "write" : "read", issues: "write", pull_requests: "write", metadata: "read", ...(role === "writer" ? { statuses: "write" } : {}) } };
+    value = { id: (saved?.id || 100) + 1000, app_id: saved?.id || 100, account: { login: "acme" }, suspended_at: null, permissions: app(role).permissions, ...state.remoteInstallations?.[role] };
   }
   else if (method === "POST" && path.startsWith("app/installations/") && path.endsWith("/access_tokens")) {
     const role = path.includes("1200") ? "reviewer" : "writer";
@@ -230,7 +263,7 @@ globalThis.fetch = async (url, options = {}) => {
   }
   else if (method === "GET" && path === "repos/acme/service/pulls") value = state.pullRequests || [];
   else if (method === "POST" && path === "repos/acme/service/pulls") {
-    value = { number: 99, html_url: "https://github.com/acme/service/pull/99", user: { login: identity === "writer" ? "grait-writer[bot]" : "operator" }, ...body };
+    value = { number: 99, html_url: "https://github.com/acme/service/pull/99", user: identity === "writer" ? bot("writer") : state.actor, ...body };
     state.pullRequests = [...(state.pullRequests || []), value];
   }
   else if (method === "GET" && path === "repos/acme/service/commits/main") value = { sha: "a".repeat(40) };

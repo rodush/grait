@@ -1,11 +1,15 @@
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { SetupState } from "../scripts/lib/setup-state.mjs";
 import { command, withoutCredentials, requireSubscription } from "../scripts/lib/setup-process.mjs";
-import { humanToken } from "../scripts/lib/local-auth.mjs";
+import {
+  assertSetupPublishingBindings,
+  humanToken,
+  preparePublishingApps,
+  publishingVariableMap,
+} from "../scripts/lib/local-auth.mjs";
 import { GitHub } from "../scripts/lib/github.mjs";
-import { registerApp, validateApp, verifyInstallation } from "../scripts/lib/setup-apps.mjs";
 import { bundledRuntime, packageResource, runtimeFile } from "../scripts/lib/runtime-resources.mjs";
 
 export async function privateStagingDirectory(root, prefix) {
@@ -21,29 +25,6 @@ export async function installerStore({ root, repo }) {
   return new SetupState(directory, state);
 }
 
-async function importApp(path, role, login, options, api) {
-  if (!login?.endsWith("[bot]")) throw new Error(`No recorded ${role} App exists for key import`);
-  const info = await lstat(path);
-  if (
-    !info.isFile() ||
-    info.isSymbolicLink() ||
-    info.mode & 0o077 ||
-    (process.getuid && info.uid !== process.getuid())
-  )
-    throw new Error("Imported App keys must be private regular files owned by you (chmod 600)");
-  const app = await api.request(`apps/${login.replace(/\[bot\]$/, "")}`);
-  validateApp(app, { owner: options.repo.split("/")[0], role });
-  return {
-    name: app.slug,
-    id: app.id,
-    slug: app.slug,
-    clientId: app.client_id,
-    pem: await readFile(path, "utf8"),
-    installed: true,
-    phase: "installed",
-  };
-}
-
 export async function provision(options) {
   const { root, repo, store } = options;
   const token = await humanToken();
@@ -56,50 +37,29 @@ export async function provision(options) {
   if (!maintainers.some((login) => login.toLowerCase() === operator.login.toLowerCase()))
     throw new Error("Include the applying administrator among --maintainers");
   await requireSubscription(options.harness, { login: true });
-  const variables = await api.list(`repos/${repo}/actions/variables`, "variables");
-  const variable = (name) => variables.find((entry) => entry.name === name)?.value;
-  if (variable("AUTOMATION_ENABLED") === "true")
+  const variables = publishingVariableMap(
+    await api.list(`repos/${repo}/actions/variables`, "variables"),
+  );
+  if (variables.get("AUTOMATION_ENABLED") === "true")
     throw new Error("Pause the existing workflow before applying installation changes");
-  store.state.enabled = false;
-  await store.save();
-  for (const role of ["writer", "reviewer"]) {
-    const login = variable(role === "writer" ? "AUTOMATION_LOGIN" : "REVIEW_LOGIN");
-    const keyPath = options[`${role}Key`];
-    if (keyPath) {
-      const imported = await importApp(keyPath, role, login, options, api);
-      await verifyInstallation(imported, { repo, role });
-      store.state.apps[role] = imported;
-      await store.save();
-    }
-    const app = store.state.apps[role];
-    if (login && !app?.id)
-      throw new Error(
-        `Import the existing ${role} App key; setup will not create a replacement identity`,
-      );
-    if (login && app?.slug && `${app.slug}[bot]`.toLowerCase() !== login.toLowerCase())
-      throw new Error(`Saved ${role} App differs from the repository's recorded identity`);
-    if (app?.installed) await verifyInstallation(app, { repo, role });
-    else
-      await registerApp({
-        role,
-        repo,
-        owner: repo.split("/")[0],
-        ownerType: repository.owner.type,
-        store,
-        token,
-        openBrowser: options.noBrowser
-          ? null
-          : async (url) => {
-              const opened = await command("gh", ["browse", url], {
-                cwd: root,
-                allowFailure: true,
-              });
-              if (opened.code) console.log("Open the printed GitHub approval URL to continue.");
-            },
-      });
-  }
-  if (store.state.apps.writer.id === store.state.apps.reviewer.id)
-    throw new Error("Implementation and review Apps must be separate identities");
+  assertSetupPublishingBindings(variables, store.state);
+  await preparePublishingApps({
+    repo,
+    ownerType: repository.owner.type,
+    store,
+    token,
+    variables,
+    keys: { writer: options.writerKey, reviewer: options.reviewerKey },
+    openBrowser: options.noBrowser
+      ? null
+      : async (url) => {
+          const opened = await command("gh", ["browse", url], {
+            cwd: root,
+            allowFailure: true,
+          });
+          if (opened.code) console.log("Open the printed GitHub approval URL to continue.");
+        },
+  });
   const stage = await privateStagingDirectory(root, "grait-provision-");
   try {
     await mkdir(join(stage, ".github"));
@@ -122,6 +82,14 @@ export async function provision(options) {
       `${store.state.apps.writer.slug}[bot]`,
       "--status-app-id",
       String(store.state.apps.writer.id),
+      "--writer-bot-user-id",
+      String(store.state.apps.writer.botUserId),
+      "--reviewer-app-id",
+      String(store.state.apps.reviewer.id),
+      "--reviewer-bot-user-id",
+      String(store.state.apps.reviewer.botUserId),
+      "--setup-root",
+      root,
       "--reviewer-login",
       `${store.state.apps.reviewer.slug}[bot]`,
     ];
@@ -149,6 +117,10 @@ export async function provision(options) {
       );
       if (result.code === 2) error.code = "RULESET_SETUP_PENDING";
       throw error;
+    }
+    if (store.state.setupPublishingBindingsPending) {
+      delete store.state.setupPublishingBindingsPending;
+      await store.save();
     }
     return {
       config: JSON.parse(await readFile(join(stage, "workflow.config.json"), "utf8")),

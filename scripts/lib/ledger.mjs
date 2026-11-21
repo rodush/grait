@@ -1,12 +1,14 @@
-import { parseBlock, sameLogin } from "./policy.mjs";
+import { parseBlock } from "./policy.mjs";
 
 export const STATE_MARKER = "<!-- workflow-state:v1 -->";
 
 export class Ledger {
-  constructor(api, repo, login) {
+  constructor(api, repo, login, botUserId = login) {
     this.api = api;
     this.repo = repo;
-    this.login = login;
+    if (!Number.isSafeInteger(botUserId) || botUserId < 1)
+      throw new Error("A verified controller bot user ID is required");
+    this.botUserId = botUserId;
     this.entries = new Map();
   }
 
@@ -14,8 +16,7 @@ export class Ledger {
     if (this.entries.has(number)) return this.entries.get(number);
     const comments = await this.api.list(`repos/${this.repo}/issues/${number}/comments`);
     const matches = comments.filter(
-      (comment) =>
-        sameLogin(comment.user.login, this.login) && comment.body.startsWith(STATE_MARKER),
+      (comment) => comment.user?.id === this.botUserId && comment.body?.startsWith(STATE_MARKER),
     );
     if (matches.length > 1)
       throw new Error(`Multiple controller ledgers on #${number}; human reconciliation required`);

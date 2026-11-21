@@ -2,10 +2,24 @@ import { parseArgs } from "node:util";
 import { readFile, writeFile, lstat } from "node:fs/promises";
 import { command, confirm, withoutCredentials, requireSubscription } from "./lib/setup-process.mjs";
 import { SetupState } from "./lib/setup-state.mjs";
-import { humanToken, roleToken } from "./lib/local-auth.mjs";
-import { githubRequest, registerApp, validateApp, verifyInstallation } from "./lib/setup-apps.mjs";
+import { GitHub } from "./lib/github.mjs";
+import {
+  assertPublishingBindings,
+  assertSetupPublishingBindings,
+  humanToken,
+  preparePublishingApps,
+  publishingVariableMap,
+  verifyPublishingIdentity,
+} from "./lib/local-auth.mjs";
+import { githubRequest } from "./lib/setup-apps.mjs";
 
-async function publishConfiguration(repo, repository, store) {
+async function repositoryPublishingVariables(repo, token) {
+  return publishingVariableMap(
+    await new GitHub(token).list(`repos/${repo}/actions/variables`, "variables"),
+  );
+}
+
+async function publishConfiguration(repo, repository, store, operatorToken) {
   const saved = store.state.configuration;
   const branch = (await command("git", ["branch", "--show-current"])).stdout.trim();
   const head = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
@@ -19,7 +33,12 @@ async function publishConfiguration(repo, repository, store) {
     throw new Error(
       "Publish recovery requires the clean, exact configuration branch/head recorded by setup",
     );
-  const token = await roleToken(repo, "writer");
+  const variables = await repositoryPublishingVariables(repo, operatorToken);
+  assertPublishingBindings(variables, store.state.apps);
+  const { token } = await verifyPublishingIdentity(store.state.apps.writer, {
+    repo,
+    role: "writer",
+  });
   const env = { ...withoutCredentials(), GH_TOKEN: token, GIT_TERMINAL_PROMPT: "0" };
   const pushed = await command(
     "git",
@@ -187,7 +206,7 @@ async function main() {
     const store = new SetupState(directory, state);
     await store.acquire();
     try {
-      await publishConfiguration(repo, repository, store);
+      await publishConfiguration(repo, repository, store, token);
     } finally {
       await store.release();
     }
@@ -233,77 +252,27 @@ async function main() {
   const store = new SetupState(directory, state);
   await store.acquire();
   try {
-    const variables = await githubRequest(`repos/${repo}/actions/variables?per_page=100`, {
-      token,
-    });
-    const variable = (name) => variables.variables?.find((entry) => entry.name === name)?.value;
+    const publishedVariables = await repositoryPublishingVariables(repo, token);
+    const variable = (name) => publishedVariables.get(name);
     if (variable("AUTOMATION_ENABLED") === "true")
       throw new Error(
         "Pause the existing installation first: set AUTOMATION_ENABLED=false and stop any old hosted runs before upgrading",
       );
-    store.state.enabled = false;
-    for (const role of ["writer", "reviewer"]) {
-      const existingLogin = variable(role === "writer" ? "AUTOMATION_LOGIN" : "REVIEW_LOGIN");
-      const keyPath = values[`${role}-key`];
-      if (keyPath) {
-        if (!existingLogin?.endsWith("[bot]"))
-          throw new Error(
-            `No recorded ${role} App to import; register through the normal setup instead`,
-          );
-        const info = await lstat(keyPath);
-        if (
-          !info.isFile() ||
-          info.isSymbolicLink() ||
-          info.mode & 0o077 ||
-          (process.getuid && info.uid !== process.getuid())
-        )
-          throw new Error(
-            "Imported App keys must be private files owned by you (chmod 600), not symlinks",
-          );
-        const slug = existingLogin.replace(/\[bot\]$/, "");
-        const app = await githubRequest(`apps/${slug}`, { token });
-        validateApp(app, { role, owner: repo.split("/")[0] });
-        const saved = {
-          name: slug,
-          id: app.id,
-          slug,
-          clientId: app.client_id,
-          pem: await readFile(keyPath, "utf8"),
-          phase: "installed",
-          installed: true,
-        };
-        await verifyInstallation(saved, { repo, role });
-        store.state.apps[role] = saved;
-        await store.save();
-      }
-      if (existingLogin && !store.state.apps[role]?.id)
-        throw new Error(
-          `Existing ${role} identity found. Import its private key with --${role}-key PATH; GitHub Secrets cannot be downloaded. Setup will not create a duplicate App`,
-        );
-      if (
-        store.state.apps[role]?.id &&
-        existingLogin &&
-        `${store.state.apps[role].slug}[bot]`.toLowerCase() !== existingLogin.toLowerCase()
-      )
-        throw new Error(`Saved ${role} App differs from the repository's identity`);
-      if (store.state.apps[role]?.installed)
-        await verifyInstallation(store.state.apps[role], { repo, role });
-      else
-        await registerApp({
-          role,
-          repo,
-          owner: repo.split("/")[0],
-          ownerType: repository.owner.type,
-          store,
-          token,
-          openBrowser: values["no-browser"]
-            ? null
-            : async (url) => {
-                const opened = await command("gh", ["browse", url], { allowFailure: true });
-                if (opened.code) console.log("Open the printed URL in your browser to continue.");
-              },
-        });
-    }
+    assertSetupPublishingBindings(publishedVariables, store.state);
+    await preparePublishingApps({
+      repo,
+      ownerType: repository.owner.type,
+      store,
+      token,
+      variables: publishedVariables,
+      keys: { writer: values["writer-key"], reviewer: values["reviewer-key"] },
+      openBrowser: values["no-browser"]
+        ? null
+        : async (url) => {
+            const opened = await command("gh", ["browse", url], { allowFailure: true });
+            if (opened.code) console.log("Open the printed URL in your browser to continue.");
+          },
+    });
     config.engine = harness;
     config.schemaVersion = 2;
     config.execution = "local";
@@ -326,6 +295,12 @@ async function main() {
       `${store.state.apps.writer.slug}[bot]`,
       "--status-app-id",
       String(store.state.apps.writer.id),
+      "--writer-bot-user-id",
+      String(store.state.apps.writer.botUserId),
+      "--reviewer-app-id",
+      String(store.state.apps.reviewer.id),
+      "--reviewer-bot-user-id",
+      String(store.state.apps.reviewer.botUserId),
       "--reviewer-login",
       `${store.state.apps.reviewer.slug}[bot]`,
     ];
@@ -349,6 +324,10 @@ async function main() {
           ? "Ruleset configuration is pending. Rerun this setup command after manual configuration, or add --acknowledge-unenforced-rules to explicitly continue without verified GitHub enforcement. Saved Apps and Project will be reused."
           : `Bootstrap command failed (exit ${bootstrap.code ?? "signal"}); resolve the reported step and rerun`,
       );
+    }
+    if (store.state.setupPublishingBindingsPending) {
+      delete store.state.setupPublishingBindingsPending;
+      await store.save();
     }
     await command("npm", ["exec", "--", "prettier", "--write", "workflow.config.json"], {
       interactive: true,
@@ -411,7 +390,7 @@ async function main() {
       head: (await command("git", ["rev-parse", "HEAD"])).stdout.trim(),
     };
     await store.save();
-    await publishConfiguration(repo, repository, store);
+    await publishConfiguration(repo, repository, store, token);
     console.log(
       "Configuration PR prepared. After human merge and successful default-branch CI, update this checkout and run npm run setup -- --activate.",
     );
