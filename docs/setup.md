@@ -72,6 +72,29 @@ The Apps are publishing identities, not execution environments or provider accou
 
 Project API access uses the host user's GitHub CLI authorization, or an explicitly supplied `PROJECT_TOKEN` environment variable. Give a personal token only the needed Project scope and store it in your host's secret manager. It is not an LLM credential. Repository variables store non-secret Project and App login metadata; `AUTOMATION_ENABLED` provides a repository-wide pause switch.
 
+## Operator blockers
+
+Triage assessments indicate an operator blocker with `humanAttention`. Submit the [usual triage fields](operations.md#triage-and-claim) with `ready: false`, the current issue digest, actual native dependencies, and both fields below.
+
+```json
+{
+  "humanAttention": {
+    "blocker": "The acceptance criteria specify two conflicting behaviors.",
+    "action": "Decide which behavior is required and update the acceptance criteria."
+  }
+}
+```
+
+```sh
+npm run orchestrator -- ready --issue 123 --file /tmp/triage.json
+```
+
+GRAIT applies the label configured in `labels.needsHuman` (default `agent:needs-human`) and records the blocker and requested action in its issue comment. Repeated reports update the same comment. Issues in triage stay in Backlog. A wait on native dependencies alone uses the existing dependency links. Include `humanAttention` when an issue also needs a separate operator action.
+
+Use the same command for a blocker found during delivery, such as a required edit outside the writer's publishing scope. The report preserves the accepted claim and Project status. Write both fields for readers of the issue and omit credentials, private setup details, and raw command output.
+
+The label pauses new claims and further automation on the issue, including review of its linked PR. An operator with permission to manage its labels resolves the blocker and removes the human-attention label in GitHub. Submit a fresh assessment for a Backlog issue or retry the blocked step for a claimed issue. Explicit `agent:paused` labels and native dependency requirements still apply.
+
 ## Advanced bootstrap
 
 The guided setup supplies these details automatically. For a deliberate manual integration, preview before applying:

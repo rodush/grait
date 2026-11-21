@@ -42,20 +42,28 @@ export class LocalOrchestrator {
     this.ledger = new Ledger(api, repo, writerId);
   }
 
-  async issue(number) {
+  async issue(number, options) {
     if (!Number.isSafeInteger(number) || number < 1)
       throw new Error("A positive issue number is required");
     const issue = await this.api.request(`repos/${this.repo}/issues/${number}`);
     if (issue.pull_request || issue.state?.toLowerCase() !== "open")
       throw new Error("An open issue is required");
-    await this.admit(issue);
+    await this.admit(issue, options);
     return issue;
   }
 
-  async admit(item) {
+  checkControlLabels(item, { reportingHumanAttention = false } = {}) {
     const names = labels(item);
-    if (names.includes(this.config.labels.paused) || names.includes(this.config.labels.needsHuman))
+    if (
+      names.includes(this.config.labels.paused) ||
+      (!reportingHumanAttention && names.includes(this.config.labels.needsHuman))
+    )
       throw new Error("Work is paused or needs human resolution");
+  }
+
+  async admit(item, options) {
+    this.checkControlLabels(item, options);
+    const names = labels(item);
     if (
       (item.user?.type !== "Bot" &&
         this.config.humanOperators.some((login) => sameLogin(login, item.user?.login))) ||
@@ -94,9 +102,23 @@ export class LocalOrchestrator {
     return `${repo}#${issue.number}`;
   }
 
+  async publishHumanAttention(issue, attention) {
+    const label = this.config.labels.needsHuman;
+    if (!labels(issue).includes(label))
+      await this.api.request(`repos/${this.repo}/issues/${issue.number}/labels`, {
+        method: "POST",
+        body: { labels: [label] },
+      });
+    const { state } = await this.ledger.load(issue.number);
+    state.humanAttention = attention;
+    await this.ledger.save(issue.number);
+  }
+
   async ready(number, assessment) {
-    const issue = await this.issue(number);
-    validateTriage(assessment, issue);
+    const issue = await this.issue(number, {
+      reportingHumanAttention: assessment?.humanAttention !== undefined,
+    });
+    const { humanAttention, ...triage } = validateTriage(assessment, issue);
     const actual = await this.blockers(this.repo, number);
     const refs = actual.map((item) => this.reference(item)).sort();
     if (
@@ -127,8 +149,21 @@ export class LocalOrchestrator {
     assertAcyclic(graph);
     const { state } = await this.ledger.load(number);
     this.checkState(state);
-    if (state.claim) throw new Error("An active claim must be reconciled before re-triage");
     const existing = this.project.find(this.repo, number);
+    if (humanAttention && state.pendingClaim)
+      throw new Error(
+        "An earlier claim has an uncertain result; reconcile its Project status before retrying",
+      );
+    if (state.claim) {
+      if (!humanAttention) throw new Error("An active claim must be reconciled before re-triage");
+      if (
+        !existing ||
+        ![this.config.statuses.inProgress, this.config.statuses.review].includes(existing.status)
+      )
+        throw new Error("Recorded claim and Project status disagree; reconcile before retrying");
+      await this.publishHumanAttention(issue, humanAttention);
+      return { ready: false, digest: triage.digest };
+    }
     if (
       existing &&
       ![this.config.statuses.backlog, this.config.statuses.ready].includes(existing.status)
@@ -146,8 +181,13 @@ export class LocalOrchestrator {
         throw new Error(`The Ready capacity is exhausted at ${maxReady} stories (maxReady)`);
     }
     state.triagedDigest = issueDigest(issue);
-    state.triage = assessment;
-    await this.ledger.save(number);
+    state.triage = triage;
+    if (humanAttention) {
+      await this.publishHumanAttention(issue, humanAttention);
+    } else {
+      delete state.humanAttention;
+      await this.ledger.save(number);
+    }
     const item = await this.project.add(issue, this.repo);
     await this.project.move(
       item,
@@ -275,7 +315,10 @@ export class LocalOrchestrator {
       /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#([1-9]\d*)\b/i,
     );
     if (linked) {
-      const { state: issueState } = await this.ledger.load(Number(linked[1]));
+      const issueNumber = Number(linked[1]);
+      const issue = await this.api.request(`repos/${this.repo}/issues/${issueNumber}`);
+      this.checkControlLabels(issue);
+      const { state: issueState } = await this.ledger.load(issueNumber);
       this.checkState(issueState);
       if (
         issueState.tdd &&

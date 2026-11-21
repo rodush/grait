@@ -2,6 +2,12 @@ import { parseBlock } from "./policy.mjs";
 
 export const STATE_MARKER = "<!-- workflow-state:v1 -->";
 
+function humanAttentionNote(attention) {
+  // Present operator-provided text as prose, without Markdown or mention side effects.
+  const escape = (value) => value.replace(/[\\`*_~<>\[\]@]/g, "\\$&");
+  return `\n\n**Latest operator blocker** ${escape(attention.blocker)}\n\n**Action required** ${escape(attention.action)}`;
+}
+
 export class Ledger {
   constructor(api, repo, login, botUserId = login) {
     this.api = api;
@@ -33,7 +39,8 @@ export class Ledger {
     const entry = await this.load(number);
     const serialized = JSON.stringify(entry.state);
     if (serialized === entry.saved) return;
-    const body = `${STATE_MARKER}\nAutomation state for #${number}. Changes and stop reasons are visible here.\n\n\`\`\`json\n${JSON.stringify(entry.state, null, 2)}\n\`\`\`\n`;
+    const note = entry.state.humanAttention ? humanAttentionNote(entry.state.humanAttention) : "";
+    const body = `${STATE_MARKER}\nAutomation state for #${number}. Changes and stop reasons are visible here.${note}\n\n\`\`\`json\n${JSON.stringify(entry.state, null, 2)}\n\`\`\`\n`;
     entry.comment = await this.api.request(
       entry.comment
         ? `repos/${this.repo}/issues/comments/${entry.comment.id}`

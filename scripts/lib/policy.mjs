@@ -115,7 +115,24 @@ export function validateTriage(data, issue) {
   ) {
     throw new Error("Ready requires a complete triage checklist and no open questions");
   }
-  return data;
+  if (data.humanAttention === undefined) return data;
+  const { blocker, action } = data.humanAttention || {};
+  if (
+    data.ready ||
+    [blocker, action].some(
+      (value) => typeof value !== "string" || !value.trim() || value.length > 1000,
+    )
+  )
+    throw new Error(
+      "Human attention requires a blocked assessment and a public blocker and action",
+    );
+  return {
+    ...data,
+    humanAttention: {
+      blocker: blocker.trim().replace(/\s+/g, " "),
+      action: action.trim().replace(/\s+/g, " "),
+    },
+  };
 }
 
 export function validateReview(data, review, { number, head, round }) {
