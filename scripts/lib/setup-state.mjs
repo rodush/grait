@@ -1,10 +1,66 @@
-import { mkdir, open, readFile, rename, unlink, lstat, chmod } from "node:fs/promises";
-import { constants } from "node:fs";
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  unlink,
+  lstat,
+  chmod,
+  realpath,
+  writeFile,
+} from "node:fs/promises";
+import { constants, lstatSync, readFileSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { command } from "./setup-process.mjs";
 
 const roles = new Set(["writer", "reviewer", "release"]);
+const reservations = new Map();
+
+function releaseIssueReservations() {
+  for (const [path, owner] of reservations) {
+    try {
+      const info = lstatSync(path);
+      if (
+        info.isFile() &&
+        info.size === owner.length &&
+        readFileSync(path, {
+          encoding: "utf8",
+          flag: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+        }) === owner
+      )
+        unlinkSync(path);
+    } catch (error) {
+      if (error.code !== "ENOENT")
+        console.error(`Could not release issue reservation at ${path}: ${error.message}`);
+    }
+  }
+  reservations.clear();
+}
+
+async function localInfo(path) {
+  return lstat(path).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+    return null;
+  });
+}
+
+async function artifactDirectory(path, create, restricted = true) {
+  if (create)
+    await mkdir(path, { mode: 0o700 }).catch((error) => {
+      if (error.code !== "EEXIST") throw error;
+    });
+  const info = await localInfo(path);
+  if (!info) return false;
+  if (
+    !info.isDirectory() ||
+    info.mode & (restricted ? 0o077 : 0o022) ||
+    (process.getuid && info.uid !== process.getuid()) ||
+    (await realpath(path)) !== path
+  )
+    throw new Error(`Unsafe issue artifact directory at ${path}`);
+  return true;
+}
 
 function validate(state, repo) {
   if (
@@ -201,5 +257,99 @@ export class SetupState {
     await this.lock.close();
     this.lock = null;
     await unlink(join(this.directory, "lock"));
+  }
+
+  async issueArtifactPath(issue, kind, create = false) {
+    if (!Number.isSafeInteger(issue) || issue < 1)
+      throw new Error("Issue artifacts require a positive issue number");
+    if (!(await artifactDirectory(this.directory))) {
+      if (create) throw new Error(`Setup metadata directory is missing at ${this.directory}`);
+      return null;
+    }
+    const directory = join(this.directory, kind);
+    if (!(await artifactDirectory(directory, create, kind !== "issue-scratch"))) return null;
+    return join(directory, `issue-${issue}`);
+  }
+
+  async reserveIssue(issue) {
+    const path = await this.issueArtifactPath(issue, "issue-reservations", true);
+    const existing = reservations.get(path);
+    const info = existing && (await localInfo(path));
+    if (
+      info?.isFile() &&
+      info.size === existing.length &&
+      (await readFile(path, {
+        encoding: "utf8",
+        flag: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      })) === existing
+    )
+      return;
+    const owner = `PID ${process.pid}\n${randomBytes(16).toString("hex")}\n`;
+    try {
+      // Exclusive creation also blocks cleanup if recording the PID is interrupted.
+      await writeFile(path, owner, { flag: "wx", mode: 0o600 });
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      throw new Error(`Issue #${issue} already has a worker reservation at ${path}`);
+    }
+    // The worker command releases the setup lock before awaiting the native session.
+    // Drain on normal shutdown only so interruption leaves a reservation to reconcile.
+    if (!reservations.size) process.once("beforeExit", releaseIssueReservations);
+    reservations.set(path, owner);
+  }
+
+  async hasIssueReservation(issue) {
+    const path = await this.issueArtifactPath(issue, "issue-reservations");
+    return Boolean(path && (await localInfo(path)));
+  }
+
+  async prepareIssueArtifacts(issue) {
+    if (!this.lock)
+      throw new Error("Acquire the setup/orchestrator lock before preparing artifacts");
+    await this.reserveIssue(issue);
+    const scratch = await this.issueArtifactPath(issue, "issue-scratch", true);
+    const record = await this.issueArtifactPath(issue, "issue-scratch-owners", true);
+    // A surviving record may belong to a missing or replaced directory.
+    if (await localInfo(record)) return;
+    try {
+      await mkdir(scratch, { mode: 0o700 });
+    } catch (error) {
+      if (error.code === "EEXIST") return;
+      throw error;
+    }
+    const info = await lstat(scratch);
+    if (!info.isDirectory()) throw new Error(`Task scratch changed during creation at ${scratch}`);
+    const { dev, ino } = info;
+    await writeFile(record, `${JSON.stringify({ dev, ino })}\n`, { flag: "wx", mode: 0o600 });
+  }
+
+  async issueScratchIdentity(issue) {
+    const path = await this.issueArtifactPath(issue, "issue-scratch-owners");
+    const info = path && (await localInfo(path));
+    if (!info) return null;
+    if (
+      !info.isFile() ||
+      info.mode & 0o077 ||
+      info.size > 1024 ||
+      (process.getuid && info.uid !== process.getuid())
+    )
+      throw new Error(`Unsafe scratch ownership record at ${path}`);
+    const identity = JSON.parse(
+      await readFile(path, {
+        encoding: "utf8",
+        flag: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      }),
+    );
+    if (!Number.isSafeInteger(identity?.dev) || !Number.isSafeInteger(identity?.ino))
+      throw new Error(`Invalid scratch ownership record at ${path}`);
+    return identity;
+  }
+
+  async clearIssueScratchIdentity(issue) {
+    const path = await this.issueArtifactPath(issue, "issue-scratch-owners");
+    if (path)
+      await unlink(path).catch((error) => {
+        if (error.code !== "ENOENT") throw error;
+      });
   }
 }

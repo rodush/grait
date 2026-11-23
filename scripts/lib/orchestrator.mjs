@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { lstat, realpath, rm } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, readdir, realpath, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Ledger } from "./ledger.mjs";
 import { command, withoutCredentials } from "./setup-process.mjs";
@@ -67,9 +68,132 @@ function parseWorktrees(output) {
     );
 }
 
+async function readOperationFile(path) {
+  const info = await lstat(path).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+    return null;
+  });
+  if (!info) return null;
+  if (!info.isFile() || info.size > 1024 * 1024)
+    throw new Error(`Unsafe Git operation metadata at ${path}`);
+  const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const current = await file.stat();
+    if (current.dev !== info.dev || current.ino !== info.ino)
+      throw new Error(`Git operation metadata changed at ${path}`);
+    return (await file.readFile("utf8")).replace(/\r?\n$/, "");
+  } finally {
+    await file.close();
+  }
+}
+
+async function checkBranchUse(git, worktrees, common, branch, removableWorktree) {
+  const ref = `refs/heads/${branch}`;
+  for (const entry of worktrees) {
+    if ("bare" in entry) continue;
+    const path = entry.worktree;
+    const usage = (operation) =>
+      new Error(`Local branch ${branch} is in use by ${operation} in worktree at ${path}`);
+    if (entry.branch === ref && path !== removableWorktree) throw usage("a checkout");
+    const [root, gitCommon, bisect, apply, merge, ...extra] = (
+      await git(
+        [
+          "rev-parse",
+          "--path-format=absolute",
+          "--show-toplevel",
+          "--git-common-dir",
+          "--git-path",
+          "BISECT_START",
+          "--git-path",
+          "rebase-apply",
+          "--git-path",
+          "rebase-merge",
+        ],
+        path,
+      )
+    )
+      .slice(0, -1)
+      .split("\n");
+    if (
+      root !== path ||
+      gitCommon !== common ||
+      extra.length ||
+      ![bisect, apply, merge].every((dir) => dir && isAbsolute(dir) && within(dir, common))
+    )
+      throw new Error(`Cannot verify Git operation metadata for worktree at ${path}`);
+    if (!(await directoryExists(dirname(bisect))))
+      throw new Error(`Git administrative directory is missing for worktree at ${path}`);
+
+    const bisectStart = await readOperationFile(bisect);
+    if (bisectStart !== null) {
+      if (!/^\S+$/.test(bisectStart)) throw new Error(`Ambiguous Git bisect metadata at ${bisect}`);
+      if ([branch, ref].includes(bisectStart) || path === removableWorktree)
+        throw usage("a bisect");
+    }
+    for (const dir of [apply, merge]) {
+      if (!(await directoryExists(dir))) continue;
+      const headName = await readOperationFile(join(dir, "head-name"));
+      if (
+        ![branch, "detached HEAD"].includes(headName) &&
+        !/^refs\/heads\/\S+$/.test(headName ?? "")
+      )
+        throw new Error(`Ambiguous Git rebase metadata at ${dir}`);
+      if ([branch, ref].includes(headName) || path === removableWorktree) throw usage("a rebase");
+      if (dir !== merge) continue;
+      const updateRefs = await readOperationFile(join(merge, "update-refs"));
+      // Git records each ref followed by its old and new object IDs on separate lines.
+      const records = updateRefs ? updateRefs.split("\n") : [];
+      for (let i = 0; i < records.length; i += 3) {
+        if (
+          !/^refs\/\S+$/.test(records[i]) ||
+          !exactHead(records[i + 1]) ||
+          !exactHead(records[i + 2])
+        )
+          throw new Error(`Ambiguous Git rebase update-refs metadata at ${merge}`);
+        if (records[i] === ref) throw usage("a rebase update-refs operation");
+      }
+    }
+  }
+}
+
+async function checkScratch(scratch, identity, worktrees, currentDirectories) {
+  if (!(await directoryExists(scratch))) return false;
+  const { dev, ino } = await lstat(scratch);
+  if (dev !== identity?.dev || ino !== identity?.ino)
+    throw new Error(`Task scratch directory ${scratch} has no matching ownership record`);
+  if (
+    currentDirectories.some((directory) => within(directory, scratch)) ||
+    worktrees.some((entry) => within(entry.worktree, scratch))
+  )
+    throw new Error(`Task scratch directory ${scratch} contains a working checkout`);
+  const directories = [scratch];
+  while (directories.length) {
+    const directory = directories.pop();
+    const info = await lstat(directory);
+    if (!info.isDirectory() || info.dev !== dev || (await realpath(directory)) !== directory)
+      throw new Error(`Unexpected directory inside task scratch at ${directory}`);
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.name.toLowerCase() === ".git")
+        throw new Error(
+          `Task scratch directory ${scratch} contains Git checkout metadata at ${path}`,
+        );
+      if (entry.isDirectory()) directories.push(path);
+    }
+  }
+  return true;
+}
+
 // The caller must establish that the claim completed at this merged head and
 // that workers have relinquished ownership before invoking local cleanup.
-export async function cleanupTaskArtifacts({ issue, branch, head, cwd = process.cwd(), repo }) {
+export async function cleanupTaskArtifacts({
+  issue,
+  branch,
+  head,
+  cwd = process.cwd(),
+  repo,
+  scratchIdentity,
+}) {
   const result = { removed: [], failures: [] };
   try {
     if (
@@ -96,6 +220,12 @@ export async function cleanupTaskArtifacts({ issue, branch, head, cwd = process.
         throw new Error(`git ${args.join(" ")} failed: ${stderr.trim() || `exit ${code}`}`);
       return stdout;
     };
+    const version = (await git(["--version"])).trim();
+    const [, major, minor] = /^git version (\d+)\.(\d+)(?:\.|$)/.exec(version) || [];
+    if (!(Number(major) > 2 || (Number(major) === 2 && Number(minor) >= 36)))
+      throw new Error(
+        `Task cleanup requires Git 2.36 or newer on PATH (found ${version}); upgrade Git and retry sync`,
+      );
     const common = resolve(
       cwd,
       (await git(["rev-parse", "--path-format=absolute", "--git-common-dir"])).trimEnd(),
@@ -171,23 +301,30 @@ export async function cleanupTaskArtifacts({ issue, branch, head, cwd = process.
         throw new Error(
           `Worktree at ${target} is dirty, contains ignored files, or has hidden index entries`,
         );
+    }
+
+    const scratchExists = await checkScratch(
+      scratch,
+      scratchIdentity,
+      worktrees,
+      currentDirectories,
+    );
+    if (targetExists) {
+      await checkBranchUse(git, await listWorktrees(), common, branch, target);
       await git(["worktree", "remove", "--", target]);
       result.removed.push(target);
     }
-
+    if (branchRef || scratchExists)
+      await checkBranchUse(git, await listWorktrees(), common, branch);
     if (branchRef) {
-      if ((await listWorktrees()).some((entry) => entry.branch === ref))
-        throw new Error(`Local branch ${branch} is still checked out in a worktree`);
       await git(["update-ref", "--no-deref", "-d", ref, head]);
       result.removed.push(branch);
     }
 
-    if (await directoryExists(scratch)) {
-      if (
-        currentDirectories.some((directory) => within(directory, scratch)) ||
-        worktrees.some((entry) => within(entry.worktree, scratch))
-      )
-        throw new Error(`Task scratch directory ${scratch} contains a working checkout`);
+    if (
+      scratchExists &&
+      (await checkScratch(scratch, scratchIdentity, await listWorktrees(), currentDirectories))
+    ) {
       await rm(scratch, { recursive: true });
       result.removed.push(scratch);
     }
@@ -200,7 +337,7 @@ export async function cleanupTaskArtifacts({ issue, branch, head, cwd = process.
 // The CLI serializes mutations on the designated host. This class never invokes a model
 // or dispatches Actions; the signed-in native harness owns agent execution.
 export class LocalOrchestrator {
-  constructor({ api, reviewerApi, project, repo, writerId, reviewerId, config }) {
+  constructor({ api, reviewerApi, project, repo, writerId, reviewerId, config, store }) {
     if (!sameLogin(config.controllerRepository, repo) || !sameLogin(project.controller, repo))
       throw new Error("Repository and Project must be bound to this orchestrator");
     if (
@@ -219,6 +356,7 @@ export class LocalOrchestrator {
       writerId,
       reviewerId,
       config,
+      store,
     });
     this.ledger = new Ledger(api, repo, writerId);
   }
@@ -396,6 +534,7 @@ export class LocalOrchestrator {
     if (state.claim) {
       if (![this.config.statuses.inProgress, this.config.statuses.review].includes(item.status))
         throw new Error("Recorded claim and Project status disagree; reconcile before retrying");
+      await this.store?.prepareIssueArtifacts?.(number);
       return state.claim;
     }
     if (item.status !== this.config.statuses.ready)
@@ -417,6 +556,7 @@ export class LocalOrchestrator {
       throw new Error(
         "An earlier claim has an uncertain result; reconcile its Project status before retrying",
       );
+    await this.store?.prepareIssueArtifacts?.(number);
     state.pendingClaim = { id: randomUUID(), digest: state.triagedDigest };
     await this.ledger.save(number);
     await this.project.move(item, this.config.statuses.inProgress);
@@ -579,10 +719,32 @@ export class LocalOrchestrator {
     const item = this.project.find(this.repo, issueNumber);
     if (!item) throw new Error("Claimed issue is missing from the Project");
     if (pr.merged === true) {
+      const { claim } = state;
+      if (
+        claim.issue !== issueNumber ||
+        claim.branch !== issueBranch(issueNumber) ||
+        (pr.number !== undefined && pr.number !== number) ||
+        pr.head?.ref !== claim.branch ||
+        !sameLogin(pr.head?.repo?.full_name, this.repo) ||
+        !exactHead(pr.head?.sha)
+      )
+        throw new Error(
+          `Merged PR #${number} does not match the repository and claim for issue #${issueNumber}`,
+        );
+      const repository = await this.api.request(`repos/${this.repo}`);
+      if (
+        !sameLogin(pr.base?.repo?.full_name, this.repo) ||
+        typeof repository?.default_branch !== "string" ||
+        !repository.default_branch ||
+        pr.base.ref !== repository.default_branch
+      )
+        throw new Error(
+          `Merged PR #${number} must target the default branch of ${this.repo} before issue #${issueNumber} can be marked Done`,
+        );
       await this.project.move(item, this.config.statuses.done);
       state.completedPR = number;
       await this.ledger.save(issueNumber);
-      const cleanup = await this.cleanupCompletedIssue(issueNumber, number, item, pr, state);
+      const cleanup = await this.cleanupCompletedIssue(issueNumber, item, pr, state);
       return { issue: issueNumber, status: item.status, cleanup };
     } else if (pr.state === "closed") {
       return { action: "needs-triage", issue: issueNumber };
@@ -610,26 +772,14 @@ export class LocalOrchestrator {
     return { issue: issueNumber, status: item.status };
   }
 
-  async cleanupCompletedIssue(issue, number, item, pr, state) {
+  async cleanupCompletedIssue(issue, item, pr, state) {
     const { claim, tdd } = state;
-    const head = pr.head?.sha;
+    const head = pr.head.sha;
     const blocked = (reason) => ({ removed: [], failures: [reason] });
     if (item.status !== this.config.statuses.done)
       return blocked(`Project issue #${issue} must be Done before task cleanup`);
     if (tdd?.owner || state.pending || state.pendingClaim || state.pendingReview || state.fixPR)
       return blocked(`Issue #${issue} has an active role owner or unfinished operation`);
-    if (
-      claim.issue !== issue ||
-      claim.branch !== issueBranch(issue) ||
-      (pr.number !== undefined && pr.number !== number) ||
-      pr.head?.ref !== claim.branch ||
-      !sameLogin(pr.head?.repo?.full_name, this.repo) ||
-      (pr.base?.repo?.full_name && !sameLogin(pr.base.repo.full_name, this.repo)) ||
-      !exactHead(head)
-    )
-      return blocked(
-        `Merged PR #${number} does not match the repository and claim for issue #${issue}`,
-      );
     if (
       tdd &&
       (tdd.issue !== issue ||
@@ -639,12 +789,26 @@ export class LocalOrchestrator {
         tdd.phase !== "review" ||
         tdd.head !== head)
     )
-      return blocked(`Merged PR #${number} does not match the accepted head for issue #${issue}`);
-    return cleanupTaskArtifacts({
-      issue,
-      branch: claim.branch,
-      head,
-      repo: this.repo,
-    });
+      return blocked(`Merged PR does not match the accepted head for issue #${issue}`);
+    let cleanup;
+    try {
+      if (await this.store?.hasIssueReservation?.(issue))
+        return blocked(
+          `Issue #${issue} has a worker reservation; wait for the worker to exit or reconcile the reservation before retrying`,
+        );
+      cleanup = await cleanupTaskArtifacts({
+        issue,
+        branch: claim.branch,
+        head,
+        repo: this.repo,
+        scratchIdentity: await this.store?.issueScratchIdentity?.(issue),
+      });
+      if (!cleanup.failures.length) await this.store?.clearIssueScratchIdentity?.(issue);
+      return cleanup;
+    } catch (error) {
+      if (!cleanup) return blocked(error.message);
+      cleanup.failures.push(error.message);
+      return cleanup;
+    }
   }
 }
