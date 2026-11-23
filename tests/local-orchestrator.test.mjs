@@ -1,15 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { issueDigest } from "../scripts/lib/policy.mjs";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const sourceRoot =
   process.env.GRAIT_TEST_SOURCE_ROOT || fileURLToPath(new URL("..", import.meta.url));
-const { LocalOrchestrator } = await import(
+const orchestratorModule = await import(
   pathToFileURL(resolve(sourceRoot, "scripts/lib/orchestrator.mjs"))
 );
+const { LocalOrchestrator } = orchestratorModule;
 const baseConfig = JSON.parse(await readFile(resolve(sourceRoot, "workflow.config.json"), "utf8"));
 const repo = "acme/service";
 const head = "a".repeat(40);
@@ -596,6 +600,170 @@ test("local sync never completes unrelated or unclaimed issues", async () => {
   f.pull.body = "No closing reference";
   await assert.rejects(() => f.orchestrator.sync(7));
   assert.notEqual(f.item.status, f.config.statuses.done);
+});
+
+async function inTaskRepository(t, run, { foreignPath = false } = {}) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "grait-task-cleanup-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cwd = join(root, "service");
+  const worktree = join(root, foreignPath ? "operator-checkouts" : "service-worktrees", "issue-1");
+  const scratchRoot = join(cwd, ".git", "grait-setup", "issue-scratch");
+  const scratch = join(scratchRoot, "issue-1");
+  const branch = "agent/issue-1";
+  const git = (...args) =>
+    execFileSync("git", ["-C", cwd, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+
+  await mkdir(cwd);
+  await mkdir(scratch, { recursive: true });
+  await writeFile(join(scratch, "notes"), "completed task scratch");
+  git("init", "--initial-branch=main");
+  git("config", "user.name", "Cleanup Test");
+  git("config", "user.email", "cleanup@example.test");
+  git("config", "commit.gpgsign", "false");
+  git("remote", "add", "origin", `https://github.com/${repo}.git`);
+  git("commit", "--allow-empty", "-m", "Base");
+  await mkdir(resolve(worktree, ".."), { recursive: true });
+  git("worktree", "add", "-b", branch, worktree);
+  await writeFile(join(worktree, "delivery.txt"), "delivered content");
+  git("-C", worktree, "add", "delivery.txt");
+  git("-C", worktree, "commit", "-m", "Deliver issue");
+  const head = git("-C", worktree, "rev-parse", "HEAD");
+  git("merge", "--squash", branch);
+  git("commit", "-m", "Squash merge issue");
+  assert.ok(!git("rev-list", "main").split("\n").includes(head));
+
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  await f.orchestrator.claim(1);
+  Object.assign(f.pull, {
+    merged: true,
+    state: "closed",
+    merge_commit_sha: git("rev-parse", "main"),
+  });
+  Object.assign(f.pull.head, { ref: branch, sha: head });
+
+  const previousCwd = process.cwd();
+  process.chdir(cwd);
+  try {
+    await run({ f, git, cwd, branch, head, worktree, scratch, scratchRoot });
+  } finally {
+    process.chdir(previousCwd);
+  }
+}
+
+test("local sync removes the completed squash-merged task and preserves active task artifacts", async (t) => {
+  await inTaskRepository(t, async ({ f, git, cwd, branch, worktree, scratch, scratchRoot }) => {
+    const active = resolve(worktree, "..", "issue-2");
+    const activeScratch = join(scratchRoot, "issue-2");
+    const shared = resolve(scratchRoot, "..", "operator-state");
+    git("worktree", "add", "-b", "agent/issue-2", active, "main");
+    await mkdir(activeScratch);
+    await writeFile(join(activeScratch, "notes"), "active task scratch");
+    await writeFile(shared, "shared operator data");
+    const activeItem = await f.project.add({ number: 2 }, repo);
+    await f.project.move(activeItem, f.config.statuses.review);
+
+    const move = f.project.move.bind(f.project);
+    f.project.move = async (item, status) => {
+      assert.ok(existsSync(worktree), "task worktree must exist before Done");
+      assert.ok(existsSync(scratch), "task scratch must exist before Done");
+      await move(item, status);
+    };
+    const result = await f.orchestrator.sync(7);
+    f.project.move = move;
+    assert.equal(result.status, f.config.statuses.done);
+    assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, 7);
+    assert.equal(existsSync(worktree), false, "the completed task worktree is removed");
+    assert.equal(git("branch", "--list", branch), "");
+    assert.equal(existsSync(scratch), false);
+    assert.equal(await readFile(join(cwd, "delivery.txt"), "utf8"), "delivered content");
+    assert.equal(
+      git("branch", "--list", "--format=%(refname:short)", "agent/issue-2"),
+      "agent/issue-2",
+    );
+    assert.ok(existsSync(active));
+    assert.equal(await readFile(join(activeScratch, "notes"), "utf8"), "active task scratch");
+    assert.equal(await readFile(shared, "utf8"), "shared operator data");
+    assert.equal(activeItem.status, f.config.statuses.review);
+    assert.ok(result.cleanup?.removed?.length > 0, "sync reports removed artifacts");
+    assert.deepEqual(result.cleanup.failures, []);
+
+    const repeated = await f.orchestrator.sync(7);
+    assert.equal(repeated.status, f.config.statuses.done);
+    assert.deepEqual(repeated.cleanup?.removed, []);
+    assert.deepEqual(repeated.cleanup?.failures, []);
+  });
+});
+
+test("local sync preserves a dirty completed worktree and reports the cleanup failure", async (t) => {
+  await inTaskRepository(t, async ({ f, git, branch, head, worktree }) => {
+    const untracked = join(worktree, "operator-notes");
+    await writeFile(untracked, "uncommitted notes");
+
+    const result = await f.orchestrator.sync(7);
+    assert.equal(result.status, f.config.statuses.done);
+    assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, 7);
+    assert.equal(await readFile(untracked, "utf8"), "uncommitted notes");
+    assert.equal(git("rev-parse", branch), head);
+    assert.ok(result.cleanup?.failures?.length > 0, "sync reports the blocked cleanup");
+  });
+});
+
+test("local sync leaves task artifacts in place when the Project cannot move to Done", async (t) => {
+  await inTaskRepository(t, async ({ f, git, branch, head, worktree, scratch }) => {
+    f.project.move = async () => {
+      throw new Error("Project move failed");
+    };
+    await assert.rejects(() => f.orchestrator.sync(7), /Project move failed/);
+    assert.ok(existsSync(worktree));
+    assert.ok(existsSync(scratch));
+    assert.equal(git("rev-parse", branch), head);
+    assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, undefined);
+  });
+});
+
+for (const state of ["open", "closed"]) {
+  test(`local sync preserves task artifacts for an unmerged ${state} PR`, async (t) => {
+    await inTaskRepository(t, async ({ f, git, branch, head, worktree, scratch }) => {
+      Object.assign(f.pull, { merged: false, state });
+      await f.orchestrator.sync(7);
+      assert.notEqual(f.item.status, f.config.statuses.done);
+      assert.ok(existsSync(worktree));
+      assert.ok(existsSync(scratch));
+      assert.equal(git("rev-parse", branch), head);
+    });
+  });
+}
+
+test("task artifact cleanup preserves a divergent local branch and its worktree", async (t) => {
+  await inTaskRepository(t, async ({ git, cwd, branch, head, worktree }) => {
+    git("-C", worktree, "commit", "--allow-empty", "-m", "Unmerged operator work");
+    const divergent = git("rev-parse", branch);
+    const { cleanupTaskArtifacts } = orchestratorModule;
+    assert.equal(typeof cleanupTaskArtifacts, "function", "task cleanup is exported");
+    const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
+    assert.equal(git("rev-parse", branch), divergent);
+    assert.ok(existsSync(worktree));
+    assert.ok(report.failures.length > 0, "cleanup reports the divergent branch");
+  });
+});
+
+test("task artifact cleanup preserves a worktree outside its canonical path", async (t) => {
+  await inTaskRepository(
+    t,
+    async ({ git, cwd, branch, head, worktree }) => {
+      const { cleanupTaskArtifacts } = orchestratorModule;
+      assert.equal(typeof cleanupTaskArtifacts, "function", "task cleanup is exported");
+      const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
+      assert.equal(git("rev-parse", branch), head);
+      assert.ok(existsSync(worktree));
+      assert.ok(report.failures.length > 0, "cleanup reports the foreign worktree");
+    },
+    { foreignPath: true },
+  );
 });
 
 test("local admission checks current access rather than stale contributor association", async () => {
