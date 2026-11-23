@@ -123,6 +123,18 @@ The label pauses new claims and further automation on the issue, including revie
 
 Conflicting reviewer instructions also label the linked issue and record the action there. The recorded PR review pause still applies after label removal. Follow [pause and recovery](operations.md#pause-and-recovery) to reconcile the PR review ledger before resuming.
 
+## Clean up a merged task
+
+After GitHub confirms the issue's linked PR was merged and the worker sessions have released the issue, run this from the coordinator checkout:
+
+```sh
+npm run orchestrator -- sync --pr 123
+```
+
+Sync moves the linked Project issue to Done and records the completed PR before attempting local cleanup. It checks that the merged PR came from the claimed branch in the same repository at the accepted head. This also works after a squash merge. Cleanup can remove the clean, registered task worktree under the sibling `<repository>-worktrees/issue-N` path, the local `agent/issue-N` branch at that head, and the dedicated temporary directory at `<git-common-dir>/grait-setup/issue-scratch/issue-N`. Keep durable records and shared files outside that temporary directory.
+
+The `cleanup.removed` list records what was deleted, and `cleanup.failures` reports blockers. If a blocker remains, review the reported path or ref, release any remaining sessions, and reconcile the ownership, files, or branch before rerunning the same command. Use a separate location to preserve any operator files you need to move. Cleanup skips work already completed, so a successful retry with no remaining artifacts returns two empty lists.
+
 ## Advanced bootstrap
 
 The guided setup supplies these details automatically. For a deliberate manual integration, preview before applying:

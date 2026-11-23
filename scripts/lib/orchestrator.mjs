@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { lstat, realpath, rm } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Ledger } from "./ledger.mjs";
+import { command, withoutCredentials } from "./setup-process.mjs";
 import {
   availableSlots,
   assertAcyclic,
@@ -24,10 +27,189 @@ const closingIssues = (pr) => [
   ),
 ];
 
+const exactHead = (head) => typeof head === "string" && /^[a-f0-9]{40}$/.test(head);
+const issueBranch = (issue) => `agent/issue-${issue}`;
+
+function within(path, directory) {
+  const fromDirectory = relative(directory, path);
+  return (
+    !isAbsolute(fromDirectory) && fromDirectory !== ".." && !fromDirectory.startsWith(`..${sep}`)
+  );
+}
+
+// An absent leaf is safe only if its existing ancestors have their expected identity.
+async function directoryExists(path) {
+  const stat = await lstat(path).catch((error) => {
+    if (error.code !== "ENOENT") throw error;
+    return null;
+  });
+  if (!stat) {
+    await directoryExists(dirname(path));
+    return false;
+  }
+  if (!stat.isDirectory() || (await realpath(path)) !== path)
+    throw new Error(`Expected a real directory without symlinked parents at ${path}`);
+  return true;
+}
+
+function parseWorktrees(output) {
+  return output
+    .split("\0\0")
+    .filter(Boolean)
+    .map((record) =>
+      Object.fromEntries(
+        record
+          .split("\0")
+          .map((line) => line.match(/^(\S+)(?: ([\s\S]*))?$/))
+          .filter(Boolean)
+          .map(([, key, value = ""]) => [key, value]),
+      ),
+    );
+}
+
+// The caller must establish that the claim completed at this merged head and
+// that workers have relinquished ownership before invoking local cleanup.
+export async function cleanupTaskArtifacts({ issue, branch, head, cwd = process.cwd(), repo }) {
+  const result = { removed: [], failures: [] };
+  try {
+    if (
+      !Number.isSafeInteger(issue) ||
+      issue < 1 ||
+      branch !== issueBranch(issue) ||
+      !exactHead(head) ||
+      typeof repo !== "string" ||
+      !/^[\w.-]+\/[\w.-]+$/.test(repo) ||
+      [".", ".."].includes(repo.split("/")[1])
+    )
+      throw new Error("Task cleanup requires a repository, canonical issue branch, and exact head");
+
+    const env = withoutCredentials();
+    const localVars = await command("git", ["rev-parse", "--local-env-vars"], { cwd, env });
+    for (const name of localVars.stdout.trim().split("\n")) delete env[name];
+    const git = async (args, directory = cwd) => {
+      const { stdout, stderr, code } = await command("git", args, {
+        cwd: directory,
+        env,
+        allowFailure: true,
+      });
+      if (code !== 0 || stderr.trim())
+        throw new Error(`git ${args.join(" ")} failed: ${stderr.trim() || `exit ${code}`}`);
+      return stdout;
+    };
+    const common = resolve(
+      cwd,
+      (await git(["rev-parse", "--path-format=absolute", "--git-common-dir"])).trimEnd(),
+    );
+    if (!(await directoryExists(common)))
+      throw new Error(`Git common directory is missing at ${common}`);
+    // Match the placement used by the orchestrator's worktree and worker commands.
+    const target = join(dirname(common), "..", `${repo.split("/")[1]}-worktrees`, `issue-${issue}`);
+    const scratch = join(common, "grait-setup", "issue-scratch", `issue-${issue}`);
+    const ref = `refs/heads/${branch}`;
+    const listWorktrees = async () =>
+      parseWorktrees(await git(["worktree", "list", "--porcelain", "-z"]));
+    const worktrees = await listWorktrees();
+    const [primary] = worktrees;
+    if (!primary?.worktree) throw new Error("Cannot identify the primary worktree");
+    const currentDirectories = await Promise.all([realpath(cwd), realpath(process.cwd())]);
+    const registered = worktrees.filter(
+      (entry) => entry.worktree === target || entry.branch === ref,
+    );
+    const refOutput = await git([
+      "for-each-ref",
+      "--format=%(refname) %(objectname) %(symref)",
+      ref,
+    ]);
+    const branchRef = refOutput.split("\n").find((line) => line.startsWith(`${ref} `));
+    if (branchRef && branchRef !== `${ref} ${head} `)
+      throw new Error(`Local branch ${branch} has diverged or is symbolic; expected ${head}`);
+    const targetExists = await directoryExists(target);
+
+    if (registered.length || targetExists) {
+      const [entry] = registered;
+      if (
+        registered.length !== 1 ||
+        entry.worktree !== target ||
+        entry.branch !== ref ||
+        !branchRef ||
+        entry.HEAD !== head ||
+        !targetExists
+      )
+        throw new Error(
+          `Worktree at ${entry?.worktree || target} does not match the canonical task worktree and accepted head (${target})`,
+        );
+      if (
+        entry === primary ||
+        currentDirectories.some((directory) => within(directory, target)) ||
+        "locked" in entry ||
+        "prunable" in entry
+      )
+        throw new Error(`Worktree at ${target} is current, primary, locked, or prunable`);
+      const identity = await git(
+        ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "HEAD"],
+        target,
+      );
+      if (
+        !(await lstat(join(target, ".git"))).isFile() ||
+        identity !== `${target}\n${common}\n${head}\n` ||
+        (await git(["symbolic-ref", "HEAD"], target)).trimEnd() !== ref
+      )
+        throw new Error(`Worktree at ${target} has foreign or inconsistent Git metadata`);
+      const status = await git(
+        [
+          "status",
+          "--porcelain=v1",
+          "-z",
+          "--untracked-files=all",
+          "--ignored=matching",
+          "--ignore-submodules=none",
+        ],
+        target,
+      );
+      const tracked = await git(["ls-files", "-v", "-z"], target);
+      if (status || tracked.split("\0").some((entry) => /^[Sa-z] /.test(entry)))
+        throw new Error(
+          `Worktree at ${target} is dirty, contains ignored files, or has hidden index entries`,
+        );
+      await git(["worktree", "remove", "--", target]);
+      result.removed.push(target);
+    }
+
+    if (branchRef) {
+      if ((await listWorktrees()).some((entry) => entry.branch === ref))
+        throw new Error(`Local branch ${branch} is still checked out in a worktree`);
+      await git(["update-ref", "--no-deref", "-d", ref, head]);
+      result.removed.push(branch);
+    }
+
+    if (await directoryExists(scratch)) {
+      if (
+        currentDirectories.some((directory) => within(directory, scratch)) ||
+        worktrees.some((entry) => within(entry.worktree, scratch))
+      )
+        throw new Error(`Task scratch directory ${scratch} contains a working checkout`);
+      await rm(scratch, { recursive: true });
+      result.removed.push(scratch);
+    }
+  } catch (error) {
+    result.failures.push(error.message);
+  }
+  return result;
+}
+
 // The CLI serializes mutations on the designated host. This class never invokes a model
 // or dispatches Actions; the signed-in native harness owns agent execution.
 export class LocalOrchestrator {
-  constructor({ api, reviewerApi, project, repo, writerId, reviewerId, config }) {
+  constructor({
+    api,
+    reviewerApi,
+    project,
+    repo,
+    writerId,
+    reviewerId,
+    config,
+    cwd = process.cwd(),
+  }) {
     if (!sameLogin(config.controllerRepository, repo) || !sameLogin(project.controller, repo))
       throw new Error("Repository and Project must be bound to this orchestrator");
     if (
@@ -46,6 +228,7 @@ export class LocalOrchestrator {
       writerId,
       reviewerId,
       config,
+      cwd,
     });
     this.ledger = new Ledger(api, repo, writerId);
   }
@@ -249,7 +432,7 @@ export class LocalOrchestrator {
     await this.project.move(item, this.config.statuses.inProgress);
     state.claim = {
       issue: number,
-      branch: `agent/issue-${number}`,
+      branch: issueBranch(number),
       digest: state.triagedDigest,
       at: new Date().toISOString(),
     };
@@ -409,6 +592,8 @@ export class LocalOrchestrator {
       await this.project.move(item, this.config.statuses.done);
       state.completedPR = number;
       await this.ledger.save(issueNumber);
+      const cleanup = await this.cleanupCompletedIssue(issueNumber, number, item, pr, state);
+      return { issue: issueNumber, status: item.status, cleanup };
     } else if (pr.state === "closed") {
       return { action: "needs-triage", issue: issueNumber };
     } else {
@@ -433,5 +618,65 @@ export class LocalOrchestrator {
       );
     }
     return { issue: issueNumber, status: item.status };
+  }
+
+  async cleanupCompletedIssue(issue, number, item, pr, state) {
+    const { claim, tdd } = state;
+    const head = pr.head?.sha;
+    const blocked = (reason) => ({ removed: [], failures: [reason] });
+    if (item.status !== this.config.statuses.done)
+      return blocked(`Project issue #${issue} must be Done before task cleanup`);
+    if (tdd?.owner || state.pending || state.pendingClaim || state.pendingReview || state.fixPR)
+      return blocked(`Issue #${issue} has an active role owner or unfinished operation`);
+    if (
+      claim.issue !== issue ||
+      claim.branch !== issueBranch(issue) ||
+      (pr.number !== undefined && pr.number !== number) ||
+      pr.head?.ref !== claim.branch ||
+      !sameLogin(pr.head?.repo?.full_name, this.repo) ||
+      (pr.base?.repo?.full_name && !sameLogin(pr.base.repo.full_name, this.repo)) ||
+      !exactHead(head)
+    )
+      return blocked(
+        `Merged PR #${number} does not match the repository and claim for issue #${issue}`,
+      );
+    if (tdd) {
+      if (
+        tdd.issue !== issue ||
+        tdd.branch !== claim.branch ||
+        !claim.digest ||
+        tdd.acceptanceDigest !== claim.digest ||
+        tdd.phase !== "review" ||
+        tdd.head !== head
+      )
+        return blocked(`Merged PR #${number} does not match the accepted head for issue #${issue}`);
+    } else {
+      // Exempt deliveries have no Green handoff. Their recorded approval binds the head.
+      if (
+        state.triage?.tdd?.required !== false ||
+        !claim.digest ||
+        claim.digest !== state.triagedDigest
+      )
+        return blocked(`No accepted head is recorded for issue #${issue}`);
+      try {
+        const { state: reviewState } = await this.ledger.load(number);
+        if (
+          !reviewState.reviews?.some(
+            (review) =>
+              review.pr === number && review.head === head && review.verdict === "APPROVE",
+          )
+        )
+          return blocked(`Merged PR #${number} has no approval recorded for its exact head`);
+      } catch (error) {
+        return blocked(`Could not verify the accepted head of PR #${number}: ${error.message}`);
+      }
+    }
+    return cleanupTaskArtifacts({
+      issue,
+      branch: claim.branch,
+      head,
+      cwd: this.cwd,
+      repo: this.repo,
+    });
   }
 }
