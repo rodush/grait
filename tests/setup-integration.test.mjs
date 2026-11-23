@@ -4,7 +4,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { issueDigest } from "../scripts/lib/policy.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { setupFixture } from "./helpers/setup-fixture.mjs";
+import { bootstrapArguments, setupFixture } from "./helpers/setup-fixture.mjs";
 
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
 const pem = privateKey.export({ type: "pkcs8", format: "pem" });
@@ -44,7 +44,7 @@ const rules = [
   id: index + 1,
   name,
   source: "acme/service",
-  enforcement: name.includes("release") ? "active" : "disabled",
+  enforcement: name.toLowerCase().includes("release") ? "active" : "disabled",
 }));
 
 async function fixture(t, overrides = {}) {
@@ -144,6 +144,61 @@ test("setup reuses local Apps and Project then publishes a validated writer-auth
           ),
       ),
   );
+});
+
+test("fresh setup provisions delivery and release rules only", async (t) => {
+  const f = await fixture(t, { rules: [] });
+  const result = await f.run("setup.mjs", ["--repo", "acme/service", "--yes", "--no-browser"]);
+  assert.equal(result.status, 0);
+  const { calls } = await f.state();
+  const created = calls
+    .filter(({ path, method }) => path === "repos/acme/service/rulesets" && method === "POST")
+    .map(({ body }) => [body.name, body.enforcement]);
+  assert.deepEqual(created, [
+    ["Required delivery gates", "disabled"],
+    ["Release tag creation", "active"],
+    ["Immutable release tags", "active"],
+  ]);
+});
+
+test("repeating provisioning and activation leaves an operator-disabled legacy rule alone", async (t) => {
+  const legacy = rules.find(({ name }) => name === "Human merge authority");
+  assert.equal(legacy.enforcement, "disabled");
+  for (const [entry, args, enforcement] of [
+    ["bootstrap.mjs", bootstrapArguments, "disabled"],
+    ["activate.mjs", [], "active"],
+  ]) {
+    const f = await fixture(t, { remoteOwners: "* @operator\n" });
+    const result = await f.run(entry, args);
+    assert.equal(result.status, 0);
+    const { calls } = await f.state();
+    const writes = calls.filter(
+      ({ path, method }) => path.includes("/rulesets") && method !== "GET",
+    );
+    const legacyPath = `repos/acme/service/rulesets/${legacy.id}`;
+    assert.ok(
+      !writes.some(({ path, body }) => path === legacyPath || body?.name === legacy.name),
+      `${entry} must leave the existing legacy ruleset untouched`,
+    );
+    assert.deepEqual(
+      writes.map(({ body }) => [body.name, body.enforcement]),
+      [
+        ["Required delivery gates", enforcement],
+        ["Release tag creation", "active"],
+        ["Immutable release tags", "active"],
+      ],
+    );
+  }
+});
+
+test("activation succeeds when only the supported rulesets were staged", async (t) => {
+  const f = await fixture(t, {
+    remoteOwners: "* @operator\n",
+    rules: rules.filter(({ name }) => name !== "Human merge authority"),
+  });
+  const result = await f.run("activate.mjs");
+  assert.equal(result.status, 0);
+  assert.equal((await f.localState()).enabled, true);
 });
 
 test("a failed configuration push retries only the saved exact branch without reprovisioning", async (t) => {
