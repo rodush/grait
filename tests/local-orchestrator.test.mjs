@@ -182,7 +182,7 @@ function fixture({
       return response;
     },
   };
-  const newOrchestrator = () =>
+  const newOrchestrator = (orchestratorStore = store) =>
     new LocalOrchestrator({
       api,
       reviewerApi,
@@ -193,7 +193,7 @@ function fixture({
       writerId: 10101,
       reviewerId: 10102,
       config,
-      store,
+      store: orchestratorStore,
     });
   const assessment = (overrides = {}) => ({
     version: 1,
@@ -693,7 +693,7 @@ async function inTaskRepository(
     }).trim();
 
   await mkdir(cwd);
-  await mkdir(scratch, { recursive: true });
+  await mkdir(scratch, { recursive: true, mode: 0o700 });
   await writeFile(join(scratch, "notes"), "completed task scratch");
   const { dev, ino } = await stat(scratch);
   const scratchIdentity = { dev, ino };
@@ -802,6 +802,40 @@ test("local sync removes the completed squash-merged task and preserves active t
     assert.equal(repeated.status, f.config.statuses.done);
     assert.deepEqual(repeated.cleanup?.removed, []);
     assert.deepEqual(repeated.cleanup?.failures, []);
+  });
+});
+
+test("local sync removes only the completed issue's empty reservation directory", async (t) => {
+  await inTaskRepository(t, async ({ f, cwd, scratch, scratchIdentity }) => {
+    const directory = await SetupState.location(cwd);
+    const store = new SetupState(directory, { version: 1, repo, apps: {} });
+    const orchestrator = f.newOrchestrator(store);
+    await store.acquire();
+    try {
+      const ownershipRecord = await store.issueArtifactPath(1, "issue-scratch-owners", true);
+      await writeFile(ownershipRecord, JSON.stringify(scratchIdentity), { mode: 0o600 });
+      const reservations = join(directory, "issue-reservations");
+      const completedReservation = join(reservations, "issue-1");
+      const otherReservation = join(reservations, "issue-2");
+      await mkdir(completedReservation, { recursive: true, mode: 0o700 });
+      await mkdir(otherReservation, { mode: 0o700 });
+
+      const result = await orchestrator.sync(7);
+      assert.equal(result.status, f.config.statuses.done);
+      assert.deepEqual(result.cleanup.failures, []);
+      assert.equal(existsSync(scratch), false);
+      assert.ok((await stat(otherReservation)).isDirectory());
+      assert.equal(existsSync(completedReservation), false, "the empty reservation is removed");
+
+      const repeated = await orchestrator.sync(7);
+      assert.equal(repeated.status, f.config.statuses.done);
+      assert.deepEqual(repeated.cleanup.removed, []);
+      assert.deepEqual(repeated.cleanup.failures, []);
+      assert.equal(existsSync(completedReservation), false);
+      assert.ok((await stat(otherReservation)).isDirectory());
+    } finally {
+      await store.release();
+    }
   });
 });
 
