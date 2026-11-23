@@ -744,6 +744,32 @@ export class LocalOrchestrator {
         throw new Error(
           `Merged PR #${number} must target the default branch of ${this.repo} before issue #${issueNumber} can be marked Done`,
         );
+      const [owner, name] = this.repo.split("/");
+      const links = (
+        await this.api.graphql(
+          `query($owner: String!, $name: String!, $number: Int!) {
+            repository(owner: $owner, name: $name) {
+              pullRequest(number: $number) {
+                closingIssuesReferences(first: 2) {
+                  nodes { number repository { nameWithOwner } }
+                  pageInfo { hasNextPage }
+                }
+              }
+            }
+          }`,
+          { owner, name, number },
+        )
+      )?.repository?.pullRequest?.closingIssuesReferences;
+      if (
+        links?.pageInfo?.hasNextPage !== false ||
+        !Array.isArray(links.nodes) ||
+        links.nodes.length !== 1 ||
+        links.nodes[0]?.number !== issueNumber ||
+        !sameLogin(links.nodes[0].repository?.nameWithOwner, this.repo)
+      )
+        throw new Error(
+          `Merged PR #${number} must have exactly one GitHub-recognized closing reference to ${this.repo}#${issueNumber} before marking Done`,
+        );
       await this.project.move(item, this.config.statuses.done);
       state.completedPR = number;
       await this.ledger.save(issueNumber);

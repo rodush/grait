@@ -6,6 +6,7 @@ import {
   unlink,
   lstat,
   chmod,
+  readdir,
   realpath,
   writeFile,
 } from "node:fs/promises";
@@ -18,7 +19,7 @@ const roles = new Set(["writer", "reviewer", "release"]);
 const reservations = new Map();
 
 function releaseIssueReservations() {
-  for (const [path, owner] of reservations) {
+  for (const { path, owner } of reservations.values()) {
     try {
       const info = lstatSync(path);
       if (
@@ -272,35 +273,37 @@ export class SetupState {
   }
 
   async reserveIssue(issue) {
-    const path = await this.issueArtifactPath(issue, "issue-reservations", true);
-    const existing = reservations.get(path);
-    const info = existing && (await localInfo(path));
+    const directory = await this.issueArtifactPath(issue, "issue-reservations", true);
+    await artifactDirectory(directory, true);
+    const existing = reservations.get(directory);
+    const info = existing && (await localInfo(existing.path));
     if (
       info?.isFile() &&
-      info.size === existing.length &&
-      (await readFile(path, {
+      info.size === existing.owner.length &&
+      (await readFile(existing.path, {
         encoding: "utf8",
         flag: constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-      })) === existing
+      })) === existing.owner
     )
       return;
-    const owner = `PID ${process.pid}\n${randomBytes(16).toString("hex")}\n`;
-    try {
-      // Exclusive creation also blocks cleanup if recording the PID is interrupted.
-      await writeFile(path, owner, { flag: "wx", mode: 0o600 });
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      throw new Error(`Issue #${issue} already has a worker reservation at ${path}`);
-    }
+    const token = randomBytes(16).toString("hex");
+    const path = join(directory, `${process.pid}-${token}`);
+    const owner = `PID ${process.pid}\n${token}\n`;
+    // Exclusive creation also blocks cleanup if recording the PID is interrupted.
+    await writeFile(path, owner, { flag: "wx", mode: 0o600 });
     // The worker command releases the setup lock before awaiting the native session.
     // Drain on normal shutdown only so interruption leaves a reservation to reconcile.
     if (!reservations.size) process.once("beforeExit", releaseIssueReservations);
-    reservations.set(path, owner);
+    reservations.set(directory, { path, owner });
   }
 
   async hasIssueReservation(issue) {
-    const path = await this.issueArtifactPath(issue, "issue-reservations");
-    return Boolean(path && (await localInfo(path)));
+    const directory = await this.issueArtifactPath(issue, "issue-reservations");
+    const info = directory && (await localInfo(directory));
+    if (!info) return false;
+    // A marker from the old single-file layout still protects the issue.
+    if (!info.isDirectory()) return true;
+    return (await artifactDirectory(directory)) && (await readdir(directory)).length > 0;
   }
 
   async prepareIssueArtifacts(issue) {
