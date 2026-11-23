@@ -200,16 +200,7 @@ export async function cleanupTaskArtifacts({ issue, branch, head, cwd = process.
 // The CLI serializes mutations on the designated host. This class never invokes a model
 // or dispatches Actions; the signed-in native harness owns agent execution.
 export class LocalOrchestrator {
-  constructor({
-    api,
-    reviewerApi,
-    project,
-    repo,
-    writerId,
-    reviewerId,
-    config,
-    cwd = process.cwd(),
-  }) {
+  constructor({ api, reviewerApi, project, repo, writerId, reviewerId, config }) {
     if (!sameLogin(config.controllerRepository, repo) || !sameLogin(project.controller, repo))
       throw new Error("Repository and Project must be bound to this orchestrator");
     if (
@@ -228,7 +219,6 @@ export class LocalOrchestrator {
       writerId,
       reviewerId,
       config,
-      cwd,
     });
     this.ledger = new Ledger(api, repo, writerId);
   }
@@ -654,7 +644,6 @@ export class LocalOrchestrator {
       issue,
       branch: claim.branch,
       head,
-      cwd: this.cwd,
       repo: this.repo,
     });
   }
