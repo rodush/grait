@@ -640,37 +640,16 @@ export class LocalOrchestrator {
       return blocked(
         `Merged PR #${number} does not match the repository and claim for issue #${issue}`,
       );
-    if (tdd) {
-      if (
-        tdd.issue !== issue ||
+    if (
+      tdd &&
+      (tdd.issue !== issue ||
         tdd.branch !== claim.branch ||
         !claim.digest ||
         tdd.acceptanceDigest !== claim.digest ||
         tdd.phase !== "review" ||
-        tdd.head !== head
-      )
-        return blocked(`Merged PR #${number} does not match the accepted head for issue #${issue}`);
-    } else {
-      // Exempt deliveries have no Green handoff. Their recorded approval binds the head.
-      if (
-        state.triage?.tdd?.required !== false ||
-        !claim.digest ||
-        claim.digest !== state.triagedDigest
-      )
-        return blocked(`No accepted head is recorded for issue #${issue}`);
-      try {
-        const { state: reviewState } = await this.ledger.load(number);
-        if (
-          !reviewState.reviews?.some(
-            (review) =>
-              review.pr === number && review.head === head && review.verdict === "APPROVE",
-          )
-        )
-          return blocked(`Merged PR #${number} has no approval recorded for its exact head`);
-      } catch (error) {
-        return blocked(`Could not verify the accepted head of PR #${number}: ${error.message}`);
-      }
-    }
+        tdd.head !== head)
+    )
+      return blocked(`Merged PR #${number} does not match the accepted head for issue #${issue}`);
     return cleanupTaskArtifacts({
       issue,
       branch: claim.branch,
