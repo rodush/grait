@@ -88,7 +88,8 @@ function assertGuidance(output) {
   assert.match(output, /--acknowledge-unenforced-rules/);
   assert.match(output, /human/i);
   assert.match(output, /approv|merge/i);
-  for (const { name } of rules) assert.ok(output.includes(`"name": "${name}"`));
+  for (const name of ["Required delivery gates", "Release tag creation", "Immutable release tags"])
+    assert.ok(output.includes(`"name": "${name}"`));
   for (const expected of [
     '"required_approving_review_count": 1',
     '"require_code_owner_review": true',
@@ -130,10 +131,27 @@ test("bootstrap ruleset errors display canonical manual configuration and requir
   }
 });
 
+test("manual ruleset instructions omit legacy merge authority in setup and activation", async (t) => {
+  for (const [entry, args] of [
+    ["bootstrap.mjs", bootstrapArguments],
+    ["activate.mjs", []],
+  ]) {
+    const f = await fixture(t);
+    const result = await f.run(entry, args);
+    assert.notEqual(result.status, 0);
+    assertGuidance(result.output);
+    assert.doesNotMatch(result.output, /Human merge authority/i);
+  }
+});
+
 test("bootstrap can continue explicitly without rulesets after a failed list or partial write", async (t) => {
   for (const failure of [
     {},
-    { failurePath: "repos/acme/service/rulesets/2", failureMethod: "PUT", failureStatus: 422 },
+    {
+      failurePath: "repos/acme/service/rulesets/3",
+      failureMethod: "PUT",
+      failureStatus: 422,
+    },
   ]) {
     const f = await fixture(t, failure);
     const result = await f.run("bootstrap.mjs", [
@@ -210,7 +228,11 @@ test("setup --activate forwards explicit unenforced acknowledgement to activatio
 test("activation can acknowledge missing staged rulesets or a partial activation write", async (t) => {
   for (const failure of [
     { failureStatus: 0, rules: [] },
-    { failurePath: "repos/acme/service/rulesets/2", failureMethod: "PUT", failureStatus: 422 },
+    {
+      failurePath: "repos/acme/service/rulesets/3",
+      failureMethod: "PUT",
+      failureStatus: 422,
+    },
   ]) {
     const f = await fixture(t, failure);
     const result = await f.run("activate.mjs", ["--acknowledge-unenforced-rules"]);

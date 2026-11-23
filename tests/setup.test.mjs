@@ -57,6 +57,19 @@ test("setup planning discovers the target and human defaults without writes or b
   assert.ok(!result.output.includes("synthetic-setup-token"));
 });
 
+test("bootstrap preview plans delivery and release protections without legacy merge authority", async (t) => {
+  const f = await fixture(t);
+  const result = await f.run(
+    "bootstrap.mjs",
+    bootstrapArguments.filter((arg) => arg !== "--apply"),
+  );
+  assert.equal(result.status, 0);
+  assert.match(result.output, /Required delivery gates/);
+  assert.match(result.output, /Release tag.*immutab/i);
+  assert.doesNotMatch(result.output, /Human merge authority/i);
+  assert.deepEqual((await f.state()).calls, []);
+});
+
 test("setup gives a non-admin contributor a target-admin handoff before any mutation", async (t) => {
   const f = await fixture(t, {
     repository: {
