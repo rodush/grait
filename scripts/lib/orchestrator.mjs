@@ -649,7 +649,7 @@ export class LocalOrchestrator {
       throw new Error("Only Ready issues can be claimed");
     if (!(await this.availableStorySlots()))
       throw new Error(
-        "The five-story In Progress capacity is exhausted (including Review reservations)",
+        "Project story capacity is exhausted (including Review reservations)",
       );
     if (state.pendingClaim)
       throw new Error(
