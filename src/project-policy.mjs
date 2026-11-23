@@ -47,13 +47,14 @@ function validateVersion(version) {
     throw new Error("Provide a safe semantic policy version");
 }
 
-function updateManaged(original, body, version, { comment = false } = {}) {
+function updateManaged(original, body, version, { comment = false, prepend = false } = {}) {
   const start = comment ? "# grait:policy:start version=" : "<!-- grait:policy:start version=";
   const end = comment ? "# grait:policy:end" : "<!-- grait:policy:end -->";
   const opening = comment ? `${start}${version}` : `${start}${version} -->`;
   const managed = `${opening}\n${body.trim()}\n${end}`;
   // Every recognized marker must belong to exactly one complete, ordered section.
   const markerCount = (original.match(/grait:policy:(?:start|end)/g) || []).length;
+  if (!markerCount && prepend && original) return `${managed}\n\n${original}`;
   if (!markerCount)
     return `${original}${original && !original.endsWith("\n") ? "\n" : ""}${original ? "\n" : ""}${managed}\n`;
   const pattern = comment
@@ -62,7 +63,10 @@ function updateManaged(original, body, version, { comment = false } = {}) {
   const match = original.match(pattern);
   if (markerCount !== 2 || !match)
     throw new Error("Malformed or duplicate GRAIT managed policy boundaries");
-  return original.slice(0, match.index) + managed + original.slice(match.index + match[0].length);
+  const before = original.slice(0, match.index);
+  const after = original.slice(match.index + match[0].length);
+  if (prepend && before) return `${managed}\n\n${before}${after}`;
+  return before + managed + after;
 }
 
 function roleBody(role, instructions) {
@@ -154,21 +158,27 @@ export async function generateProjectArtifacts({
         /^# grait:policy:start version=[^\r\n]+\r?\n[\s\S]*?^# grait:policy:end$/m,
         "",
       );
-      // A pre-existing named role can contain arbitrary valid TOML strings and
-      // settings. Preserve it verbatim; its companion skill supplies the managed
-      // instructions without appending duplicate TOML keys or table definitions.
-      const userRole = /^\s*(?:name|description|developer_instructions)\s*=/m.test(unmanaged);
+      const nativeSettings = Object.keys(fields).length ? parseToml(unmanaged) : undefined;
+      // User-owned role metadata and instructions stay in their original fragment.
+      const userRole = nativeSettings
+        ? ["name", "description", "developer_instructions"].some((key) =>
+            Object.hasOwn(nativeSettings, key),
+          )
+        : /^\s*(?:name|description|developer_instructions)\s*=/m.test(unmanaged);
       const roleConfig = userRole
         ? instructions
             .split("\n")
             .map((line) => `# ${line}`)
             .join("\n")
         : `name = ${JSON.stringify(name)}\ndescription = ${JSON.stringify(definition.description)}\ndeveloper_instructions = ${JSON.stringify(instructions)}`;
-      const nativeSettings = !userRole && Object.keys(fields).length ? parseToml(unmanaged) : {};
       const profile = Object.entries(fields)
-        .filter(([key]) => !userRole && !Object.hasOwn(nativeSettings, key))
+        .filter(([key]) => !Object.hasOwn(nativeSettings, key))
         .map(([key, value]) => `${key} = ${JSON.stringify(value)}`);
-      emit(rolePath, [roleConfig, ...profile].join("\n"), { comment: true });
+      // Put synthesized settings before user TOML tables so they stay at the root.
+      emit(rolePath, [roleConfig, ...profile].join("\n"), {
+        comment: true,
+        prepend: profile.length > 0,
+      });
     } else {
       const path =
         harness === "claude" ? `.claude/agents/${name}.md` : `.github/agents/${name}.agent.md`;
