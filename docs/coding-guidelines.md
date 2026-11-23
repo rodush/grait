@@ -17,6 +17,7 @@ The coordinator and unrelated sub-agents must use separate worktrees. The tester
 ## Readability and consistency
 
 - Follow the language's established naming and formatting conventions. Choose descriptive names and explain intent when code alone cannot express it.
+- Don’t abbreviate for brevity; name functions by action and object, and values by domain and role. Avoid generic names unless they’re genuinely unambiguous in a tiny scope.
 - Use the repository's formatter and linter. `.editorconfig` supplies whitespace defaults; language tooling takes precedence for syntax formatting.
 - Keep configuration explicit, validate it at boundaries, and supply useful errors. Avoid hidden environment assumptions.
 - Never swallow errors or add silent success fallbacks. Preserve enough context for diagnosis without exposing credentials or private data.
