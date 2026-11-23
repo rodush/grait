@@ -31,6 +31,7 @@ const legacyScripts = new Set([
   "lib/orchestrator",
   "lib/policy",
   "lib/project",
+  "lib/role-profiles",
   "lib/ruleset-setup",
   "lib/runtime-resources",
   "lib/setup-apps",

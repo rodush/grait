@@ -3,12 +3,11 @@ import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { stringify as stringifyToml } from "smol-toml";
 import { validateConfig } from "./policy.mjs";
-
-const roles = ["orchestrator", "triage", "test", "implement", "review", "fix"];
+import { nativeRoleFields, resolveRoleProfile, workflowRoles } from "./role-profiles.mjs";
 const skillRoots = [".agents/skills", ".claude/skills", ".github/skills"];
 
 export function validateAgentDefinitions(definitions) {
-  if (!Array.isArray(definitions) || definitions.length !== roles.length)
+  if (!Array.isArray(definitions) || definitions.length !== workflowRoles.length)
     throw new Error("Define exactly one agent for each workflow role");
   const names = new Set();
   const foundRoles = new Set();
@@ -19,7 +18,7 @@ export function validateAgentDefinitions(definitions) {
       )
     )
       throw new Error("Agent definitions cannot override model, permissions, or harness settings");
-    if (!roles.includes(agent.role) || foundRoles.has(agent.role))
+    if (!workflowRoles.includes(agent.role) || foundRoles.has(agent.role))
       throw new Error("Unknown or duplicate agent role");
     if (!/^grait-[a-z0-9-]+$/.test(agent.name) || agent.name.length >= 64 || names.has(agent.name))
       throw new Error("Invalid or duplicate agent name");
@@ -53,10 +52,19 @@ export function readSkill(text, expectedName) {
 export function renderCodexConfig(template, config) {
   const setting = /^max_concurrent_threads_per_session = \d+$/m;
   if (!setting.test(template)) throw new Error("Codex template must define its worker limit");
-  return template.replace(
+  let rendered = template.replace(
     setting,
     `max_concurrent_threads_per_session = ${config.maxConcurrentWorkers}`,
   );
+  if (config.engine === "codex") {
+    const profile = config.roleProfiles?.codex?.orchestrator ?? {};
+    for (const [key, value] of Object.entries(nativeRoleFields("codex", profile))) {
+      const keySetting = new RegExp(`^([ \t]*${key}[ \t]*=[ \t]*).*$`, "m");
+      if (!keySetting.test(rendered)) throw new Error(`Codex template must define ${key}`);
+      rendered = rendered.replace(keySetting, (_line, prefix) => prefix + JSON.stringify(value));
+    }
+  }
+  return rendered;
 }
 
 export async function generateHarnessFiles(root) {
@@ -80,27 +88,21 @@ export async function generateHarnessFiles(root) {
     const text = await readFile(join(root, source), "utf8");
     readSkill(text, agent.skill);
     for (const directory of skillRoots) files.set(`${directory}/${agent.skill}/SKILL.md`, text);
-    const profile =
-      config.tdd?.profiles?.[
-        agent.role === "test"
-          ? "tester"
-          : ["implement", "fix"].includes(agent.role)
-            ? "implementer"
-            : ""
-      ] || {};
+    const roleFields = (engine) =>
+      nativeRoleFields(engine, resolveRoleProfile(config, engine, agent.role));
     const instructions = `Read AGENTS.md and apply the ${agent.skill} skill at ${source}. All AI roles run in this user-owned harness, using its native login and subscription. Follow docs/worktrees.md: separate unrelated tasks from the orchestrator; the tester and implementer for one issue take sequential exclusive ownership of the SAME branch and worktree at the committed handoff SHA. Never start their stages concurrently or silently branch a handoff from the default branch. Inherit harness permissions; a role grants no additional authority. Use npm run orchestrator for queue policy and npm run github for GitHub publishing.\n`;
     files.set(
       `.codex/agents/${agent.name}.toml`,
-      `# Generated from automation/agents.json; run npm run harness:generate.\n${stringifyToml({ name: agent.name, description: agent.description, developer_instructions: instructions, ...(config.engine === "codex" && profile.model ? { model: profile.model } : {}), ...(config.engine === "codex" && profile.reasoning ? { model_reasoning_effort: profile.reasoning } : agent.role === "orchestrator" ? { model_reasoning_effort: config.orchestrator.reasoning } : agent.role === "review" ? { model_reasoning_effort: "high" } : {}) })}`,
+      `# Generated from automation/agents.json; run npm run harness:generate.\n${stringifyToml({ name: agent.name, description: agent.description, developer_instructions: instructions, ...roleFields("codex") })}`,
     );
     const body = `<!-- Generated from automation/agents.json; run npm run harness:generate. -->\n\n${instructions}`;
     files.set(
       `.claude/agents/${agent.name}.md`,
-      `---\n${stringify({ name: agent.name, description: agent.description, ...(["triage", "review"].includes(agent.role) ? { isolation: "worktree" } : {}), ...(config.engine === "claude" && profile.model ? { model: profile.model } : {}), effort: config.engine === "claude" && profile.reasoning ? profile.reasoning : agent.role === "review" ? "high" : config.orchestrator.reasoning })}---\n\n${body}`,
+      `---\n${stringify({ name: agent.name, description: agent.description, ...(["triage", "review"].includes(agent.role) ? { isolation: "worktree" } : {}), ...roleFields("claude") })}---\n\n${body}`,
     );
     files.set(
       `.github/agents/${agent.name}.agent.md`,
-      `---\n${stringify({ name: agent.name, description: agent.description, "include-custom-instructions": true, ...(config.engine === "copilot" && profile.model ? { model: profile.model } : {}), reasoningEffort: config.engine === "copilot" && profile.reasoning ? profile.reasoning : agent.role === "review" ? "high" : config.orchestrator.reasoning })}---\n\n${body}`,
+      `---\n${stringify({ name: agent.name, description: agent.description, "include-custom-instructions": true, ...roleFields("copilot") })}---\n\n${body}`,
     );
   }
   return files;
