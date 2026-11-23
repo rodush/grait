@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { issueDigest } from "../scripts/lib/policy.mjs";
@@ -14,11 +15,17 @@ const orchestratorModule = await import(
   pathToFileURL(resolve(sourceRoot, "scripts/lib/orchestrator.mjs"))
 );
 const { LocalOrchestrator, cleanupTaskArtifacts } = orchestratorModule;
+const setupStateUrl = pathToFileURL(resolve(sourceRoot, "scripts/lib/setup-state.mjs"));
+const { SetupState } = await import(setupStateUrl);
 const baseConfig = JSON.parse(await readFile(resolve(sourceRoot, "workflow.config.json"), "utf8"));
 const repo = "acme/service";
 const head = "a".repeat(40);
 
-function fixture({ store, defaultBranch = "main" } = {}) {
+function fixture({
+  store,
+  defaultBranch = "main",
+  closingIssueNodes = [{ number: 1, repository: { nameWithOwner: repo } }],
+} = {}) {
   const config = {
     ...baseConfig,
     controllerRepository: repo,
@@ -84,6 +91,20 @@ function fixture({ store, defaultBranch = "main" } = {}) {
     },
   };
   const api = {
+    async graphql(query) {
+      if (!/\bclosingIssuesReferences\b/.test(query))
+        throw new Error("Unsupported local GraphQL query");
+      return {
+        repository: {
+          pullRequest: {
+            closingIssuesReferences: {
+              nodes: closingIssueNodes,
+              pageInfo: { hasNextPage: false },
+            },
+          },
+        },
+      };
+    },
     async request(path, options = {}) {
       requests.push({ path, ...options });
       const method = options.method || "GET";
@@ -612,6 +633,37 @@ test("local sync rejects a same-repository merge outside the default branch befo
   );
 });
 
+test("local sync rejects a default-branch merge without a GitHub-recognized closing reference", async (t) => {
+  await inTaskRepository(
+    t,
+    async ({ f, git, branch, head, worktree, scratch }) => {
+      f.item.status = f.config.statuses.review;
+      f.pull.body = "Example syntax: `Closes #1`";
+      const moves = f.moves.length;
+      const graphql = f.api.graphql.bind(f.api);
+      let returnedReferences;
+      f.api.graphql = async (...args) => {
+        const result = await graphql(...args);
+        returnedReferences = result.repository.pullRequest.closingIssuesReferences;
+        return result;
+      };
+
+      await assert.rejects(
+        () => f.orchestrator.sync(7),
+        "a raw body match without a GitHub closing reference must not complete the claim",
+      );
+      assert.deepEqual(returnedReferences, { nodes: [], pageInfo: { hasNextPage: false } });
+      assert.equal(f.moves.length, moves);
+      assert.equal(f.item.status, f.config.statuses.review);
+      assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, undefined);
+      assert.equal(await readFile(join(worktree, "delivery.txt"), "utf8"), "delivered content");
+      assert.equal(await readFile(join(scratch, "notes"), "utf8"), "completed task scratch");
+      assert.equal(git("rev-parse", `refs/heads/${branch}`), head);
+    },
+    { closingIssueNodes: [] },
+  );
+});
+
 test("local sync never completes unrelated or unclaimed issues", async () => {
   const f = fixture();
   f.pull.merged = true;
@@ -625,7 +677,7 @@ test("local sync never completes unrelated or unclaimed issues", async () => {
 async function inTaskRepository(
   t,
   run,
-  { foreignPath = false, defaultBranch = "main", tddRequired = false } = {},
+  { foreignPath = false, defaultBranch = "main", tddRequired = false, closingIssueNodes } = {},
 ) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "grait-task-cleanup-")));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -665,6 +717,7 @@ async function inTaskRepository(
   const reservations = new Set();
   const f = fixture({
     defaultBranch,
+    closingIssueNodes,
     store: {
       prepareIssueArtifacts() {},
       hasIssueReservation: (issue) => reservations.has(issue),
@@ -766,6 +819,93 @@ test("local claim prepares artifacts for the accepted issue", async () => {
 
   assert.deepEqual(prepared, [1]);
 });
+
+test(
+  "accepted commands can overlap for the same issue and retain cleanup protection until both exit",
+  { timeout: 10_000 },
+  async (t) => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "grait-reservation-test-")));
+    const directory = join(home, "setup");
+    const store = new SetupState(directory, { version: 1, repo, apps: {} });
+    const children = [];
+    t.after(async () => {
+      for (const { child } of children) child.kill();
+      await Promise.allSettled(children.map(({ closed }) => closed));
+      await rm(home, { recursive: true, force: true });
+    });
+
+    async function startAcceptedCommand() {
+      const child = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `
+          const [setupStateUrl, directory, repo] = process.argv.slice(1);
+          const { SetupState } = await import(setupStateUrl);
+          const store = new SetupState(directory, { version: 1, repo, apps: {} });
+          await store.acquire();
+          let preparationError;
+          try {
+            await store.prepareIssueArtifacts(1);
+          } catch (error) {
+            preparationError = error.message;
+          } finally {
+            await store.release();
+          }
+          process.send({ preparationError });
+          for await (const chunk of process.stdin) {
+            // Stay active after releasing the setup lock until the test closes stdin.
+          }
+          process.disconnect();
+        `,
+          setupStateUrl.href,
+          directory,
+          repo,
+        ],
+        { cwd: home, env: { HOME: home }, stdio: ["pipe", "ignore", "inherit", "ipc"] },
+      );
+      const closed = once(child, "close");
+      children.push({ child, closed });
+      const [{ preparationError }] = await Promise.race([
+        once(child, "message"),
+        closed.then(([code, signal]) => {
+          throw new Error(
+            `Command stopped before reporting preparation (code ${code}, signal ${signal})`,
+          );
+        }),
+      ]);
+      async function finish() {
+        child.stdin.end();
+        const [code, signal] = await closed;
+        if (code !== 0)
+          throw new Error(`Command did not exit normally (code ${code}, signal ${signal})`);
+      }
+      if (preparationError !== undefined) await finish();
+      return { preparationError, finish };
+    }
+
+    const worker = await startAcceptedCommand();
+    assert.equal(worker.preparationError, undefined, "the worker prepares the accepted issue");
+    assert.equal(await store.hasIssueReservation(1), true);
+    const publisher = await startAcceptedCommand();
+    assert.equal(
+      publisher.preparationError,
+      undefined,
+      "the publisher can prepare the same accepted issue while the worker is active",
+    );
+    assert.equal(await store.hasIssueReservation(1), true);
+
+    await worker.finish();
+    assert.equal(
+      await store.hasIssueReservation(1),
+      true,
+      "the publisher still protects the issue",
+    );
+    await publisher.finish();
+    assert.equal(await store.hasIssueReservation(1), false);
+  },
+);
 
 for (const handoff of ["TDD-exempt claim", "released exact-head TDD handoff"]) {
   test(`local sync waits for a task reservation to release after a ${handoff}`, async (t) => {
