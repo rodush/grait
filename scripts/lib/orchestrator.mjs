@@ -648,9 +648,7 @@ export class LocalOrchestrator {
     if (item.status !== this.config.statuses.ready)
       throw new Error("Only Ready issues can be claimed");
     if (!(await this.availableStorySlots()))
-      throw new Error(
-        "Project story capacity is exhausted (including Review reservations)",
-      );
+      throw new Error("Project story capacity is exhausted (including Review reservations)");
     if (state.pendingClaim)
       throw new Error(
         "An earlier claim has an uncertain result; reconcile its Project status before retrying",
