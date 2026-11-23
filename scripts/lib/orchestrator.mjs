@@ -303,6 +303,9 @@ export async function cleanupTaskArtifacts({
         );
     }
 
+    if (branchRef)
+      await checkBranchUse(git, worktrees, common, branch, targetExists ? target : undefined);
+
     const scratchExists = await checkScratch(
       scratch,
       scratchIdentity,
