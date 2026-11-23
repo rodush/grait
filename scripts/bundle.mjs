@@ -38,6 +38,12 @@ async function files(directory, prefix = "") {
 // Imports and subprocess adapters reuse this file without package siblings.
 const { version } = JSON.parse(await readFile(join(root, "package.json"), "utf8"));
 const policy = await readFile(join(root, "automation/policy/shared.md"), "utf8");
+const notices = await Promise.all(
+  ["smol-toml", "yaml"].map(async (name) => {
+    const license = await readFile(join(root, "node_modules", name, "LICENSE"), "utf8");
+    return `/*! ${name}\n${license.trimEnd().replaceAll("*/", "* /")}\n*/`;
+  }),
+);
 const result = await build({
   absWorkingDir: root,
   entryPoints: ["src/cli.mjs"],
@@ -47,7 +53,10 @@ const result = await build({
   format: "esm",
   // Bundled CommonJS dependencies can still load Node built-ins from the ESM entry.
   banner: {
-    js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
+    js: [
+      ...notices,
+      'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
+    ].join("\n"),
   },
   target: "node24",
   minify: true,
