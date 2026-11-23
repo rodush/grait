@@ -45,7 +45,7 @@ npm run check
 
 Generation applies the value to `agents.max_concurrent_threads_per_session` in `.codex/config.toml`. Change `workflow.config.json` rather than editing that generated setting. Copilot worker launches also receive the configured value; all harnesses follow the orchestrator's worker cap, subject to their native limits. Start a new harness session to use the updated configuration.
 
-Slots are shared across triage, testing, implementation, fixes, and review. Five slots allow active work on up to five independent stories when available. Each story's tester and implementer still take sequential exclusive ownership of its branch and worktree. The project-wide ceiling remains five In Progress stories, and existing Review work still blocks new claims.
+Worker slots are shared across triage, testing, implementation, fixes, and review. Each active review uses one worker, with at most one active reviewer per story. Each story's tester and implementer take sequential exclusive ownership of its branch and worktree. The independent Project-wide ceiling is [five occupied story slots](workflow.md#claiming-and-delivery), shared by In Progress stories and Review reservations.
 
 ### Configure Ready queue capacity
 

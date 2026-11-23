@@ -57,6 +57,8 @@ function fixture({
   const blockers = new Map([[1, []]]);
   const requests = [];
   const publishedReviews = [];
+  const linkedReviewPulls = new Map();
+  const reviewPulls = new Map();
   const moves = [];
   let commentId = 100;
   const item = {
@@ -91,7 +93,21 @@ function fixture({
     },
   };
   const api = {
-    async graphql(query) {
+    async graphql(query, { owner, name, number } = {}) {
+      if (/\bclosedByPullRequestsReferences\b/.test(query)) {
+        const nodes = linkedReviewPulls.get(`${owner}/${name}#${number}`) || [];
+        return {
+          repository: {
+            issue: {
+              closedByPullRequestsReferences: {
+                totalCount: nodes.length,
+                nodes: nodes.slice(0, 2),
+                pageInfo: { hasNextPage: nodes.length > 2 },
+              },
+            },
+          },
+        };
+      }
       if (!/\bclosingIssuesReferences\b/.test(query))
         throw new Error("Unsupported local GraphQL query");
       return {
@@ -111,6 +127,7 @@ function fixture({
       const issueMatch = path.match(/^repos\/acme\/service\/issues\/(\d+)$/);
       if (method === "GET" && issueMatch) return issues.get(Number(issueMatch[1]));
       if (method === "GET" && path === `repos/${repo}/pulls/7`) return pull;
+      if (method === "GET" && reviewPulls.has(path)) return reviewPulls.get(path).pull;
       if (method === "GET" && path === `repos/${repo}`)
         return { full_name: repo, default_branch: defaultBranch };
       if (path.endsWith("/permission"))
@@ -162,6 +179,13 @@ function fixture({
           },
         ];
       if (path.endsWith("/pulls/7/reviews")) return publishedReviews;
+      const pullListing = path.match(/^(.*\/pulls\/\d+)\/(reviews|comments)$/);
+      if (pullListing) {
+        const evidence = reviewPulls.get(pullListing[1]);
+        if (pullListing[2] === "comments" && evidence) return evidence.findings;
+        if (evidence?.reviews instanceof Error) throw evidence.reviews;
+        if (evidence) return evidence.reviews;
+      }
       throw new Error(`Unsupported local API listing: ${path}`);
     },
   };
@@ -239,6 +263,8 @@ function fixture({
     moves,
     comments,
     publishedReviews,
+    linkedReviewPulls,
+    reviewPulls,
     assessment,
     review,
   };
@@ -1260,64 +1286,198 @@ test("converting a reviewed PR to draft must acquire capacity before returning I
   assert.equal(f.item.status, f.config.statuses.inProgress);
 });
 
-test("new claims wait until every unarchived Review story is finished", async () => {
-  const reviewStories = [
-    { content: { __typename: "Issue", number: 20, repository: { nameWithOwner: repo } } },
-    {
-      content: {
-        __typename: "Issue",
-        number: 21,
-        repository: { nameWithOwner: "another/repository" },
-      },
+function addInProgressStories(f, count) {
+  for (let index = 0; index < count; index++) {
+    f.project.items.push({
+      id: `busy-${index}`,
+      status: f.config.statuses.inProgress,
+      content: { __typename: "Issue", number: 30 + index, repository: { nameWithOwner: repo } },
+    });
+  }
+}
+
+function addReviewStory(
+  f,
+  {
+    number = 20,
+    repository = "another/repository",
+    currentHead = head,
+    reviews = [],
+    includePull = true,
+    findings = [],
+  } = {},
+) {
+  const item = {
+    id: `review-${number}`,
+    status: f.config.statuses.review,
+    content: { __typename: "Issue", number, repository: { nameWithOwner: repository } },
+  };
+  f.project.items.push(item);
+  const pullNumber = number + 100;
+  const nodes = includePull
+    ? [
+        {
+          number: pullNumber,
+          state: "OPEN",
+          isDraft: false,
+          headRefOid: currentHead,
+          repository: { nameWithOwner: repository },
+          reviewThreads: {
+            nodes: findings.map((finding) => ({
+              isResolved: false,
+              comments: { nodes: [finding] },
+            })),
+            pageInfo: { hasNextPage: false },
+          },
+        },
+      ]
+    : [];
+  f.linkedReviewPulls.set(`${repository}#${number}`, nodes);
+  const evidence = {
+    pull: {
+      number: pullNumber,
+      state: "open",
+      draft: false,
+      head: { sha: currentHead },
     },
-    { content: { __typename: "DraftIssue", title: "Draft awaiting review" } },
-    { content: null },
-    {
-      content: {
-        __typename: "Issue",
-        number: 22,
-        labels: [{ name: "agent:paused" }],
-        repository: { nameWithOwner: repo },
-      },
-    },
-    {
-      content: {
-        __typename: "Issue",
-        number: 23,
-        labels: [{ name: "agent:needs-human" }],
-        repository: { nameWithOwner: repo },
-      },
-    },
-  ];
-  for (const story of reviewStories) {
+    reviews,
+    findings,
+  };
+  if (includePull) f.reviewPulls.set(`repos/${repository}/pulls/${pullNumber}`, evidence);
+  return { item, nodes, evidence };
+}
+
+function reviewDecision(state, reviewer, { id = reviewer, commit = head, body = "" } = {}) {
+  return {
+    id,
+    user: { id: reviewer, login: `reviewer-${reviewer}`, type: reviewer === 1 ? "Bot" : "User" },
+    state,
+    commit_id: commit,
+    submitted_at: new Date(Date.UTC(2026, 10, 23, 19, 0, id)).toISOString(),
+    body,
+  };
+}
+
+test("an approval at the current head frees a story slot even with unresolved findings", async () => {
+  for (const unresolvedCount of [0, 2]) {
     const f = fixture();
     await f.orchestrator.ready(1, f.assessment());
-    f.project.items.push({ id: "review-story", status: f.config.statuses.review, ...story });
-    const before = f.requests.length;
-    const moves = f.moves.length;
-    await assert.rejects(() => f.orchestrator.claim(1), /review/i);
-    assert.equal(f.item.status, f.config.statuses.ready);
-    assert.equal(f.moves.length, moves);
-    assert.ok(
-      !f.requests.slice(before).some(({ method }) => ["POST", "PATCH", "PUT"].includes(method)),
-      "Finish-before-start must reject before recording claim intent or moving the Project item",
-    );
+    addInProgressStories(f, 4);
+    const { item } = addReviewStory(f, {
+      reviews: [reviewDecision("APPROVED", unresolvedCount === 0 ? 1 : 2)],
+      findings: Array.from({ length: unresolvedCount }, (_, index) => ({
+        id: index + 1,
+        body: `Unresolved finding ${index + 1}`,
+      })),
+    });
+    const claim = await f.orchestrator.claim(1).catch((error) => error.message);
+    assert.equal(claim.issue, 1, `Expected claim with ${unresolvedCount} open findings: ${claim}`);
+    assert.equal(item.status, f.config.statuses.review);
+    assert.equal(f.item.status, f.config.statuses.inProgress);
   }
 });
 
-test("Review work is reported before the capacity guard when a new claim is blocked", async () => {
+test("a pending, unverifiable, or rejected review reserves one slot without leaving Review", async () => {
+  const cases = [
+    ["first approval pending", { reviews: [reviewDecision("COMMENTED", 1)] }],
+    ["pull request missing", { includePull: false }],
+    ["review listing unavailable", { reviews: new Error("Review listing unavailable") }],
+    [
+      "request for changes despite approval",
+      {
+        reviews: [
+          reviewDecision("APPROVED", 1),
+          reviewDecision("CHANGES_REQUESTED", 2, { body: "P1 first finding\nP1 second finding" }),
+        ],
+        findings: [{ id: 1 }, { id: 2 }, { id: 3 }],
+      },
+    ],
+  ];
+  for (const [name, review] of cases) {
+    for (const busyCount of [3, 4]) {
+      const f = fixture();
+      await f.orchestrator.ready(1, f.assessment());
+      addInProgressStories(f, busyCount);
+      const { item } = addReviewStory(f, review);
+      const before = f.requests.length;
+      if (busyCount === 3) {
+        const claim = await f.orchestrator.claim(1).catch((error) => error.message);
+        assert.equal(claim.issue, 1, `Expected one Review reservation for ${name}: ${claim}`);
+        assert.equal(f.item.status, f.config.statuses.inProgress);
+      } else {
+        await assert.rejects(() => f.orchestrator.claim(1), undefined, name);
+        assert.equal(f.item.status, f.config.statuses.ready);
+        assert.ok(
+          !f.requests.slice(before).some(({ method }) => ["POST", "PATCH", "PUT"].includes(method)),
+          "A full Project must reject before recording claim intent or moving the Project item",
+        );
+      }
+      assert.equal(item.status, f.config.statuses.review);
+    }
+  }
+});
+
+test("an unreadable or draft Project story reserves one slot", async () => {
+  for (const content of [null, { __typename: "DraftIssue", title: "Draft awaiting review" }]) {
+    for (const busyCount of [3, 4]) {
+      const f = fixture();
+      await f.orchestrator.ready(1, f.assessment());
+      addInProgressStories(f, busyCount);
+      f.project.items.push({ id: "review-story", status: f.config.statuses.review, content });
+      if (busyCount === 3) {
+        const claim = await f.orchestrator.claim(1).catch((error) => error.message);
+        assert.equal(claim.issue, 1, `Expected an unverified story to occupy one slot: ${claim}`);
+      } else {
+        await assert.rejects(() => f.orchestrator.claim(1));
+        assert.equal(f.item.status, f.config.statuses.ready);
+      }
+    }
+  }
+});
+
+test("a fresh push invalidates earlier approval and the next claim reads the new verdict", async () => {
   const f = fixture();
   await f.orchestrator.ready(1, f.assessment());
-  f.project.items.push({ id: "review-story", status: f.config.statuses.review, content: null });
-  f.project.items.push(
-    ...Array.from({ length: 5 }, (_, index) => ({
-      id: `busy-${index}`,
-      status: f.config.statuses.inProgress,
-      content: { __typename: "Issue" },
-    })),
-  );
-  await assert.rejects(() => f.orchestrator.claim(1), /review/i);
+  addInProgressStories(f, 4);
+  const newHead = "b".repeat(40);
+  const { evidence, item } = addReviewStory(f, {
+    currentHead: newHead,
+    reviews: [reviewDecision("APPROVED", 1)],
+  });
+  await assert.rejects(() => f.orchestrator.claim(1));
   assert.equal(f.item.status, f.config.statuses.ready);
+  evidence.reviews.push(reviewDecision("APPROVED", 1, { id: 2, commit: newHead }));
+  const claim = await f.orchestrator.claim(1).catch((error) => error.message);
+  assert.equal(claim.issue, 1, `Expected claim to see approval on the new head: ${claim}`);
+  assert.equal(item.status, f.config.statuses.review);
+});
+
+test("the latest decisive review from each reviewer takes effect at the current head", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  addInProgressStories(f, 4);
+  addReviewStory(f, {
+    reviews: [
+      reviewDecision("CHANGES_REQUESTED", 1),
+      reviewDecision("APPROVED", 1, { id: 2 }),
+      reviewDecision("COMMENTED", 1, { id: 3 }),
+      reviewDecision("DISMISSED", 2, { id: 4 }),
+      reviewDecision("CHANGES_REQUESTED", 3, { id: 5, commit: "b".repeat(40) }),
+    ],
+  });
+  const claim = await f.orchestrator.claim(1).catch((error) => error.message);
+  assert.equal(claim.issue, 1, `Expected current effective approval to free capacity: ${claim}`);
+});
+
+test("claim counts one Review story once at the five-story boundary", async () => {
+  const f = fixture();
+  await f.orchestrator.ready(1, f.assessment());
+  addInProgressStories(f, 3);
+  const { item } = addReviewStory(f);
+  f.project.items.push({ ...item, id: "duplicate-review-story" });
+  const claim = await f.orchestrator.claim(1).catch((error) => error.message);
+  assert.equal(claim.issue, 1, `Expected one reservation for the duplicate story: ${claim}`);
+  assert.equal(item.status, f.config.statuses.review);
 });
 
 test("archived Review stories and explicit PR items do not block a new story claim", async () => {

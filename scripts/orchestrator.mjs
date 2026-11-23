@@ -162,10 +162,9 @@ export async function orchestratorMain() {
           );
         if (decision.action === "rethink") {
           const item = context.project.find(context.repo, number);
-          const { availableSlots } = await import("./lib/policy.mjs");
           if (
             item.status !== context.config.statuses.inProgress &&
-            !availableSlots(context.project.items, context.config)
+            !(await orchestrator.availableStorySlots(item))
           )
             throw new Error("Redesign is waiting for In Progress capacity");
           await context.project.move(item, context.config.statuses.inProgress);
