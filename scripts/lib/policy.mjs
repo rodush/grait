@@ -1,6 +1,6 @@
 import { validateTddConfig, validateTddExemption } from "./tdd.mjs";
 import { createHash } from "node:crypto";
-import { validateRoleProfiles } from "../../src/role-profiles.mjs";
+import { validateRoleProfiles } from "./role-profiles.mjs";
 
 export const digest = (value) => createHash("sha256").update(value).digest("hex");
 export const issueDigest = (issue) => digest(JSON.stringify([issue.title, issue.body || ""]));

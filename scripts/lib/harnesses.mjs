@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { parse, stringify } from "yaml";
 import { stringify as stringifyToml } from "smol-toml";
 import { validateConfig } from "./policy.mjs";
-import { nativeRoleFields, resolveRoleProfile, workflowRoles } from "../../src/role-profiles.mjs";
+import { nativeRoleFields, resolveRoleProfile, workflowRoles } from "./role-profiles.mjs";
 const skillRoots = [".agents/skills", ".claude/skills", ".github/skills"];
 
 export function validateAgentDefinitions(definitions) {

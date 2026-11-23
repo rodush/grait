@@ -7,7 +7,7 @@ import { command, withoutCredentials, requireSubscription } from "./lib/setup-pr
 import { LocalOrchestrator } from "./lib/orchestrator.mjs";
 import { localContext } from "./lib/local-context.mjs";
 import { harnessArguments } from "./lib/harness-runtime.mjs";
-import { resolveRoleProfile } from "../src/role-profiles.mjs";
+import { resolveRoleProfile } from "./lib/role-profiles.mjs";
 import {
   createHandoff,
   assertRoleChanges,

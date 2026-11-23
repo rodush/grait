@@ -3,7 +3,11 @@ import { parse as parseToml } from "smol-toml";
 
 import { packageResource } from "./resources.mjs";
 import { applyRoleFrontmatter } from "./role-frontmatter.mjs";
-import { nativeRoleFields, resolveRoleProfile, validateRoleProfiles } from "./role-profiles.mjs";
+import {
+  nativeRoleFields,
+  resolveRoleProfile,
+  validateRoleProfiles,
+} from "../scripts/lib/role-profiles.mjs";
 
 const policyUrl = packageResource("automation/policy/shared.md");
 const roles = {

@@ -1,4 +1,4 @@
-import { workflowRoles } from "../../src/role-profiles.mjs";
+import { workflowRoles } from "./role-profiles.mjs";
 
 // CLI arguments are kept separate from GitHub publishing credentials and from
 // native permission controls. No engine receives automatic approval-bypass flags.
