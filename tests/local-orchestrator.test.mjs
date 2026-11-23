@@ -1,20 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { issueDigest } from "../scripts/lib/policy.mjs";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const sourceRoot =
   process.env.GRAIT_TEST_SOURCE_ROOT || fileURLToPath(new URL("..", import.meta.url));
-const { LocalOrchestrator } = await import(
+const orchestratorModule = await import(
   pathToFileURL(resolve(sourceRoot, "scripts/lib/orchestrator.mjs"))
 );
+const { LocalOrchestrator, cleanupTaskArtifacts } = orchestratorModule;
+const setupStateUrl = pathToFileURL(resolve(sourceRoot, "scripts/lib/setup-state.mjs"));
+const { SetupState } = await import(setupStateUrl);
 const baseConfig = JSON.parse(await readFile(resolve(sourceRoot, "workflow.config.json"), "utf8"));
 const repo = "acme/service";
 const head = "a".repeat(40);
 
-function fixture() {
+function fixture({
+  store,
+  defaultBranch = "main",
+  closingIssueNodes = [{ number: 1, repository: { nameWithOwner: repo } }],
+} = {}) {
   const config = {
     ...baseConfig,
     controllerRepository: repo,
@@ -35,8 +46,8 @@ function fixture() {
     title: "feat: deliver outcome",
     body: "Closes #1",
     user: { login: "writer[bot]", id: 10101, type: "Bot" },
-    head: { sha: head, repo: { full_name: repo } },
-    base: { repo: { full_name: repo } },
+    head: { ref: "agent/issue-1", sha: head, repo: { full_name: repo } },
+    base: { ref: defaultBranch, repo: { full_name: repo } },
     state: "open",
     merged: false,
     draft: false,
@@ -80,12 +91,28 @@ function fixture() {
     },
   };
   const api = {
+    async graphql(query) {
+      if (!/\bclosingIssuesReferences\b/.test(query))
+        throw new Error("Unsupported local GraphQL query");
+      return {
+        repository: {
+          pullRequest: {
+            closingIssuesReferences: {
+              nodes: closingIssueNodes,
+              pageInfo: { hasNextPage: false },
+            },
+          },
+        },
+      };
+    },
     async request(path, options = {}) {
       requests.push({ path, ...options });
       const method = options.method || "GET";
       const issueMatch = path.match(/^repos\/acme\/service\/issues\/(\d+)$/);
       if (method === "GET" && issueMatch) return issues.get(Number(issueMatch[1]));
       if (method === "GET" && path === `repos/${repo}/pulls/7`) return pull;
+      if (method === "GET" && path === `repos/${repo}`)
+        return { full_name: repo, default_branch: defaultBranch };
       if (path.endsWith("/permission"))
         return { permission: path.includes("outsider") ? "read" : "write" };
       if (method === "POST" && /\/issues\/\d+\/comments$/.test(path)) {
@@ -155,7 +182,7 @@ function fixture() {
       return response;
     },
   };
-  const newOrchestrator = () =>
+  const newOrchestrator = (orchestratorStore = store) =>
     new LocalOrchestrator({
       api,
       reviewerApi,
@@ -166,6 +193,7 @@ function fixture() {
       writerId: 10101,
       reviewerId: 10102,
       config,
+      store: orchestratorStore,
     });
   const assessment = (overrides = {}) => ({
     version: 1,
@@ -570,22 +598,70 @@ test("conflicting reviews surface the operator action on the linked issue and pr
   assert.equal(f.publishedReviews.length, 1);
 });
 
-test("local sync keeps drafts active, sends ready PRs to Review, and completes only merged work", async () => {
-  const f = fixture();
-  await f.orchestrator.ready(1, f.assessment());
-  await f.orchestrator.claim(1);
-  f.pull.draft = true;
-  await f.orchestrator.sync(7);
-  assert.equal(f.item.status, f.config.statuses.inProgress);
-  f.pull.draft = false;
-  await f.orchestrator.sync(7);
-  assert.equal(f.item.status, f.config.statuses.review);
-  f.pull.state = "closed";
-  await f.orchestrator.sync(7);
-  assert.notEqual(f.item.status, f.config.statuses.done);
-  f.pull.merged = true;
-  await f.orchestrator.sync(7);
-  assert.equal(f.item.status, f.config.statuses.done);
+test("local sync keeps drafts active, sends ready PRs to Review, and completes only merged work", async (t) => {
+  await inTaskRepository(t, async ({ f }) => {
+    Object.assign(f.pull, { merged: false, state: "open", draft: true });
+    await f.orchestrator.sync(7);
+    assert.equal(f.item.status, f.config.statuses.inProgress);
+    f.pull.draft = false;
+    await f.orchestrator.sync(7);
+    assert.equal(f.item.status, f.config.statuses.review);
+    f.pull.state = "closed";
+    await f.orchestrator.sync(7);
+    assert.notEqual(f.item.status, f.config.statuses.done);
+    f.pull.merged = true;
+    await f.orchestrator.sync(7);
+    assert.equal(f.item.status, f.config.statuses.done);
+  });
+});
+
+test("local sync rejects a same-repository merge outside the default branch before completion", async (t) => {
+  await inTaskRepository(
+    t,
+    async ({ f, git, branch, head, worktree, scratch }) => {
+      f.item.status = f.config.statuses.review;
+      f.pull.base.ref = "main";
+
+      await assert.rejects(() => f.orchestrator.sync(7), /default.branch/i);
+      assert.equal(f.item.status, f.config.statuses.review);
+      assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, undefined);
+      assert.ok(existsSync(worktree));
+      assert.ok(existsSync(scratch));
+      assert.equal(git("rev-parse", `refs/heads/${branch}`), head);
+    },
+    { defaultBranch: "delivery" },
+  );
+});
+
+test("local sync rejects a default-branch merge without a GitHub-recognized closing reference", async (t) => {
+  await inTaskRepository(
+    t,
+    async ({ f, git, branch, head, worktree, scratch }) => {
+      f.item.status = f.config.statuses.review;
+      f.pull.body = "Example syntax: `Closes #1`";
+      const moves = f.moves.length;
+      const graphql = f.api.graphql.bind(f.api);
+      let returnedReferences;
+      f.api.graphql = async (...args) => {
+        const result = await graphql(...args);
+        returnedReferences = result.repository.pullRequest.closingIssuesReferences;
+        return result;
+      };
+
+      await assert.rejects(
+        () => f.orchestrator.sync(7),
+        "a raw body match without a GitHub closing reference must not complete the claim",
+      );
+      assert.deepEqual(returnedReferences, { nodes: [], pageInfo: { hasNextPage: false } });
+      assert.equal(f.moves.length, moves);
+      assert.equal(f.item.status, f.config.statuses.review);
+      assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, undefined);
+      assert.equal(await readFile(join(worktree, "delivery.txt"), "utf8"), "delivered content");
+      assert.equal(await readFile(join(scratch, "notes"), "utf8"), "completed task scratch");
+      assert.equal(git("rev-parse", `refs/heads/${branch}`), head);
+    },
+    { closingIssueNodes: [] },
+  );
 });
 
 test("local sync never completes unrelated or unclaimed issues", async () => {
@@ -596,6 +672,452 @@ test("local sync never completes unrelated or unclaimed issues", async () => {
   f.pull.body = "No closing reference";
   await assert.rejects(() => f.orchestrator.sync(7));
   assert.notEqual(f.item.status, f.config.statuses.done);
+});
+
+async function inTaskRepository(
+  t,
+  run,
+  { foreignPath = false, defaultBranch = "main", tddRequired = false, closingIssueNodes } = {},
+) {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "grait-task-cleanup-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const cwd = join(root, "service");
+  const worktree = join(root, foreignPath ? "operator-checkouts" : "service-worktrees", "issue-1");
+  const scratchRoot = join(cwd, ".git", "grait-setup", "issue-scratch");
+  const scratch = join(scratchRoot, "issue-1");
+  const branch = "agent/issue-1";
+  const git = (...args) =>
+    execFileSync("git", ["-C", cwd, ...args], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim();
+
+  await mkdir(cwd);
+  await mkdir(scratch, { recursive: true, mode: 0o700 });
+  await writeFile(join(scratch, "notes"), "completed task scratch");
+  const { dev, ino } = await stat(scratch);
+  const scratchIdentity = { dev, ino };
+  git("init", "--initial-branch=main");
+  git("config", "user.name", "Cleanup Test");
+  git("config", "user.email", "cleanup@example.test");
+  git("config", "commit.gpgsign", "false");
+  git("remote", "add", "origin", `https://github.com/${repo}.git`);
+  git("commit", "--allow-empty", "-m", "Base");
+  git("commit", "--allow-empty", "-m", "Main history");
+  await mkdir(resolve(worktree, ".."), { recursive: true });
+  git("worktree", "add", "-b", branch, worktree);
+  await writeFile(join(worktree, "delivery.txt"), "delivered content");
+  git("-C", worktree, "add", "delivery.txt");
+  git("-C", worktree, "commit", "-m", "Deliver issue");
+  const head = git("-C", worktree, "rev-parse", "HEAD");
+  git("merge", "--squash", branch);
+  git("commit", "-m", "Squash merge issue");
+  assert.ok(!git("rev-list", "main").split("\n").includes(head));
+
+  const reservations = new Set();
+  const f = fixture({
+    defaultBranch,
+    closingIssueNodes,
+    store: {
+      prepareIssueArtifacts() {},
+      hasIssueReservation: (issue) => reservations.has(issue),
+      issueScratchIdentity: (issue) => (issue === 1 ? scratchIdentity : null),
+    },
+  });
+  await f.orchestrator.ready(
+    1,
+    f.assessment({
+      tdd: {
+        required: tddRequired,
+        reason: tddRequired ? null : "Fixture uses a TDD-exempt claim",
+      },
+    }),
+  );
+  await f.orchestrator.claim(1);
+  Object.assign(f.pull, {
+    merged: true,
+    state: "closed",
+    merge_commit_sha: git("rev-parse", "main"),
+  });
+  Object.assign(f.pull.head, { ref: branch, sha: head });
+
+  const previousCwd = process.cwd();
+  process.chdir(cwd);
+  try {
+    await run({
+      f,
+      git,
+      cwd,
+      branch,
+      head,
+      worktree,
+      scratch,
+      scratchRoot,
+      scratchIdentity,
+      reservations,
+    });
+  } finally {
+    process.chdir(previousCwd);
+  }
+}
+
+test("local sync removes the completed squash-merged task and preserves active task artifacts", async (t) => {
+  await inTaskRepository(t, async ({ f, git, cwd, branch, worktree, scratch, scratchRoot }) => {
+    const active = resolve(worktree, "..", "issue-2");
+    const activeScratch = join(scratchRoot, "issue-2");
+    const shared = resolve(scratchRoot, "..", "operator-state");
+    git("worktree", "add", "-b", "agent/issue-2", active, "main");
+    await mkdir(activeScratch);
+    await writeFile(join(activeScratch, "notes"), "active task scratch");
+    await writeFile(shared, "shared operator data");
+    const activeItem = await f.project.add({ number: 2 }, repo);
+    await f.project.move(activeItem, f.config.statuses.review);
+
+    const move = f.project.move.bind(f.project);
+    f.project.move = async (item, status) => {
+      assert.ok(existsSync(worktree), "task worktree must exist before Done");
+      assert.ok(existsSync(scratch), "task scratch must exist before Done");
+      await move(item, status);
+    };
+    const result = await f.orchestrator.sync(7);
+    f.project.move = move;
+    assert.equal(result.status, f.config.statuses.done);
+    assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, 7);
+    assert.equal(existsSync(worktree), false, "the completed task worktree is removed");
+    assert.equal(git("branch", "--list", branch), "");
+    assert.equal(existsSync(scratch), false);
+    assert.equal(await readFile(join(cwd, "delivery.txt"), "utf8"), "delivered content");
+    assert.equal(
+      git("branch", "--list", "--format=%(refname:short)", "agent/issue-2"),
+      "agent/issue-2",
+    );
+    assert.ok(existsSync(active));
+    assert.equal(await readFile(join(activeScratch, "notes"), "utf8"), "active task scratch");
+    assert.equal(await readFile(shared, "utf8"), "shared operator data");
+    assert.equal(activeItem.status, f.config.statuses.review);
+    assert.ok(result.cleanup?.removed?.length > 0, "sync reports removed artifacts");
+    assert.deepEqual(result.cleanup.failures, []);
+
+    const repeated = await f.orchestrator.sync(7);
+    assert.equal(repeated.status, f.config.statuses.done);
+    assert.deepEqual(repeated.cleanup?.removed, []);
+    assert.deepEqual(repeated.cleanup?.failures, []);
+  });
+});
+
+test("local sync removes only the completed issue's empty reservation directory", async (t) => {
+  await inTaskRepository(t, async ({ f, cwd, scratch, scratchIdentity }) => {
+    const directory = await SetupState.location(cwd);
+    const store = new SetupState(directory, { version: 1, repo, apps: {} });
+    const orchestrator = f.newOrchestrator(store);
+    await store.acquire();
+    try {
+      const ownershipRecord = await store.issueArtifactPath(1, "issue-scratch-owners", true);
+      await writeFile(ownershipRecord, JSON.stringify(scratchIdentity), { mode: 0o600 });
+      const reservations = join(directory, "issue-reservations");
+      const completedReservation = join(reservations, "issue-1");
+      const otherReservation = join(reservations, "issue-2");
+      await mkdir(completedReservation, { recursive: true, mode: 0o700 });
+      await mkdir(otherReservation, { mode: 0o700 });
+
+      const result = await orchestrator.sync(7);
+      assert.equal(result.status, f.config.statuses.done);
+      assert.deepEqual(result.cleanup.failures, []);
+      assert.equal(existsSync(scratch), false);
+      assert.ok((await stat(otherReservation)).isDirectory());
+      assert.equal(existsSync(completedReservation), false, "the empty reservation is removed");
+
+      const repeated = await orchestrator.sync(7);
+      assert.equal(repeated.status, f.config.statuses.done);
+      assert.deepEqual(repeated.cleanup.removed, []);
+      assert.deepEqual(repeated.cleanup.failures, []);
+      assert.equal(existsSync(completedReservation), false);
+      assert.ok((await stat(otherReservation)).isDirectory());
+    } finally {
+      await store.release();
+    }
+  });
+});
+
+test("local claim prepares artifacts for the accepted issue", async () => {
+  const prepared = [];
+  const f = fixture({
+    store: {
+      prepareIssueArtifacts(issue) {
+        prepared.push(issue);
+      },
+    },
+  });
+  await f.orchestrator.ready(1, f.assessment());
+  await f.orchestrator.claim(1);
+
+  assert.deepEqual(prepared, [1]);
+});
+
+test(
+  "accepted commands can overlap for the same issue and retain cleanup protection until both exit",
+  { timeout: 10_000 },
+  async (t) => {
+    const home = await realpath(await mkdtemp(join(tmpdir(), "grait-reservation-test-")));
+    const directory = join(home, "setup");
+    const store = new SetupState(directory, { version: 1, repo, apps: {} });
+    const children = [];
+    t.after(async () => {
+      for (const { child } of children) child.kill();
+      await Promise.allSettled(children.map(({ closed }) => closed));
+      await rm(home, { recursive: true, force: true });
+    });
+
+    async function startAcceptedCommand() {
+      const child = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          `
+          const [setupStateUrl, directory, repo] = process.argv.slice(1);
+          const { SetupState } = await import(setupStateUrl);
+          const store = new SetupState(directory, { version: 1, repo, apps: {} });
+          await store.acquire();
+          let preparationError;
+          try {
+            await store.prepareIssueArtifacts(1);
+          } catch (error) {
+            preparationError = error.message;
+          } finally {
+            await store.release();
+          }
+          process.send({ preparationError });
+          for await (const chunk of process.stdin) {
+            // Stay active after releasing the setup lock until the test closes stdin.
+          }
+          process.disconnect();
+        `,
+          setupStateUrl.href,
+          directory,
+          repo,
+        ],
+        { cwd: home, env: { HOME: home }, stdio: ["pipe", "ignore", "inherit", "ipc"] },
+      );
+      const closed = once(child, "close");
+      children.push({ child, closed });
+      const [{ preparationError }] = await Promise.race([
+        once(child, "message"),
+        closed.then(([code, signal]) => {
+          throw new Error(
+            `Command stopped before reporting preparation (code ${code}, signal ${signal})`,
+          );
+        }),
+      ]);
+      async function finish() {
+        child.stdin.end();
+        const [code, signal] = await closed;
+        if (code !== 0)
+          throw new Error(`Command did not exit normally (code ${code}, signal ${signal})`);
+      }
+      if (preparationError !== undefined) await finish();
+      return { preparationError, finish };
+    }
+
+    const worker = await startAcceptedCommand();
+    assert.equal(worker.preparationError, undefined, "the worker prepares the accepted issue");
+    assert.equal(await store.hasIssueReservation(1), true);
+    const publisher = await startAcceptedCommand();
+    assert.equal(
+      publisher.preparationError,
+      undefined,
+      "the publisher can prepare the same accepted issue while the worker is active",
+    );
+    assert.equal(await store.hasIssueReservation(1), true);
+
+    await worker.finish();
+    assert.equal(
+      await store.hasIssueReservation(1),
+      true,
+      "the publisher still protects the issue",
+    );
+    await publisher.finish();
+    assert.equal(await store.hasIssueReservation(1), false);
+  },
+);
+
+for (const handoff of ["TDD-exempt claim", "released exact-head TDD handoff"]) {
+  test(`local sync waits for a task reservation to release after a ${handoff}`, async (t) => {
+    await inTaskRepository(
+      t,
+      async ({ f, git, branch, head, worktree, scratch, reservations }) => {
+        const orchestrator = f.newOrchestrator();
+        if (handoff === "released exact-head TDD handoff") {
+          const { state } = await f.orchestrator.ledger.load(1);
+          seedState(f, 1, {
+            ...state,
+            tdd: {
+              version: 1,
+              issue: 1,
+              branch,
+              acceptanceDigest: state.claim.digest,
+              phase: "review",
+              owner: null,
+              head,
+              evidence: ["current-green"],
+            },
+          });
+        }
+        reservations.add(1);
+        reservations.add(2);
+
+        const blocked = await orchestrator.sync(7);
+        assert.ok(existsSync(worktree), "a live issue reservation preserves the task worktree");
+        assert.equal(git("rev-parse", `refs/heads/${branch}`), head);
+        assert.equal(await readFile(join(scratch, "notes"), "utf8"), "completed task scratch");
+        assert.deepEqual(blocked.cleanup?.removed, []);
+        assert.match(blocked.cleanup.failures.join("\n"), /reserv|worker|active/i);
+
+        reservations.delete(1);
+        const retried = await orchestrator.sync(7);
+        assert.equal(retried.status, f.config.statuses.done);
+        assert.deepEqual(retried.cleanup?.failures, []);
+        assert.equal(existsSync(worktree), false);
+        assert.equal(git("branch", "--list", branch), "");
+        assert.equal(existsSync(scratch), false);
+      },
+      { tddRequired: handoff === "released exact-head TDD handoff" },
+    );
+  });
+}
+
+test("local sync preserves a dirty completed worktree and reports the cleanup failure", async (t) => {
+  await inTaskRepository(t, async ({ f, git, branch, head, worktree }) => {
+    const untracked = join(worktree, "operator-notes");
+    await writeFile(untracked, "uncommitted notes");
+
+    const result = await f.orchestrator.sync(7);
+    assert.equal(result.status, f.config.statuses.done);
+    assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, 7);
+    assert.equal(await readFile(untracked, "utf8"), "uncommitted notes");
+    assert.equal(git("rev-parse", branch), head);
+    assert.ok(result.cleanup?.failures?.length > 0, "sync reports the blocked cleanup");
+  });
+});
+
+test("local sync leaves task artifacts in place when the Project cannot move to Done", async (t) => {
+  await inTaskRepository(t, async ({ f, git, branch, head, worktree, scratch }) => {
+    f.project.move = async () => {
+      throw new Error("Project move failed");
+    };
+    await assert.rejects(() => f.orchestrator.sync(7), /Project move failed/);
+    assert.ok(existsSync(worktree));
+    assert.ok(existsSync(scratch));
+    assert.equal(git("rev-parse", branch), head);
+    assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, undefined);
+  });
+});
+
+for (const state of ["open", "closed"]) {
+  test(`local sync preserves task artifacts for an unmerged ${state} PR`, async (t) => {
+    await inTaskRepository(t, async ({ f, git, branch, head, worktree, scratch }) => {
+      Object.assign(f.pull, { merged: false, state });
+      await f.orchestrator.sync(7);
+      assert.notEqual(f.item.status, f.config.statuses.done);
+      assert.ok(existsSync(worktree));
+      assert.ok(existsSync(scratch));
+      assert.equal(git("rev-parse", branch), head);
+    });
+  });
+}
+
+test("task artifact cleanup preserves a divergent local branch and its worktree", async (t) => {
+  await inTaskRepository(t, async ({ git, cwd, branch, head, worktree }) => {
+    git("-C", worktree, "commit", "--allow-empty", "-m", "Unmerged operator work");
+    const divergent = git("rev-parse", branch);
+    const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
+    assert.equal(git("rev-parse", branch), divergent);
+    assert.ok(existsSync(worktree));
+    assert.ok(report.failures.length > 0, "cleanup reports the divergent branch");
+  });
+});
+
+test("task artifact cleanup preserves a worktree outside its canonical path", async (t) => {
+  await inTaskRepository(
+    t,
+    async ({ git, cwd, branch, head, worktree }) => {
+      const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
+      assert.equal(git("rev-parse", branch), head);
+      assert.ok(existsSync(worktree));
+      assert.ok(report.failures.length > 0, "cleanup reports the foreign worktree");
+    },
+    { foreignPath: true },
+  );
+});
+
+test("task artifact cleanup preserves the exact branch ref during a detached bisect in another worktree", async (t) => {
+  await inTaskRepository(t, async ({ git, cwd, branch, head, worktree }) => {
+    const bisect = resolve(worktree, "..", "operator-bisect");
+    git("worktree", "remove", worktree);
+    git("worktree", "add", bisect, branch);
+    git("-C", bisect, "bisect", "start", "HEAD", "HEAD~2");
+    assert.match(git("worktree", "list", "--porcelain"), /^detached$/m);
+    const ref = `refs/heads/${branch}`;
+
+    const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
+
+    assert.equal(git("for-each-ref", "--format=%(objectname)", ref), head);
+    assert.match(report.failures.join("\n"), /bisect|branch.*(use|worktree|checked out)/i);
+  });
+});
+
+test("task artifact cleanup preserves unregistered scratch data", async (t) => {
+  await inTaskRepository(t, async ({ cwd, branch, head, scratch }) => {
+    const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
+
+    assert.ok(existsSync(scratch), "a canonical path alone does not establish scratch ownership");
+    assert.equal(await readFile(join(scratch, "notes"), "utf8"), "completed task scratch");
+    assert.match(report.failures.join("\n"), /unregistered|ownership|identity|not.*registered/i);
+  });
+});
+
+test("task artifact cleanup preserves replacement scratch with a different directory identity", async (t) => {
+  await inTaskRepository(t, async ({ cwd, branch, head, scratch, scratchIdentity }) => {
+    await rename(scratch, `${scratch}-original`);
+    await mkdir(scratch);
+    await writeFile(join(scratch, "operator-notes"), "replacement directory");
+
+    const report = await cleanupTaskArtifacts({
+      issue: 1,
+      branch,
+      head,
+      cwd,
+      repo,
+      scratchIdentity,
+    });
+
+    assert.ok(existsSync(scratch), "the registered identity does not match the replacement");
+    assert.equal(await readFile(join(scratch, "operator-notes"), "utf8"), "replacement directory");
+    assert.match(report.failures.join("\n"), /identity|ownership|changed|mismatch/i);
+  });
+});
+
+test("task artifact cleanup preserves an independent Git checkout inside registered scratch", async (t) => {
+  await inTaskRepository(t, async ({ git, cwd, branch, head, scratch, scratchIdentity }) => {
+    const checkout = join(scratch, "independent");
+    await mkdir(checkout);
+    git("-C", checkout, "init", "--initial-branch=main");
+    const notes = join(checkout, "operator-notes");
+    await writeFile(notes, "independent checkout data");
+
+    const report = await cleanupTaskArtifacts({
+      issue: 1,
+      branch,
+      head,
+      cwd,
+      repo,
+      scratchIdentity,
+    });
+
+    assert.ok(existsSync(join(checkout, ".git", "HEAD")), "embedded Git metadata is preserved");
+    assert.equal(await readFile(notes, "utf8"), "independent checkout data");
+    assert.match(report.failures.join("\n"), /checkout|git metadata|\.git/i);
+  });
 });
 
 test("local admission checks current access rather than stale contributor association", async () => {

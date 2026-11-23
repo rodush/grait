@@ -123,6 +123,26 @@ The label pauses new claims and further automation on the issue, including revie
 
 Conflicting reviewer instructions also label the linked issue and record the action there. The recorded PR review pause still applies after label removal. Follow [pause and recovery](operations.md#pause-and-recovery) to reconcile the PR review ledger before resuming.
 
+## Clean up a merged task
+
+After GitHub confirms the issue's linked PR was merged and the worker sessions have released the issue, run this from the coordinator checkout:
+
+```sh
+npm run orchestrator -- sync --pr 123
+```
+
+Before moving the Project issue to Done and recording the completed PR, sync verifies that the PR from the canonical claim branch in the same repository was merged into that repository's default branch and that GitHub reports exactly one closing reference to the claimed issue. Local cleanup requires Git 2.36 or newer. When a TDD handoff exists, it must be released and its accepted head must match the PR head. For claims without a TDD handoff, the merged PR supplies the exact head. This also works after a squash merge.
+
+Cleanup can remove the clean, registered task worktree under the sibling `<repository>-worktrees/issue-N` path and the local `agent/issue-N` branch at the accepted head once Git operations in other worktrees have released that branch. Each accepted claim prepares temporary space at `<git-common-dir>/grait-setup/issue-scratch/issue-N`. Cleanup verifies the directory against its private device and inode record under `grait-setup/issue-scratch-owners`. It preserves unregistered or replaced directories and directories with embedded Git checkout metadata. Keep durable records and shared files outside task scratch.
+
+Each process that prepares an accepted claim keeps a private marker in `<git-common-dir>/grait-setup/issue-reservations/issue-N/`. This includes managed workers for TDD-exempt issues and separate commands that publish for the same claim. Normal command exit releases that process's marker. Cleanup waits until the directory is empty.
+
+If a command is interrupted, inspect the marker's PID and verify that the associated launcher and any native worker or descendant using the issue have stopped. Once shutdown is confirmed, remove only that stale marker and retry sync. A missing PID alone is insufficient. Apply the same recovery steps if an older installation left a single `issue-N` reservation file at the directory path.
+
+For a TDD-exempt worker launched outside the managed command, run `git worktree lock --reason "Worker active" <worktree-path>` before launch and `git worktree unlock <worktree-path>` after the session and its descendants have stopped.
+
+The `cleanup.removed` list records what was deleted, and `cleanup.failures` reports blockers. If a blocker remains, review the reported path or ref, release any remaining sessions, and reconcile the ownership, files, or branch before rerunning the same command. Use a separate location to preserve any operator files you need to move. Cleanup skips work already completed, so a successful retry with no remaining artifacts returns two empty lists.
+
 ## Advanced bootstrap
 
 The guided setup supplies these details automatically. For a deliberate manual integration, preview before applying:
