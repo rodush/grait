@@ -188,15 +188,6 @@ grait upgrade --revision GIT_PIN --plan
 
 GRAIT fetches the target from its Git repository when the running package cannot be verified at that pin. The fetch uses a temporary directory and leaves the application's dependencies and package files untouched.
 
-If your installed CLI requires the running package to match the target revision, use `npm exec` to run the target package for this upgrade.
-
-```sh
-grait_revision=GIT_PIN
-npm exec --yes --allow-git=root --ignore-scripts \
-  --package="git+https://github.com/rodush/grait.git#${grait_revision}" -- \
-  grait upgrade --revision "${grait_revision}" --plan
-```
-
 Review the proposed diff, then repeat the command without `--plan` and confirm, or use `--yes` for scripted application. The upgrade preserves your workflow configuration, CODEOWNERS, and text outside GRAIT-managed policy blocks. If managed content has changed, the command identifies the conflicting file before applying anything. Restore the recorded managed content and move any intended customization outside its managed block before retrying.
 
 The upgrade updates the managed instructions, the validation workflow pin, and the installation record in one recoverable transaction. It reuses the installed harness, Project binding, and publishing Apps. Review and commit the complete diff in one PR. A repeat with the same pin and unchanged files reports no changes. If execution is interrupted, preserve the journal and retry from the same worktree with the same pin.
