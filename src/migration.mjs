@@ -123,7 +123,7 @@ async function migrationPlan({
     throw new Error("Workflow configuration changed during migration. Review the plan and retry");
 
   const project = {};
-  const options = { harness, version, project };
+  const options = { harness, version, project, config: JSON.parse(config) };
   const generated = await generateProjectArtifacts(options);
   const indexed = await indexedFiles(root);
   const before = { [configPath]: config, [installationPath]: null };

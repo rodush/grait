@@ -1,5 +1,6 @@
 import { digest, sameLogin, validateConfig } from "../scripts/lib/policy.mjs";
 import { readArtifact } from "./artifact-stage.mjs";
+import { managedRoleFrontmatter } from "./role-frontmatter.mjs";
 
 export const installationPath = ".grait/installation.json";
 export const installerWorkflow = "grait.yml";
@@ -44,9 +45,13 @@ function managedText(content) {
 }
 
 export function artifactOwnership(path, content) {
+  const profile = /^\.(?:claude|github)\/agents\/.+\.md$/.test(path)
+    ? managedRoleFrontmatter(content)
+    : undefined;
+  const managed = projectOwnedPaths.has(path) ? content : managedText(content);
   return {
     hash: digest(content),
-    managedHash: digest(projectOwnedPaths.has(path) ? content : managedText(content)),
+    managedHash: digest(profile ? JSON.stringify([managed, profile]) : managed),
   };
 }
 

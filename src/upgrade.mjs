@@ -26,12 +26,13 @@ import { targetRoot } from "./runtime.mjs";
 const configPath = "workflow.config.json";
 
 async function buildUpgrade({ root, repo, revision, version }) {
-  const { record, artifacts: before } = await validateInstallation(root);
+  const { record, config, artifacts: before } = await validateInstallation(root);
   if (!sameLogin(record.repository, repo))
     throw new Error("Installation repository changed. Review the plan and retry.");
   validateTarget({ ...record, version });
   const { harness, project } = record;
-  const generated = await generateProjectArtifacts({ harness, project, version });
+  const options = { harness, project, version, config };
+  const generated = await generateProjectArtifacts(options);
   for (const path of Object.keys(generated)) {
     if (Object.hasOwn(before, path)) continue;
     before[path] = await readArtifact(root, path);
@@ -43,7 +44,7 @@ async function buildUpgrade({ root, repo, revision, version }) {
       .filter((path) => before[path] !== null)
       .map((path) => [path, before[path]]),
   );
-  const managed = await generateProjectArtifacts({ harness, project, version, existing });
+  const managed = await generateProjectArtifacts({ ...options, existing });
   const artifacts = {
     ...Object.fromEntries(Object.keys(record.artifacts).map((path) => [path, before[path]])),
     ...managed,

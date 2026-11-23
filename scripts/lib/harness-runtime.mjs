@@ -1,12 +1,16 @@
+import { workflowRoles } from "../../src/role-profiles.mjs";
+
 // CLI arguments are kept separate from GitHub publishing credentials and from
 // native permission controls. No engine receives automatic approval-bypass flags.
 export function harnessArguments(harness, { prompt, role, profile = {}, reasoning = "medium" }) {
   if (typeof prompt !== "string" || !prompt.trim())
     throw new Error("A native harness prompt is required");
-  if (role && !["orchestrator", "triage", "test", "implement", "review", "fix"].includes(role))
-    throw new Error("Unknown native role");
+  if (role && !workflowRoles.includes(role)) throw new Error("Unknown native role");
   const effort = profile.reasoning || reasoning;
-  const model = profile.model ? ["--model", profile.model] : [];
+  const model =
+    profile.model && !(harness === "claude" && profile.model === "inherit")
+      ? ["--model", profile.model]
+      : [];
   if (harness === "codex")
     return [
       ...(profile.reasoning

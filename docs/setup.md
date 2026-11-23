@@ -55,7 +55,33 @@ The limit applies across the Project. If you lower it below the current Ready co
 
 ### Configure role settings
 
-The default orchestrator uses medium reasoning. The reviewer uses high reasoning. `config/codex.toml` is the canonical Codex project config; its installed `.codex/config.toml` copy is generated. Tester/implementer model and reasoning overrides remain under `tdd.profiles`; `null` inherits the selected harness model/settings. Overrides are emitted only for the matching provider, so a Codex model name does not leak into Claude agents. Select models available on your account. Role settings grant no extra permissions. Copilot uses its native `--effort` setting and custom-agent `reasoningEffort`; worker profiles must name Copilot-served models rather than provider-qualified BYOK models. The default launcher explicitly selects Copilot Auto and strips provider override variables instead of passing an LLM API key. When a Copilot parent uses Auto, native sub-agents inherit the resolved parent model regardless of their authored model preference; use an explicit `npm run orchestrator -- worker --issue N --role implement` session when a role profile must select a particular model. That session passes the profile through the native `--model` option.
+Set `roleProfiles.<engine>.<role>` in `workflow.config.json` to override a role's `model` or `reasoning`. Supported role keys are `orchestrator`, `triage`, `test`, `implement`, `review`, and `fix`. Only profiles for the selected `engine` take effect.
+
+```json
+{
+  "roleProfiles": {
+    "codex": {
+      "orchestrator": { "model": "gpt-6.2-sol" },
+      "review": { "reasoning": "xhigh" }
+    },
+    "claude": {
+      "implement": { "model": "sonnet", "reasoning": "high" }
+    }
+  }
+}
+```
+
+Each field resolves independently. A missing or `null` value falls back to the selected harness's legacy `tdd.profiles.tester` for `test` and `tdd.profiles.implementer` for `implement` and `fix`. The next fallback is the role default. Models inherit from the native harness. Review defaults to `high` reasoning. The orchestrator and other Claude and Copilot roles use `orchestrator.reasoning`, which defaults to `medium`. Other Codex roles inherit native reasoning settings. The `orchestrator` and `worker` launch commands pass the resolved profile to the native CLI.
+
+| Harness                                                                                                        | Native agent field       | Accepted reasoning values                                           |
+| -------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------- |
+| [Codex](https://developers.openai.com/codex/config-reference)                                                  | `model_reasoning_effort` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, `ultra` |
+| [Claude Code](https://code.claude.com/docs/en/sub-agents)                                                      | `effort`                 | `low`, `medium`, `high`, `xhigh`, `max`                             |
+| [GitHub Copilot CLI](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference) | `reasoningEffort`        | `low`, `medium`, `high`, `xhigh`, `max`                             |
+
+Use model IDs or aliases supported by your installed harness and account. GRAIT validates the profile keys, model ID syntax, and accepted effort values for every configured engine. The harness determines model availability and supported effort combinations. Copilot profiles require Copilot-served model IDs. Its launcher defaults to Auto and strips provider override variables. When a Copilot parent uses Auto, use an explicit worker launch if native delegation inherits the parent model instead of selecting the worker profile.
+
+In a template checkout, run `npm run harness:generate` after updating the configuration. `config/codex.toml` remains the canonical Codex project default, and the active Codex orchestrator profile can override the model and reasoning in its generated copy. In an installed project, run the pinned `grait upgrade` with the installation's current or newer revision to refresh the managed agent files. Existing user-owned native settings take precedence in generated agent files. Role profiles grant no additional permissions.
 
 Claude triage/review roles use native worktree isolation. Tester, implementer, and fix stages use the orchestrator's pre-created issue worktree sequentially; they must not create independent default-branch worktrees. `npm run orchestrator -- worker --issue N --role implement` launches a native session in that existing worktree. Native delegation can instead assign its absolute path and exact committed handoff explicitly.
 

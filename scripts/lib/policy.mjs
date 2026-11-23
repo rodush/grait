@@ -1,5 +1,6 @@
 import { validateTddConfig, validateTddExemption } from "./tdd.mjs";
 import { createHash } from "node:crypto";
+import { validateRoleProfiles } from "../../src/role-profiles.mjs";
 
 export const digest = (value) => createHash("sha256").update(value).digest("hex");
 export const issueDigest = (issue) => digest(JSON.stringify([issue.title, issue.body || ""]));
@@ -91,6 +92,7 @@ export function validateConfig(config) {
         "Copilot profiles must select Copilot-served models, not provider-qualified BYOK models",
       );
   }
+  validateRoleProfiles(config.roleProfiles);
   return config;
 }
 

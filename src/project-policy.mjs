@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
+import { parse as parseToml } from "smol-toml";
 
 import { packageResource } from "./resources.mjs";
+import { applyRoleFrontmatter } from "./role-frontmatter.mjs";
+import { nativeRoleFields, resolveRoleProfile, validateRoleProfiles } from "./role-profiles.mjs";
 
 const policyUrl = packageResource("automation/policy/shared.md");
 const roles = {
@@ -77,10 +80,17 @@ function frontmatter(name, description) {
 }
 
 /** Return durable project artifacts without reading or writing the target repository. */
-export async function generateProjectArtifacts({ harness, version, project = {}, existing = {} }) {
+export async function generateProjectArtifacts({
+  harness,
+  version,
+  project = {},
+  existing = {},
+  config,
+}) {
   if (!["codex", "claude", "copilot"].includes(harness))
     throw new Error("Choose a supported harness: codex, claude, or copilot");
   validateVersion(version);
+  validateRoleProfiles(config?.roleProfiles);
   if (!project || typeof project !== "object" || Array.isArray(project))
     throw new Error("Project context must be an object");
   if (!existing || typeof existing !== "object" || Array.isArray(existing))
@@ -123,6 +133,9 @@ export async function generateProjectArtifacts({ harness, version, project = {},
   for (const [role, definition] of Object.entries(roles)) {
     const name = `grait-${role}`;
     const body = roleBody(role, definition.instructions);
+    const fields = config
+      ? nativeRoleFields(harness, resolveRoleProfile(config, harness, role))
+      : {};
     const skillRoot =
       harness === "codex"
         ? ".agents/skills"
@@ -151,11 +164,16 @@ export async function generateProjectArtifacts({ harness, version, project = {},
             .map((line) => `# ${line}`)
             .join("\n")
         : `name = ${JSON.stringify(name)}\ndescription = ${JSON.stringify(definition.description)}\ndeveloper_instructions = ${JSON.stringify(instructions)}`;
-      emit(rolePath, roleConfig, { comment: true });
+      const nativeSettings = !userRole && Object.keys(fields).length ? parseToml(unmanaged) : {};
+      const profile = Object.entries(fields)
+        .filter(([key]) => !userRole && !Object.hasOwn(nativeSettings, key))
+        .map(([key, value]) => `${key} = ${JSON.stringify(value)}`);
+      emit(rolePath, [roleConfig, ...profile].join("\n"), { comment: true });
     } else {
       const path =
         harness === "claude" ? `.claude/agents/${name}.md` : `.github/agents/${name}.agent.md`;
       emit(path, body, { initial: frontmatter(name, definition.description) });
+      artifacts[path] = applyRoleFrontmatter(artifacts[path], fields);
     }
   }
   return artifacts;

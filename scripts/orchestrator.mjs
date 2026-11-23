@@ -7,6 +7,7 @@ import { command, withoutCredentials, requireSubscription } from "./lib/setup-pr
 import { LocalOrchestrator } from "./lib/orchestrator.mjs";
 import { localContext } from "./lib/local-context.mjs";
 import { harnessArguments } from "./lib/harness-runtime.mjs";
+import { resolveRoleProfile } from "../src/role-profiles.mjs";
 import {
   createHandoff,
   assertRoleChanges,
@@ -83,7 +84,7 @@ export async function orchestratorMain() {
       config.engine,
       harnessArguments(config.engine, {
         role: "orchestrator",
-        reasoning: config.orchestrator.reasoning,
+        profile: resolveRoleProfile(config, config.engine, "orchestrator"),
         prompt: `Apply the grait-orchestrator skill at ${skillPath(config.engine, "orchestrator")}. Manage this repository's Project queue and delegate specialist sub-agents locally in assigned worktrees. Resume existing claims and prioritize Review. Select and claim eligible Ready stories independently while Project and worker capacity permit. Honor the claim command's admission checks. Use the native subscription login. Check pause state before each stage. Humans merge and release.`,
       }),
       { interactive: true, env },
@@ -310,12 +311,11 @@ export async function orchestratorMain() {
   }
   if (launch) {
     await requireSubscription(context.config.engine);
-    const profile = context.config.tdd.profiles[values.role === "test" ? "tester" : "implementer"];
+    const profile = resolveRoleProfile(context.config, context.config.engine, values.role);
     const args = harnessArguments(context.config.engine, {
       prompt: launch.prompt,
       role: values.role,
       profile,
-      reasoning: context.config.orchestrator.reasoning,
     });
     await command(context.config.engine, args, {
       cwd: launch.cwd,
