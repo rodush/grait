@@ -33,19 +33,29 @@
     "scripts/lib/policy.mjs",
     "dist/cli.mjs",
     "docs/setup.md",
-    "docs/installation.md"
+    "docs/installation.md",
+    "scripts/orchestrator.mjs",
+    "scripts/lib/bootstrap.mjs",
+    "scripts/lib/harness-runtime.mjs",
+    "scripts/lib/project.mjs",
+    "scripts/lib/tdd.mjs",
+    "scripts/lib/verification.mjs",
+    "docs/workflow.md",
+    "docs/operations.md",
+    "docs/tdd.md",
+    "automation/skills/grait-orchestrator/SKILL.md",
+    ".agents/skills/grait-orchestrator/SKILL.md",
+    ".claude/skills/grait-orchestrator/SKILL.md",
+    ".github/skills/grait-orchestrator/SKILL.md"
   ],
   "protectedPaths": [
-    ".github/",
-    ".agents/",
+    ".github/workflows/",
+    ".github/CODEOWNERS",
     ".codex/",
-    ".claude/",
-    "automation/",
+    "automation/policy/",
     "config/",
     "docs/coding-guidelines.md",
-    "docs/workflow.md",
     "docs/review-guidelines.md",
-    "docs/operations.md",
     "docs/architecture.md",
     "docs/decisions.md",
     "docs/agents.md",
@@ -56,8 +66,7 @@
     "package.json",
     "package-lock.json",
     ".npmrc",
-    "docs/worktrees.md",
-    "docs/tdd.md"
+    "docs/worktrees.md"
   ],
   "labels": {
     "automated": "agent:managed",
@@ -83,7 +92,20 @@
       "scripts/lib/policy.mjs",
       "dist/cli.mjs",
       "docs/setup.md",
-      "docs/installation.md"
+      "docs/installation.md",
+      "scripts/orchestrator.mjs",
+      "scripts/lib/bootstrap.mjs",
+      "scripts/lib/harness-runtime.mjs",
+      "scripts/lib/project.mjs",
+      "scripts/lib/tdd.mjs",
+      "scripts/lib/verification.mjs",
+      "docs/workflow.md",
+      "docs/operations.md",
+      "docs/tdd.md",
+      "automation/skills/grait-orchestrator/SKILL.md",
+      ".agents/skills/grait-orchestrator/SKILL.md",
+      ".claude/skills/grait-orchestrator/SKILL.md",
+      ".github/skills/grait-orchestrator/SKILL.md"
     ],
     "profiles": {
       "tester": {
