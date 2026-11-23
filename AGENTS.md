@@ -6,7 +6,7 @@ GRAIT provides language-neutral policy and automation for AI-augmented developme
 
 ## Work Selection & Agent Responsibilities
 
-Work starts with a GitHub Project issue. Triage establishes scope, acceptance criteria, validation, alignment, and native blocking dependencies before authorizing Ready. Use the local orchestrator to claim work; never start an unclaimed story. At most five stories may be In Progress across the project. Review is a separate status and does not consume those slots. Read `docs/workflow.md` before implementation.
+Work starts with a GitHub Project issue. Triage establishes scope, acceptance criteria, validation, alignment, and native blocking dependencies before authorizing Ready. Use the local orchestrator to claim work; never start an unclaimed story. Use the project-wide story capacity and Review admission rules in `docs/workflow.md`. Read that document before implementation.
 
 ## Build, Test, and Development Commands
 
