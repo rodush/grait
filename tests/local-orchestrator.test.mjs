@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { issueDigest } from "../scripts/lib/policy.mjs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -13,12 +13,12 @@ const sourceRoot =
 const orchestratorModule = await import(
   pathToFileURL(resolve(sourceRoot, "scripts/lib/orchestrator.mjs"))
 );
-const { LocalOrchestrator } = orchestratorModule;
+const { LocalOrchestrator, cleanupTaskArtifacts } = orchestratorModule;
 const baseConfig = JSON.parse(await readFile(resolve(sourceRoot, "workflow.config.json"), "utf8"));
 const repo = "acme/service";
 const head = "a".repeat(40);
 
-function fixture() {
+function fixture({ store, defaultBranch = "main" } = {}) {
   const config = {
     ...baseConfig,
     controllerRepository: repo,
@@ -39,8 +39,8 @@ function fixture() {
     title: "feat: deliver outcome",
     body: "Closes #1",
     user: { login: "writer[bot]", id: 10101, type: "Bot" },
-    head: { sha: head, repo: { full_name: repo } },
-    base: { repo: { full_name: repo } },
+    head: { ref: "agent/issue-1", sha: head, repo: { full_name: repo } },
+    base: { ref: defaultBranch, repo: { full_name: repo } },
     state: "open",
     merged: false,
     draft: false,
@@ -90,6 +90,8 @@ function fixture() {
       const issueMatch = path.match(/^repos\/acme\/service\/issues\/(\d+)$/);
       if (method === "GET" && issueMatch) return issues.get(Number(issueMatch[1]));
       if (method === "GET" && path === `repos/${repo}/pulls/7`) return pull;
+      if (method === "GET" && path === `repos/${repo}`)
+        return { full_name: repo, default_branch: defaultBranch };
       if (path.endsWith("/permission"))
         return { permission: path.includes("outsider") ? "read" : "write" };
       if (method === "POST" && /\/issues\/\d+\/comments$/.test(path)) {
@@ -170,6 +172,7 @@ function fixture() {
       writerId: 10101,
       reviewerId: 10102,
       config,
+      store,
     });
   const assessment = (overrides = {}) => ({
     version: 1,
@@ -574,22 +577,39 @@ test("conflicting reviews surface the operator action on the linked issue and pr
   assert.equal(f.publishedReviews.length, 1);
 });
 
-test("local sync keeps drafts active, sends ready PRs to Review, and completes only merged work", async () => {
-  const f = fixture();
-  await f.orchestrator.ready(1, f.assessment());
-  await f.orchestrator.claim(1);
-  f.pull.draft = true;
-  await f.orchestrator.sync(7);
-  assert.equal(f.item.status, f.config.statuses.inProgress);
-  f.pull.draft = false;
-  await f.orchestrator.sync(7);
-  assert.equal(f.item.status, f.config.statuses.review);
-  f.pull.state = "closed";
-  await f.orchestrator.sync(7);
-  assert.notEqual(f.item.status, f.config.statuses.done);
-  f.pull.merged = true;
-  await f.orchestrator.sync(7);
-  assert.equal(f.item.status, f.config.statuses.done);
+test("local sync keeps drafts active, sends ready PRs to Review, and completes only merged work", async (t) => {
+  await inTaskRepository(t, async ({ f }) => {
+    Object.assign(f.pull, { merged: false, state: "open", draft: true });
+    await f.orchestrator.sync(7);
+    assert.equal(f.item.status, f.config.statuses.inProgress);
+    f.pull.draft = false;
+    await f.orchestrator.sync(7);
+    assert.equal(f.item.status, f.config.statuses.review);
+    f.pull.state = "closed";
+    await f.orchestrator.sync(7);
+    assert.notEqual(f.item.status, f.config.statuses.done);
+    f.pull.merged = true;
+    await f.orchestrator.sync(7);
+    assert.equal(f.item.status, f.config.statuses.done);
+  });
+});
+
+test("local sync rejects a same-repository merge outside the default branch before completion", async (t) => {
+  await inTaskRepository(
+    t,
+    async ({ f, git, branch, head, worktree, scratch }) => {
+      f.item.status = f.config.statuses.review;
+      f.pull.base.ref = "main";
+
+      await assert.rejects(() => f.orchestrator.sync(7), /default.branch/i);
+      assert.equal(f.item.status, f.config.statuses.review);
+      assert.equal((await f.orchestrator.ledger.load(1)).state.completedPR, undefined);
+      assert.ok(existsSync(worktree));
+      assert.ok(existsSync(scratch));
+      assert.equal(git("rev-parse", `refs/heads/${branch}`), head);
+    },
+    { defaultBranch: "delivery" },
+  );
 });
 
 test("local sync never completes unrelated or unclaimed issues", async () => {
@@ -602,7 +622,11 @@ test("local sync never completes unrelated or unclaimed issues", async () => {
   assert.notEqual(f.item.status, f.config.statuses.done);
 });
 
-async function inTaskRepository(t, run, { foreignPath = false } = {}) {
+async function inTaskRepository(
+  t,
+  run,
+  { foreignPath = false, defaultBranch = "main", tddRequired = false } = {},
+) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "grait-task-cleanup-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const cwd = join(root, "service");
@@ -619,12 +643,15 @@ async function inTaskRepository(t, run, { foreignPath = false } = {}) {
   await mkdir(cwd);
   await mkdir(scratch, { recursive: true });
   await writeFile(join(scratch, "notes"), "completed task scratch");
+  const { dev, ino } = await stat(scratch);
+  const scratchIdentity = { dev, ino };
   git("init", "--initial-branch=main");
   git("config", "user.name", "Cleanup Test");
   git("config", "user.email", "cleanup@example.test");
   git("config", "commit.gpgsign", "false");
   git("remote", "add", "origin", `https://github.com/${repo}.git`);
   git("commit", "--allow-empty", "-m", "Base");
+  git("commit", "--allow-empty", "-m", "Main history");
   await mkdir(resolve(worktree, ".."), { recursive: true });
   git("worktree", "add", "-b", branch, worktree);
   await writeFile(join(worktree, "delivery.txt"), "delivered content");
@@ -635,8 +662,24 @@ async function inTaskRepository(t, run, { foreignPath = false } = {}) {
   git("commit", "-m", "Squash merge issue");
   assert.ok(!git("rev-list", "main").split("\n").includes(head));
 
-  const f = fixture();
-  await f.orchestrator.ready(1, f.assessment());
+  const reservations = new Set();
+  const f = fixture({
+    defaultBranch,
+    store: {
+      prepareIssueArtifacts() {},
+      hasIssueReservation: (issue) => reservations.has(issue),
+      issueScratchIdentity: (issue) => (issue === 1 ? scratchIdentity : null),
+    },
+  });
+  await f.orchestrator.ready(
+    1,
+    f.assessment({
+      tdd: {
+        required: tddRequired,
+        reason: tddRequired ? null : "Fixture uses a TDD-exempt claim",
+      },
+    }),
+  );
   await f.orchestrator.claim(1);
   Object.assign(f.pull, {
     merged: true,
@@ -648,7 +691,18 @@ async function inTaskRepository(t, run, { foreignPath = false } = {}) {
   const previousCwd = process.cwd();
   process.chdir(cwd);
   try {
-    await run({ f, git, cwd, branch, head, worktree, scratch, scratchRoot });
+    await run({
+      f,
+      git,
+      cwd,
+      branch,
+      head,
+      worktree,
+      scratch,
+      scratchRoot,
+      scratchIdentity,
+      reservations,
+    });
   } finally {
     process.chdir(previousCwd);
   }
@@ -698,6 +752,66 @@ test("local sync removes the completed squash-merged task and preserves active t
   });
 });
 
+test("local claim prepares artifacts for the accepted issue", async () => {
+  const prepared = [];
+  const f = fixture({
+    store: {
+      prepareIssueArtifacts(issue) {
+        prepared.push(issue);
+      },
+    },
+  });
+  await f.orchestrator.ready(1, f.assessment());
+  await f.orchestrator.claim(1);
+
+  assert.deepEqual(prepared, [1]);
+});
+
+for (const handoff of ["TDD-exempt claim", "released exact-head TDD handoff"]) {
+  test(`local sync waits for a task reservation to release after a ${handoff}`, async (t) => {
+    await inTaskRepository(
+      t,
+      async ({ f, git, branch, head, worktree, scratch, reservations }) => {
+        const orchestrator = f.newOrchestrator();
+        if (handoff === "released exact-head TDD handoff") {
+          const { state } = await f.orchestrator.ledger.load(1);
+          seedState(f, 1, {
+            ...state,
+            tdd: {
+              version: 1,
+              issue: 1,
+              branch,
+              acceptanceDigest: state.claim.digest,
+              phase: "review",
+              owner: null,
+              head,
+              evidence: ["current-green"],
+            },
+          });
+        }
+        reservations.add(1);
+        reservations.add(2);
+
+        const blocked = await orchestrator.sync(7);
+        assert.ok(existsSync(worktree), "a live issue reservation preserves the task worktree");
+        assert.equal(git("rev-parse", `refs/heads/${branch}`), head);
+        assert.equal(await readFile(join(scratch, "notes"), "utf8"), "completed task scratch");
+        assert.deepEqual(blocked.cleanup?.removed, []);
+        assert.match(blocked.cleanup.failures.join("\n"), /reserv|worker|active/i);
+
+        reservations.delete(1);
+        const retried = await orchestrator.sync(7);
+        assert.equal(retried.status, f.config.statuses.done);
+        assert.deepEqual(retried.cleanup?.failures, []);
+        assert.equal(existsSync(worktree), false);
+        assert.equal(git("branch", "--list", branch), "");
+        assert.equal(existsSync(scratch), false);
+      },
+      { tddRequired: handoff === "released exact-head TDD handoff" },
+    );
+  });
+}
+
 test("local sync preserves a dirty completed worktree and reports the cleanup failure", async (t) => {
   await inTaskRepository(t, async ({ f, git, branch, head, worktree }) => {
     const untracked = join(worktree, "operator-notes");
@@ -742,8 +856,6 @@ test("task artifact cleanup preserves a divergent local branch and its worktree"
   await inTaskRepository(t, async ({ git, cwd, branch, head, worktree }) => {
     git("-C", worktree, "commit", "--allow-empty", "-m", "Unmerged operator work");
     const divergent = git("rev-parse", branch);
-    const { cleanupTaskArtifacts } = orchestratorModule;
-    assert.equal(typeof cleanupTaskArtifacts, "function", "task cleanup is exported");
     const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
     assert.equal(git("rev-parse", branch), divergent);
     assert.ok(existsSync(worktree));
@@ -755,8 +867,6 @@ test("task artifact cleanup preserves a worktree outside its canonical path", as
   await inTaskRepository(
     t,
     async ({ git, cwd, branch, head, worktree }) => {
-      const { cleanupTaskArtifacts } = orchestratorModule;
-      assert.equal(typeof cleanupTaskArtifacts, "function", "task cleanup is exported");
       const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
       assert.equal(git("rev-parse", branch), head);
       assert.ok(existsSync(worktree));
@@ -764,6 +874,76 @@ test("task artifact cleanup preserves a worktree outside its canonical path", as
     },
     { foreignPath: true },
   );
+});
+
+test("task artifact cleanup preserves the exact branch ref during a detached bisect in another worktree", async (t) => {
+  await inTaskRepository(t, async ({ git, cwd, branch, head, worktree }) => {
+    const bisect = resolve(worktree, "..", "operator-bisect");
+    git("worktree", "remove", worktree);
+    git("worktree", "add", bisect, branch);
+    git("-C", bisect, "bisect", "start", "HEAD", "HEAD~2");
+    assert.match(git("worktree", "list", "--porcelain"), /^detached$/m);
+    const ref = `refs/heads/${branch}`;
+
+    const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
+
+    assert.equal(git("for-each-ref", "--format=%(objectname)", ref), head);
+    assert.match(report.failures.join("\n"), /bisect|branch.*(use|worktree|checked out)/i);
+  });
+});
+
+test("task artifact cleanup preserves unregistered scratch data", async (t) => {
+  await inTaskRepository(t, async ({ cwd, branch, head, scratch }) => {
+    const report = await cleanupTaskArtifacts({ issue: 1, branch, head, cwd, repo });
+
+    assert.ok(existsSync(scratch), "a canonical path alone does not establish scratch ownership");
+    assert.equal(await readFile(join(scratch, "notes"), "utf8"), "completed task scratch");
+    assert.match(report.failures.join("\n"), /unregistered|ownership|identity|not.*registered/i);
+  });
+});
+
+test("task artifact cleanup preserves replacement scratch with a different directory identity", async (t) => {
+  await inTaskRepository(t, async ({ cwd, branch, head, scratch, scratchIdentity }) => {
+    await rename(scratch, `${scratch}-original`);
+    await mkdir(scratch);
+    await writeFile(join(scratch, "operator-notes"), "replacement directory");
+
+    const report = await cleanupTaskArtifacts({
+      issue: 1,
+      branch,
+      head,
+      cwd,
+      repo,
+      scratchIdentity,
+    });
+
+    assert.ok(existsSync(scratch), "the registered identity does not match the replacement");
+    assert.equal(await readFile(join(scratch, "operator-notes"), "utf8"), "replacement directory");
+    assert.match(report.failures.join("\n"), /identity|ownership|changed|mismatch/i);
+  });
+});
+
+test("task artifact cleanup preserves an independent Git checkout inside registered scratch", async (t) => {
+  await inTaskRepository(t, async ({ git, cwd, branch, head, scratch, scratchIdentity }) => {
+    const checkout = join(scratch, "independent");
+    await mkdir(checkout);
+    git("-C", checkout, "init", "--initial-branch=main");
+    const notes = join(checkout, "operator-notes");
+    await writeFile(notes, "independent checkout data");
+
+    const report = await cleanupTaskArtifacts({
+      issue: 1,
+      branch,
+      head,
+      cwd,
+      repo,
+      scratchIdentity,
+    });
+
+    assert.ok(existsSync(join(checkout, ".git", "HEAD")), "embedded Git metadata is preserved");
+    assert.equal(await readFile(notes, "utf8"), "independent checkout data");
+    assert.match(report.failures.join("\n"), /checkout|git metadata|\.git/i);
+  });
 });
 
 test("local admission checks current access rather than stale contributor association", async () => {
