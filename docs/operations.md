@@ -42,9 +42,9 @@ npm run orchestrator -- claim --issue 123
 npm run orchestrator -- worktree --issue 123
 ```
 
-The orchestrator selects and dispatches eligible Ready stories while the Project has room under the five-story limit and workers are available. Any unarchived Project story in Review blocks admission of a new story, including Review work awaiting humans or external dependencies. Existing claims, review and fix stages, and redesign under an existing claim may continue.
+The orchestrator counts In Progress stories and Review reservations before each new claim. It can claim eligible Ready work when fewer than five story slots are occupied and can dispatch it when a worker is available. A current-head approval with no effective request for changes frees the story slot, even while inline threads await resolution before merge. Pending, rejected, and unverifiable Review stories each occupy one slot. See the [workflow rules](workflow.md#claiming-and-delivery) for how reviews count. Existing claims and Review fixes remain resumable.
 
-The command reserves In Progress before work. Repeated accepted claims return the same issue branch. Fresh scope/dependencies and the five-story cap are checked; inaccessible active items count against capacity. The worktree command prints the assigned absolute path and head. Give that path, acceptance digest, committed SHA, scope, and next owner to each specialist.
+The command reserves In Progress before work. Repeated accepted claims return the same issue branch. The command checks current scope, dependencies, and the combined five-story cap. Inaccessible active items count against capacity. Budget one `maxConcurrentWorkers` slot for each active reviewer, with one active reviewer per story. The worktree command prints the assigned absolute path and head. Give that path, acceptance digest, committed SHA, scope, and next owner to each specialist.
 
 ## Tester-first implementation and publishing
 

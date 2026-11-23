@@ -12,6 +12,7 @@ import {
   issueDigest,
   loopDecision,
   patchDigest,
+  projectStoryKey,
   sameLogin,
   validateReview,
   validateTriage,
@@ -30,6 +31,28 @@ const closingIssues = (pr) => [
 
 const exactHead = (head) => typeof head === "string" && /^[a-f0-9]{40}$/.test(head);
 const issueBranch = (issue) => `agent/issue-${issue}`;
+const isRepositoryName = (name) =>
+  typeof name === "string" && /^[a-z0-9-]+\/(?!\.{1,2}$)[\w.-]+$/i.test(name);
+
+function hasEffectiveApproval(reviews, head) {
+  const decisions = new Map();
+  // GitHub lists reviews chronologically, so the last decisive review per reviewer wins.
+  for (const review of reviews) {
+    if (["COMMENTED", "PENDING"].includes(review?.state)) continue;
+    if (
+      !["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(review?.state) ||
+      !exactHead(review.commit_id)
+    )
+      return false;
+    if (review.commit_id !== head) continue;
+    const reviewer = review.user?.id;
+    if (!Number.isSafeInteger(reviewer) || reviewer < 1) return false;
+    if (review.state === "DISMISSED") decisions.delete(reviewer);
+    else decisions.set(reviewer, review.state);
+  }
+  const verdicts = [...decisions.values()];
+  return verdicts.includes("APPROVED") && !verdicts.includes("CHANGES_REQUESTED");
+}
 
 function within(path, directory) {
   const fromDirectory = relative(directory, path);
@@ -517,6 +540,88 @@ export class LocalOrchestrator {
     return { ready: assessment.ready, digest: state.triagedDigest };
   }
 
+  async reviewFreesStorySlot(item) {
+    const issue = item.content;
+    const repository = issue?.repository?.nameWithOwner;
+    if (
+      issue?.__typename !== "Issue" ||
+      !isRepositoryName(repository) ||
+      !Number.isSafeInteger(issue.number) ||
+      issue.number < 1
+    )
+      return false;
+
+    const [owner, name] = repository.split("/");
+    try {
+      const api = sameLogin(repository, this.repo) ? this.api : (this.project.api ?? this.api);
+      const data = await api.graphql(
+        `query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            issue(number: $number) {
+              closedByPullRequestsReferences(first: 2) {
+                totalCount
+                nodes { number state isDraft headRefOid repository { nameWithOwner } }
+                pageInfo { hasNextPage }
+              }
+            }
+          }
+        }`,
+        { owner, name, number: issue.number },
+      );
+      const links = data?.repository?.issue?.closedByPullRequestsReferences;
+      if (
+        links?.totalCount !== 1 ||
+        links.nodes?.length !== 1 ||
+        links.pageInfo?.hasNextPage !== false
+      )
+        return false;
+      const pr = links.nodes[0];
+      const pullRepository = pr?.repository?.nameWithOwner;
+      if (
+        pr?.state !== "OPEN" ||
+        pr.isDraft !== false ||
+        !exactHead(pr.headRefOid) ||
+        !isRepositoryName(pullRepository) ||
+        !Number.isSafeInteger(pr.number) ||
+        pr.number < 1
+      )
+        return false;
+      const pullApi = sameLogin(pullRepository, this.repo)
+        ? this.api
+        : (this.project.api ?? this.api);
+      const path = `repos/${pullRepository}/pulls/${pr.number}`;
+      const reviews = await pullApi.list(`${path}/reviews`);
+      if (!hasEffectiveApproval(reviews, pr.headRefOid)) return false;
+      // Check for a push or state change while reading the paginated review evidence.
+      const current = await pullApi.request(path);
+      return (
+        current?.state === "open" && current.draft === false && current.head?.sha === pr.headRefOid
+      );
+    } catch {
+      // Inaccessible or incomplete evidence conservatively keeps this story reserved.
+      return false;
+    }
+  }
+
+  async availableStorySlots(replacing) {
+    const reviewStories = new Map();
+    for (const item of this.project.items) {
+      if (
+        !item.isArchived &&
+        item.content?.__typename !== "PullRequest" &&
+        item.status === this.config.statuses.review
+      )
+        reviewStories.set(projectStoryKey(item), item);
+    }
+    if (replacing) reviewStories.delete(projectStoryKey(replacing));
+    const reservations = await Promise.all(
+      [...reviewStories.values()].map(async (item) =>
+        (await this.reviewFreesStorySlot(item)) ? null : item,
+      ),
+    );
+    return availableSlots(this.project.items, this.config, reservations.filter(Boolean), replacing);
+  }
+
   async claim(number) {
     const issue = await this.issue(number);
     const { state } = await this.ledger.load(number);
@@ -542,19 +647,10 @@ export class LocalOrchestrator {
     }
     if (item.status !== this.config.statuses.ready)
       throw new Error("Only Ready issues can be claimed");
-    if (
-      this.project.items.some(
-        (entry) =>
-          !entry.isArchived &&
-          entry.content?.__typename !== "PullRequest" &&
-          entry.status === this.config.statuses.review,
-      )
-    )
+    if (!(await this.availableStorySlots()))
       throw new Error(
-        "Finish existing Review stories before claiming new work; resolve pending reviews, fixes, or human/external waits first",
+        "The five-story In Progress capacity is exhausted (including Review reservations)",
       );
-    if (!availableSlots(this.project.items, this.config))
-      throw new Error("The five-story In Progress capacity is exhausted");
     if (state.pendingClaim)
       throw new Error(
         "An earlier claim has an uncertain result; reconcile its Project status before retrying",
@@ -790,7 +886,7 @@ export class LocalOrchestrator {
       if (
         pr.draft &&
         item.status !== this.config.statuses.inProgress &&
-        !availableSlots(this.project.items, this.config)
+        !(await this.availableStorySlots(item))
       )
         throw new Error("Draft work is waiting for In Progress capacity");
       await this.project.move(

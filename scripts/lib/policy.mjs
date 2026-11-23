@@ -233,14 +233,30 @@ export function loopDecision(history, config) {
   return { action: current.rethink ? "rethink" : "fix" };
 }
 
-export function availableSlots(items, config) {
-  const active = items.filter(
-    (item) =>
+export function projectStoryKey(item) {
+  const { content } = item;
+  const repository = content?.repository?.nameWithOwner;
+  if (
+    content?.__typename === "Issue" &&
+    typeof repository === "string" &&
+    positiveInteger(content.number)
+  )
+    return `issue:${repository.toLowerCase()}#${content.number}`;
+  return item.id ? `item:${item.id}` : item;
+}
+
+export function availableSlots(items, config, reviewReservations = [], replacing) {
+  const occupied = new Set(reviewReservations.map(projectStoryKey));
+  for (const item of items) {
+    if (
       !item.isArchived &&
       item.content?.__typename !== "PullRequest" &&
-      item.status === config.statuses.inProgress,
-  );
-  return Math.max(0, config.maxInProgress - active.length);
+      item.status === config.statuses.inProgress
+    )
+      occupied.add(projectStoryKey(item));
+  }
+  if (replacing) occupied.delete(projectStoryKey(replacing));
+  return Math.max(0, config.maxInProgress - occupied.size);
 }
 
 export function dependencyComplete(issue) {
