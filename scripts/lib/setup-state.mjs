@@ -8,6 +8,7 @@ import {
   chmod,
   readdir,
   realpath,
+  rmdir,
   writeFile,
 } from "node:fs/promises";
 import { constants, lstatSync, readFileSync, unlinkSync } from "node:fs";
@@ -304,6 +305,20 @@ export class SetupState {
     // A marker from the old single-file layout still protects the issue.
     if (!info.isDirectory()) return true;
     return (await artifactDirectory(directory)) && (await readdir(directory)).length > 0;
+  }
+
+  async clearEmptyIssueReservation(issue) {
+    if (!this.lock)
+      throw new Error("Acquire the setup/orchestrator lock before clearing an issue reservation");
+    const directory = await this.issueArtifactPath(issue, "issue-reservations");
+    if (!directory || !(await artifactDirectory(directory))) return null;
+    try {
+      await rmdir(directory);
+      return directory;
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      return null;
+    }
   }
 
   async prepareIssueArtifacts(issue) {

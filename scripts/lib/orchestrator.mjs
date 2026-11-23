@@ -832,7 +832,11 @@ export class LocalOrchestrator {
         repo: this.repo,
         scratchIdentity: await this.store?.issueScratchIdentity?.(issue),
       });
-      if (!cleanup.failures.length) await this.store?.clearIssueScratchIdentity?.(issue);
+      if (!cleanup.failures.length) {
+        await this.store?.clearIssueScratchIdentity?.(issue);
+        const reservation = await this.store?.clearEmptyIssueReservation?.(issue);
+        if (reservation) cleanup.removed.push(reservation);
+      }
       return cleanup;
     } catch (error) {
       if (!cleanup) return blocked(error.message);
