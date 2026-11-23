@@ -178,7 +178,9 @@ Each invocation attempts automatic ruleset configuration again. The repository v
 
 ## Upgrade an existing GRAIT installation
 
-For a packaged installation, start on an integration branch and select the full Git SHA or 12-character prefix of the reviewed target revision. If your CLI supports fetching the requested revision, use `--plan` to preview the upgrade.
+Use `grait upgrade` in a repository with an existing packaged GRAIT installation, from a host with the GRAIT CLI available. For first-time adoption, follow [installation for an existing repository](#existing-repository).
+
+Start on an integration branch and pass the full Git SHA or its 12-character prefix with the required `--revision` option. Use `--plan` to preview the upgrade.
 
 ```sh
 grait upgrade --revision GIT_PIN --plan
@@ -186,7 +188,7 @@ grait upgrade --revision GIT_PIN --plan
 
 GRAIT fetches the target from its Git repository when the running package cannot be verified at that pin. The fetch uses a temporary directory and leaves the application's dependencies and package files untouched.
 
-Use this command to bootstrap the CLI or to upgrade from a version that requires an exact package pin.
+If your installed CLI requires the running package to match the target revision, use `npm exec` to run the target package for this upgrade.
 
 ```sh
 grait_revision=GIT_PIN
