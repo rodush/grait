@@ -45,6 +45,10 @@ const result = await build({
   bundle: true,
   platform: "node",
   format: "esm",
+  // Bundled CommonJS dependencies can still load Node built-ins from the ESM entry.
+  banner: {
+    js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
+  },
   target: "node24",
   minify: true,
   write: false,

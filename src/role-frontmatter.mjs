@@ -21,7 +21,13 @@ export function applyRoleFrontmatter(content, fields) {
   if (!header) return content;
 
   const [original, opening, newline, yaml, closing] = header;
-  const unmanaged = managed ? yaml.replace(`${newline}${managed}`, "") : yaml;
+  let unmanaged = yaml;
+  if (managed) {
+    const index = yaml.search(roleProfileBlock);
+    const before = yaml.slice(0, index);
+    const after = yaml.slice(index + managed.length);
+    unmanaged = before ? before.replace(/\r?\n$/, "") + after : after.replace(/^\r?\n/, "");
+  }
   const settings = parse(unmanaged) ?? {};
   const overrides = Object.entries(fields).filter(([key]) => !Object.hasOwn(settings, key));
   const lines = overrides.length
