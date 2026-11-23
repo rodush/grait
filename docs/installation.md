@@ -178,13 +178,15 @@ Each invocation attempts automatic ruleset configuration again. The repository v
 
 ## Upgrade an existing GRAIT installation
 
-For a packaged installation, start on an integration branch and run the CLI from the reviewed **target** Git revision. Use the same full SHA or 12-character prefix in both arguments. Both preview and apply verify the running package revision against npm’s lockfile.
+Use `grait upgrade` in a repository with an existing packaged GRAIT installation, from a host with the GRAIT CLI available. For first-time adoption, follow [installation for an existing repository](#existing-repository).
+
+Start on an integration branch and pass the full Git SHA or its 12-character prefix with the required `--revision` option. Use `--plan` to preview the upgrade.
 
 ```sh
-npm exec --yes --allow-git=root --ignore-scripts \
-  --package='git+https://github.com/rodush/grait.git#GIT_PIN' -- \
-  grait upgrade --plan --revision GIT_PIN
+grait upgrade --revision GIT_PIN --plan
 ```
+
+GRAIT fetches the target from its Git repository when the running package cannot be verified at that pin. The fetch uses a temporary directory and leaves the application's dependencies and package files untouched.
 
 Review the proposed diff, then repeat the command without `--plan` and confirm, or use `--yes` for scripted application. The upgrade preserves your workflow configuration, CODEOWNERS, and text outside GRAIT-managed policy blocks. If managed content has changed, the command identifies the conflicting file before applying anything. Restore the recorded managed content and move any intended customization outside its managed block before retrying.
 
