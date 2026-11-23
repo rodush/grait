@@ -19,9 +19,12 @@ async function resolvedFromLock(lockPath, lockRoot, packageRoot) {
   return packages && Object.hasOwn(packages, key) ? (packages[key]?.resolved ?? null) : undefined;
 }
 
-async function installedRevision() {
-  if (!bundledRuntime) return undefined;
-  const packageRoot = dirname(dirname(runtimeFile));
+export async function installedRevision({
+  cliPath = bundledRuntime ? runtimeFile : undefined,
+  searchParents = true,
+} = {}) {
+  if (!cliPath) return undefined;
+  const packageRoot = dirname(dirname(cliPath));
   const modules = dirname(packageRoot);
   if (basename(packageRoot) !== "grait" || basename(modules) !== "node_modules") return undefined;
   const root = dirname(modules);
@@ -31,16 +34,20 @@ async function installedRevision() {
     resolved = await resolvedFromLock(join(dir, "npm-shrinkwrap.json"), dir, packageRoot);
     if (resolved === undefined)
       resolved = await resolvedFromLock(join(dir, "package-lock.json"), dir, packageRoot);
-    if (dirname(dir) === dir) break;
+    if (!searchParents || dirname(dir) === dir) break;
   }
   const match = typeof resolved === "string" && resolved.match(gitSource);
   return match ? match[1].toLowerCase() : undefined;
 }
 
-export async function resolveInstallRevision(requested, { requireInstalled } = {}) {
+export function revisionPin(requested) {
   if (typeof requested !== "string" || !pinPattern.test(requested))
     throw new Error("Provide a full Git commit SHA or its 12-character prefix with --revision");
-  const pin = requested.toLowerCase();
+  return requested.toLowerCase();
+}
+
+export async function resolveInstallRevision(requested, { requireInstalled } = {}) {
+  const pin = revisionPin(requested);
   let revision;
   try {
     revision = await installedRevision();

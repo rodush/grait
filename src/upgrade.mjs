@@ -1,7 +1,8 @@
-import { realpath } from "node:fs/promises";
+import { realpath, rm, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { isDeepStrictEqual, parseArgs } from "node:util";
 import { sameLogin } from "../scripts/lib/policy.mjs";
-import { confirm } from "../scripts/lib/setup-process.mjs";
+import { command, confirm, withoutCredentials } from "../scripts/lib/setup-process.mjs";
 import { readArtifact } from "./artifact-stage.mjs";
 import {
   applyArtifactTransaction,
@@ -17,13 +18,70 @@ import {
   validateInstallation,
   validateTarget,
 } from "./installation-record.mjs";
-import { resolveInstallRevision } from "./installation-revision.mjs";
-import { installerStore } from "./installer-services.mjs";
+import { installedRevision, revisionPin } from "./installation-revision.mjs";
+import { installerStore, privateStagingDirectory } from "./installer-services.mjs";
 import { pinnedValidationWorkflow } from "./installer.mjs";
 import { generateProjectArtifacts } from "./project-policy.mjs";
 import { targetRoot } from "./runtime.mjs";
 
 const configPath = "workflow.config.json";
+
+async function runFetchedUpgrade({ root, pin, args }) {
+  const stage = await privateStagingDirectory(root, "grait-upgrade-");
+  const cliPath = join(stage, "node_modules", "grait", "dist", "cli.mjs");
+  const env = withoutCredentials();
+  try {
+    try {
+      await command(
+        "npm",
+        [
+          "install",
+          "--prefix",
+          stage,
+          "--no-global",
+          "--ignore-scripts",
+          "--allow-git=root",
+          "--package-lock",
+          "--no-audit",
+          "--no-fund",
+          `git+https://github.com/rodush/grait.git#${pin}`,
+        ],
+        { cwd: stage, env },
+      );
+    } catch {
+      throw new Error(
+        `Could not fetch GRAIT at Git revision ${pin}. Check the pin, npm installation, and GitHub connectivity, then retry.`,
+      );
+    }
+
+    try {
+      const revision = await installedRevision({
+        cliPath,
+        searchParents: false,
+      });
+      if (
+        !revision?.startsWith(pin) ||
+        (await realpath(cliPath)) !== cliPath ||
+        !(await stat(cliPath)).isFile()
+      )
+        throw new Error("Invalid fetched package");
+    } catch {
+      throw new Error(
+        `Cannot verify the fetched GRAIT package matches the requested Git revision ${pin}. Check the pin and retry.`,
+      );
+    }
+
+    const { code } = await command(process.execPath, [cliPath, "upgrade", ...args], {
+      cwd: root,
+      env,
+      interactive: true,
+      allowFailure: true,
+    });
+    return code ?? 1;
+  } finally {
+    await rm(stage, { recursive: true, force: true });
+  }
+}
 
 async function buildUpgrade({ root, repo, revision, version }) {
   const { record, config, artifacts: before } = await validateInstallation(root);
@@ -80,15 +138,16 @@ export async function runUpgrade({ args, cwd, version }) {
   });
   if (values.help) {
     console.log(
-      "grait upgrade --plan --revision GIT_PIN\nRun the Git-pinned package for both preview and apply. Inspect the plan, then rerun without --plan or use --yes to apply it.",
+      "grait upgrade --plan --revision GIT_PIN\nGRAIT fetches and verifies the requested Git revision when needed. Inspect the plan, then rerun without --plan to confirm or use --yes to apply it.",
     );
     return 0;
   }
   if (values.plan && values.yes) throw new Error("Choose either --plan or --yes");
-  const revision = await resolveInstallRevision(values.revision, {
-    requireInstalled: true,
-  });
+  const pin = revisionPin(values.revision);
   const root = await realpath(await targetRoot(cwd));
+  // An unverified local package can fetch the target, but only a verified one can upgrade.
+  const revision = await installedRevision().catch(() => undefined);
+  if (!revision?.startsWith(pin)) return runFetchedUpgrade({ root, pin, args });
   const config = await readArtifact(root, configPath);
   const repo = config && JSON.parse(config).controllerRepository;
   if (typeof repo !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repo))
@@ -121,7 +180,12 @@ export async function runUpgrade({ args, cwd, version }) {
       if (current.changes.length) await confirm("Apply this upgrade plan?", values.yes);
     } else assertExpectedChanges(preview.changes, current.changes);
     if (!current.changes.length) return 0;
-    await applyArtifactTransaction({ ...input, ...current, store, operation: "upgrade" });
+    await applyArtifactTransaction({
+      ...input,
+      ...current,
+      store,
+      operation: "upgrade",
+    });
   } finally {
     await store.release();
   }
