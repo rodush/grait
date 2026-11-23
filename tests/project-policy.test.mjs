@@ -117,6 +117,45 @@ test("project policy includes the canonical shared engineering rules", async () 
   }
 });
 
+const backgroundTriage =
+  /\b(?:triage\b[^.!?\n]*\b(?:background|concurrent(?:ly)?|parallel)|(?:background|concurrent(?:ly)?|parallel)\b[^.!?\n]*\btriage)\b/i;
+const completedWorkerCapacity =
+  /\b(?:release|free|return|reuse|reclaim|remove|exclude)\w*\b[^.!?\n]*\b(?:slots?|capacity|worker count)\b/i;
+
+function assertTriageLifecycle(instructions, destination) {
+  assert.ok(backgroundTriage.test(instructions), `${destination} must describe background triage`);
+  assert.ok(
+    completedWorkerCapacity.test(instructions),
+    `${destination} must release capacity when a triage assignment completes`,
+  );
+}
+
+test("repository orchestrator instructions and operator docs explain background triage and worker release", async () => {
+  for (const destination of [
+    "automation/skills/grait-orchestrator/SKILL.md",
+    ".agents/skills/grait-orchestrator/SKILL.md",
+    ".claude/skills/grait-orchestrator/SKILL.md",
+    ".github/skills/grait-orchestrator/SKILL.md",
+    "docs/operations.md",
+  ]) {
+    const instructions = await readFile(new URL(`../${destination}`, import.meta.url), "utf8");
+    assertTriageLifecycle(instructions, destination);
+  }
+});
+
+test("installed orchestrator instructions explain background triage and worker release for each harness", async () => {
+  const generate = await generator();
+  for (const [harness, root] of [
+    ["codex", ".agents"],
+    ["claude", ".claude"],
+    ["copilot", ".github"],
+  ]) {
+    const files = asObject(await generate({ harness, version: "0.1.0" }));
+    const destination = `${root}/skills/grait-orchestrator/SKILL.md`;
+    assertTriageLifecycle(files[destination], destination);
+  }
+});
+
 test("project policy rejects malformed or duplicate managed policy boundaries", async () => {
   const generate = await generator();
   for (const agents of [
