@@ -108,7 +108,11 @@ The legacy setup can publish its own configuration commit through the writer App
 
 ## Ruleset configuration fallback
 
-If GitHub rejects a ruleset operation or the rulesets are unavailable, setup prints the repository settings URL and complete JSON configurations for the delivery, human merge authority, and release-tag rules. It explains the failure and waits for your choice:
+Setup and activation manage **Required delivery gates**, **Release tag creation**, and **Immutable release tags**. The delivery gates require agent review, CI, CODEOWNERS approval, conversation resolution, and squash merges. The reviewer App posts the agent review. Human code owners approve and maintainers merge.
+
+For existing installations with the legacy **Human merge authority** ruleset, open the repository ruleset settings at `https://github.com/OWNER/REPOSITORY/settings/rules` and set its enforcement to **Disabled**. Maintainers can then squash-merge after the required delivery gates pass. Setup and activation leave the legacy ruleset as configured.
+
+If GitHub rejects a ruleset operation or the rulesets are unavailable, setup prints the repository settings URL and complete JSON configurations for the delivery and release-tag rules. It explains the failure and waits for your choice:
 
 - Configure the rules manually where supported, then enter `completed` to have setup verify them and continue.
 - Enter `continue` to acknowledge that GitHub rules are unenforced and continue setup. Agent instructions still require human PR approval and merge; agents never merge or release.
