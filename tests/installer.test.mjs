@@ -113,6 +113,28 @@ globalThis.fetch = async (url, options = {}) => {
       return new Response(executable);
     return Response.json({ encoding: "base64", content: executable.toString("base64") });
   }
+  if (parsed.hostname === "api.github.com" && path === "graphql" && method === "POST") {
+    const { query, variables } = JSON.parse(options.body);
+    if (query.includes("pullRequest(")) {
+      const { configurationPR: pull } = state;
+      const found =
+        variables.owner === "acme" && variables.name === "service" &&
+        variables.number === pull?.number;
+      return Response.json({
+        data: {
+          repository: {
+            pullRequest: found ? {
+              merged: pull.merged,
+              mergeCommit: { oid: pull.merge_commit_sha },
+              mergedBy: { __typename: pull.merged_by.type },
+              baseRefName: pull.base.ref,
+              baseRepository: { nameWithOwner: pull.base.repo.full_name },
+            } : null,
+          },
+        },
+      });
+    }
+  }
   if (parsed.hostname !== "api.github.com" || !path.startsWith(prefix))
     return request(url, options);
   const endpoint = path.slice(prefix.length);
@@ -142,11 +164,14 @@ globalThis.fetch = async (url, options = {}) => {
     value = sha ? [{ sha }] : [];
   } else if (method === "GET" && /^commits\\/[^/]+\\/pulls$/.test(endpoint)) {
     const sha = endpoint.split("/")[1];
-    value = state.configurationPR?.merge_commit_sha === sha ? [state.configurationPR] : [];
+    value = state.configurationPR && (state.associatedCommit ?? state.configurationPR.merge_commit_sha) === sha
+      ? [state.configurationPR] : [];
+    if (state.omitRestMergeCommit) value = value.map(({ number }) => ({ number }));
   } else if (method === "GET" && endpoint === "pulls" && parsed.searchParams.get("state") === "closed") {
     value = state.configurationPR ? [state.configurationPR] : [];
   } else if (method === "GET" && endpoint === "pulls/99" && state.configurationPR) {
-    value = state.configurationPR;
+    value = { ...state.configurationPR };
+    if (state.omitRestMergeCommit) delete value.merge_commit_sha;
   } else if (method === "GET" && endpoint === "pulls/99/files" && state.configurationPR) {
     value = state.configurationFiles;
   } else if (method === "GET" && endpoint === "commits/main") {
@@ -584,6 +609,46 @@ test("installed activation rejects a direct default-branch commit despite matchi
   await f.commitDirectly();
   const activation = await f.run(["activate"]);
   assert.notEqual(activation.status, 0, "Require a merged configuration PR before enabling");
+  assert.match(activation.output, /merge|pull request/i);
+  await assertInactive(f);
+});
+
+test("installed activation accepts an exact human merge when REST omits the merge commit", async (t) => {
+  const f = await installerFixture(t, { omitRestMergeCommit: true });
+  assert.equal((await f.run([...init, "--yes"])).status, 0);
+  await f.mergeConfiguration();
+  await f.update({ ciConclusion: "success" });
+
+  const activation = await f.run(["activate"]);
+  assert.equal(
+    activation.status,
+    0,
+    "An exact human merge permits activation without the REST field",
+  );
+  assert.equal((await f.localState()).enabled, true);
+  assert.equal(
+    (await f.state()).variables.find(({ name }) => name === "AUTOMATION_ENABLED").value,
+    "true",
+  );
+});
+
+test("installed activation rejects an associated PR merged at a different commit", async (t) => {
+  const f = await installerFixture(t);
+  assert.equal((await f.run([...init, "--yes"])).status, 0);
+  await f.mergeConfiguration();
+  const { configurationPR, installationCommit } = await f.state();
+  await f.update({
+    ciConclusion: "success",
+    associatedCommit: installationCommit,
+    configurationPR: { ...configurationPR, merge_commit_sha: f.initialHead },
+  });
+
+  const activation = await f.run(["activate"]);
+  assert.notEqual(
+    activation.status,
+    0,
+    "PR association cannot replace an exact merge commit match",
+  );
   assert.match(activation.output, /merge|pull request/i);
   await assertInactive(f);
 });
