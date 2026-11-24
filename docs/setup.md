@@ -1,26 +1,21 @@
 # Setup reference
 
-For step-by-step adoption, start with [installation and configuration](installation.md). This page describes maintained configuration and commands. Setup accepts staged or unstaged edits to the tracked `workflow.config.json` as configuration input and includes that file in its final configuration PR. Other local changes must be preserved separately before setup; a config-only edit needs no preliminary commit.
+Use the [installation guide](installation.md) to prepare an application repository and [select a pinned CLI](installation.md#choose-and-run-a-pinned-cli). Run these commands from the target checkout using that package. Git, GitHub CLI, Node.js 24 or newer, npm 11.10.0 or newer, and the selected native harness belong on the operator host. Application code may use any stack.
 
-## Repository tooling runtime
+## Packaged CLI commands
 
-GRAIT's repository automation uses Node.js 24 and the npm version recorded in its tooling `package.json`. These requirements apply when running GRAIT in the template itself and in adopting projects. Application code may use any language. See [GRAIT development](grait-development.md) when modifying tooling, and use the application's own command reference for application development. The commands below operate and validate GRAIT.
+| Command                                                                                    | Purpose                                                             |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| `grait init --plan --repo OWNER/REPOSITORY --revision "$GRAIT_REVISION"`                   | Preview installation artifacts                                      |
+| `grait init --repo OWNER/REPOSITORY --revision "$GRAIT_REVISION"`                          | Provision the Project and Apps and apply application-side artifacts |
+| `grait validate`                                                                           | Check the installed configuration and managed artifacts             |
+| `grait activate`                                                                           | Activate after human merge and default-branch CI                    |
+| `grait upgrade --plan --revision "$GRAIT_UPGRADE_REVISION"`                                | Preview a packaged upgrade                                          |
+| `grait migrate --plan --revision "$GRAIT_REVISION" --legacy-revision "$TEMPLATE_REVISION"` | Preview migration from a configured GRAIT template                  |
+| `grait orchestrator --help`                                                                | Queue, worktree, worker, review, and synchronization commands       |
+| `grait github --help`                                                                      | Scoped writer publishing commands                                   |
 
-| Command                                    | Purpose                                                                         |
-| ------------------------------------------ | ------------------------------------------------------------------------------- |
-| `npm run setup -- --plan`                  | Read-only installation preview                                                  |
-| `npm run setup`                            | Guided host and repository configuration                                        |
-| `npm run setup -- --activate`              | Activate after human merge and default-branch CI                                |
-| `npm run orchestrator -- start`            | Start the native local orchestrator session                                     |
-| `npm run orchestrator -- --help`           | Queue, worktree, worker, review, and synchronization commands                   |
-| `npm run github -- --help`                 | Scoped writer publishing commands                                               |
-| `npm run bootstrap -- ...`                 | Advanced repository/Project provisioning; plan by default, `--apply` mutates    |
-| `npm run harness:generate`                 | Generate installed skills and Codex/Claude/Copilot roles from canonical sources |
-| `npm run check`                            | Validate configuration, action pins, documentation links, and adapter drift     |
-| `npm test`                                 | Run deterministic local tooling tests with fake external services               |
-| `npm run format:check` / `npm run lint:md` | Check formatting and Markdown                                                   |
-
-No compiler extension or generated Actions lockfiles are needed. Edit canonical sources first and regenerate native adapters after changing roles, skills, or role profiles.
+See [GRAIT development](grait-development.md) for source-checkout tests and generator commands.
 
 ## Subscription authentication
 
@@ -36,14 +31,9 @@ Copilot uses local CLI sub-agents; its `/delegate` cloud-agent flow is outside t
 
 ### Configure worker concurrency
 
-Set `maxConcurrentWorkers` in `workflow.config.json` to an integer from **1 to 5**; the default is **5**. For example, use `"maxConcurrentWorkers": 3` to run at most three specialists at once. Then run:
+Set `maxConcurrentWorkers` in `workflow.config.json` to an integer from **1 to 5**. The default is **5**. For example, use `"maxConcurrentWorkers": 3` to run at most three specialists at once. The orchestrator reads this value when it starts, and Copilot worker launches receive it. Native limits also apply.
 
-```sh
-npm run harness:generate
-npm run check
-```
-
-Generation applies the value to `agents.max_concurrent_threads_per_session` in `.codex/config.toml`. Change `workflow.config.json` rather than editing that generated setting. Copilot worker launches also receive the configured value; all harnesses follow the orchestrator's worker cap, subject to their native limits. Start a new harness session to use the updated configuration.
+For a packaged Codex installation, [refresh the managed files](installation.md#upgrade-an-existing-grait-installation) when changing the generated `.codex/config.toml`. Generation applies the value to `agents.max_concurrent_threads_per_session` when the native config supplies no override. Start a new harness session after updating the configuration.
 
 Worker slots are shared across triage, testing, implementation, fixes, and review. Each active review uses one worker, with at most one active reviewer per story. Each story's tester and implementer take sequential exclusive ownership of its branch and worktree. The independent Project-wide ceiling is [five occupied story slots](workflow.md#claiming-and-delivery), shared by In Progress stories and Review reservations.
 
@@ -83,7 +73,7 @@ Use model IDs or aliases supported by your installed harness and account. GRAIT 
 
 In a template checkout, run `npm run harness:generate` after updating the configuration. `config/codex.toml` remains the canonical Codex project default, and the active Codex orchestrator profile can override the model and reasoning in its generated copy. In an installed project, run the pinned `grait upgrade` with the installation's current or newer revision to refresh the managed agent files. Existing user-owned native settings take precedence in generated agent files. Role profiles grant no additional permissions.
 
-Claude triage/review roles use native worktree isolation. Tester, implementer, and fix stages use the orchestrator's pre-created issue worktree sequentially; they must not create independent default-branch worktrees. `npm run orchestrator -- worker --issue N --role implement` launches a native session in that existing worktree. Native delegation can instead assign its absolute path and exact committed handoff explicitly.
+Claude triage/review roles use native worktree isolation. Tester, implementer, and fix stages use the orchestrator's pre-created issue worktree sequentially; they must not create independent default-branch worktrees. `grait orchestrator worker --issue N --role implement` launches a native session in that existing worktree. Native delegation can instead assign its absolute path and exact committed handoff explicitly.
 
 ## Publishing identities and Project access
 
@@ -112,7 +102,7 @@ Submit the [usual triage fields](operations.md#triage-and-claim) with `ready: fa
 ```
 
 ```sh
-npm run orchestrator -- ready --issue 123 --file /tmp/triage.json
+grait orchestrator ready --issue 123 --file /tmp/triage.json
 ```
 
 GRAIT applies the label configured in `labels.needsHuman` (default `agent:needs-human`) and records the blocker and requested action in its issue comment. Repeated reports update the same comment. Issues in triage stay in Backlog. A wait on native dependencies alone uses the existing dependency links. Include public `questions` or `humanAttention` when an issue also needs a separate operator action.
@@ -128,7 +118,7 @@ Conflicting reviewer instructions also label the linked issue and record the act
 After GitHub confirms the issue's linked PR was merged and the worker sessions have released the issue, run this from the coordinator checkout:
 
 ```sh
-npm run orchestrator -- sync --pr 123
+grait orchestrator sync --pr 123
 ```
 
 Before moving the Project issue to Done and recording the completed PR, sync verifies that the PR from the canonical claim branch in the same repository was merged into that repository's default branch and that GitHub reports exactly one closing reference to the claimed issue. Local cleanup requires Git 2.36 or newer. When a TDD handoff exists, it must be released and its accepted head must match the PR head. For claims without a TDD handoff, the merged PR supplies the exact head. This also works after a squash merge.
@@ -143,9 +133,9 @@ For a TDD-exempt worker launched outside the managed command, run `git worktree 
 
 The `cleanup.removed` list records what was deleted, and `cleanup.failures` reports blockers. If a blocker remains, review the reported path or ref, release any remaining sessions, and reconcile the ownership, files, or branch before rerunning the same command. Use a separate location to preserve any operator files you need to move. Cleanup skips work already completed, so a successful retry with no remaining artifacts returns two empty lists.
 
-## Advanced bootstrap
+## Legacy template repair and maintainer bootstrap
 
-The guided setup supplies these details automatically. For a deliberate manual integration, preview before applying:
+In a source checkout that still includes the GRAIT tooling, maintainers can inspect staged provision details with the advanced bootstrap command. Packaged installations use `grait init` and `grait activate`. To preview the legacy bootstrap:
 
 ```sh
 npm run bootstrap -- --repo OWNER/REPOSITORY --maintainers alice --writer-login 'writer-app[bot]' --reviewer-login 'review-app[bot]'
@@ -159,4 +149,6 @@ Advanced commands do not replace the host-side credentials and native login that
 
 Guided setup verifies both Apps using their private keys and target repository installations. It records `AUTOMATION_APP_ID` and `REVIEW_APP_ID` for the Apps, plus `AUTOMATION_BOT_USER_ID` and `REVIEW_BOT_USER_ID` for their bot accounts. GitHub authorship checks use the bot user IDs. The login variables are display metadata after the numeric bindings are recorded. An App rename keeps the same bindings and associated history.
 
-To record publishing identities during advanced bootstrap, supply the verified writer App ID with `--status-app-id`, the reviewer App ID with `--reviewer-app-id`, and the two bot user IDs with `--writer-bot-user-id` and `--reviewer-bot-user-id`. Bootstrap without publishing IDs can stage Project and repository settings. Activation independently verifies the numeric bindings against the saved App credentials. If the required numeric bindings are missing or inconsistent, complete clean setup before activation.
+During initial packaged provisioning, add `--writer-key PATH --reviewer-key PATH` to the `grait init` command to import existing private keys while the workflow is paused. Import requires the repository to record all four numeric bindings. Each key must be a private regular file owned by the operator with mode 600.
+
+To record publishing identities during legacy bootstrap, supply the verified writer App ID with `--status-app-id`, the reviewer App ID with `--reviewer-app-id`, and the two bot user IDs with `--writer-bot-user-id` and `--reviewer-bot-user-id`. Bootstrap without publishing IDs can stage Project and repository settings. Activation independently verifies the numeric bindings against the saved App credentials. If the required numeric bindings are missing or inconsistent, complete clean setup before activation.
