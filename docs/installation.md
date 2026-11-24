@@ -34,13 +34,13 @@ Define this function in the shell from which you run the examples. If you start 
 ```sh
 GRAIT_REVISION=de8f47e87eea5e68c861e2dbf4855fbda5c56249
 grait() {
-  npm exec --yes --allow-git=root --ignore-scripts \
+  npm exec --yes --allow-git=all --ignore-scripts \
     --package="git+https://github.com/rodush/grait.git#$GRAIT_REVISION" -- grait "$@"
 }
 grait --help
 ```
 
-npm puts the CLI in its cache and runs the committed bundle with lifecycle scripts disabled. The installer checks the running package's resolved Git revision and records the full SHA in `.grait/installation.json` and the generated validation workflow. The npm `--yes` flag accepts fetching the package. Use `--yes` after `grait init` only when you intend to accept GRAIT's configuration prompts.
+npm puts the CLI in its cache and runs the committed bundle. The command permits Git packages for this invocation and disables package lifecycle scripts. The installer checks the running package's resolved Git revision and records the full SHA in `.grait/installation.json` and the generated validation workflow. The npm `--yes` flag accepts fetching the package. Use `--yes` after `grait init` only when you intend to accept GRAIT's configuration prompts.
 
 ## Guided configuration
 

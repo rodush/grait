@@ -36,7 +36,7 @@ Use the prebuilt GRAIT CLI from a pinned Git commit in a new or existing GitHub 
 
 ```sh
 GRAIT_REVISION=de8f47e87eea5e68c861e2dbf4855fbda5c56249
-npm exec --yes --allow-git=root --ignore-scripts \
+npm exec --yes --allow-git=all --ignore-scripts \
   --package="git+https://github.com/rodush/grait.git#$GRAIT_REVISION" -- \
   grait init --plan --repo OWNER/REPOSITORY --revision "$GRAIT_REVISION" --harness codex
 ```
