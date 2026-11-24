@@ -59,9 +59,10 @@ export function validateConfig(config) {
   if (new Set(Object.values(config.statuses)).size !== 5)
     throw new Error("Exactly five distinct statuses are required");
   if (
-    !config.allowedWritePaths?.length ||
+    !Array.isArray(config.allowedWritePaths) ||
     config.allowedWritePaths.some(
-      (path) => path === "**" || path.startsWith("/") || path.includes(".."),
+      (path) =>
+        typeof path !== "string" || path === "**" || path.startsWith("/") || path.includes(".."),
     )
   ) {
     throw new Error("Explicit repository-relative write paths are required");

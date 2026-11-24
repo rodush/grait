@@ -5,6 +5,22 @@ import { packageResource, bundledRuntime, runtimeFile } from "./runtime-resource
 import { command } from "./setup-process.mjs";
 import { validateEvidence } from "./tdd.mjs";
 
+export function assertApplicationRunner(runner) {
+  if (
+    !Array.isArray(runner?.command) ||
+    runner.command.some((arg) => typeof arg !== "string") ||
+    !runner.command[0]?.trim()
+  )
+    throw new Error(
+      "Configure tdd.runner.command in workflow.config.json with the application's test adapter command before verification",
+    );
+  const install = runner.install ?? [];
+  if (!Array.isArray(install) || install.some((arg) => typeof arg !== "string"))
+    throw new Error(
+      "Configure tdd.runner.install in workflow.config.json as an optional argument array",
+    );
+}
+
 // Runs committed snapshots, not the mutable agent checkout. This strips process
 // credentials but is not an OS sandbox: use an isolated host for untrusted tests.
 export async function verifyCommits({
@@ -22,14 +38,7 @@ export async function verifyCommits({
     !["red", "green"].includes(phase)
   )
     throw new Error("Verification needs exact committed SHAs and red/green phase");
-  for (const args of [runner?.install || [], runner?.command]) {
-    if (
-      !Array.isArray(args) ||
-      args.some((arg) => typeof arg !== "string") ||
-      (args === runner?.command && !args.length)
-    )
-      throw new Error("Configure explicit local test install/command arrays");
-  }
+  assertApplicationRunner(runner);
   const temporary = await mkdtemp(join(tmpdir(), "grait-verification-"));
   const binding = { issue, acceptanceDigest, head, baseline, phase };
   try {

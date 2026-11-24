@@ -137,6 +137,21 @@ test("local verification runs exact committed Red and Green snapshots with bound
   }
 });
 
+test("local verification tells operators how to configure a missing application runner", async (t) => {
+  const fixture = await repository(t);
+  const baseline = await fixture.commit(passing);
+  const candidate = await fixture.commit(failing);
+  await assert.rejects(
+    () => verifyCommits({ ...fixture.args(candidate, baseline), runner: undefined }),
+    (error) => {
+      assert.match(error.message, /workflow\.config\.json/);
+      assert.match(error.message, /tdd\.runner\.command/);
+      return true;
+    },
+  );
+  await assert.rejects(() => lstat(fixture.logPath), { code: "ENOENT" });
+});
+
 test("local verification strips credentials and native session homes from both snapshots", async (t) => {
   const f = await repository(t);
   const baseline = await f.commit(passing);

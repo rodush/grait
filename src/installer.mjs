@@ -26,7 +26,6 @@ const workflowPath = `.github/workflows/${installerWorkflow}`;
 const serialize = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
 function defaultConfig() {
-  const writable = ["src/**", "tests/**", "assets/**", "docs/project/**"];
   return {
     schemaVersion: 2,
     engine: "codex",
@@ -44,7 +43,7 @@ function defaultConfig() {
     maxReviewRounds: 10,
     maxRepeatedBlockingReviews: 3,
     humanOperators: [],
-    allowedWritePaths: writable,
+    allowedWritePaths: [],
     protectedPaths: [
       ".github/",
       ".agents/",
@@ -62,9 +61,9 @@ function defaultConfig() {
       admitted: "agent:admitted",
     },
     tdd: {
-      implementationPaths: writable,
+      implementationPaths: [],
       profiles: { tester: { model: null }, implementer: { model: null } },
-      testPatterns: ["tests/**"],
+      testPatterns: [],
     },
     execution: "local",
     maxConcurrentWorkers: 5,
