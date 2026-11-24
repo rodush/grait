@@ -119,16 +119,64 @@ test("project policy includes the canonical shared engineering rules", async () 
 
 const backgroundTriage =
   /\b(?:triage\b[^.!?\n]*\b(?:background|concurrent(?:ly)?|parallel)|(?:background|concurrent(?:ly)?|parallel)\b[^.!?\n]*\btriage)\b/i;
-const completedWorkerCapacity =
-  /\b(?:release|free|return|reuse|reclaim|remove|exclude)\w*\b[^.!?\n]*\b(?:slots?|capacity|worker count)\b/i;
+const assessmentHandoff =
+  /\b(?:assessment\b.*\b(?:returns?|returned|handed back|delivered)|(?:returns?|returned|hands? back|hands? over|delivers?|receiv\w*)\b.*\bassessment)\b/i;
+const stopTriageAgent =
+  /\b(?:stops?|clos(?:e|es|ing)|ends?|terminat\w*|interrupt\w*)\b[^.!?]*\btriage (?:(?:sub-?)?agents?|workers?|assignments?)\b/i;
+const releaseWorkerSlot =
+  /\b(?:releas|fre|return|reuse|reclaim|remove|exclude)\w*\b[^.!?]*\b(?:worker slots?|worker capacity|worker count)\b/i;
+const waitForTerminalWorker =
+  /\b(?:after|once|until|confirm\w*|verif\w*)\b[^.!?]*\b(?:stopped|closed|exited|terminated|terminal|(?:has|is|already) completed|no longer (?:active|running))\b/i;
 
 function assertTriageLifecycle(instructions, destination) {
   assert.ok(backgroundTriage.test(instructions), `${destination} must describe background triage`);
+
+  const workerInstructions = instructions
+    .split(/\n[ \t]*\n/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " "))
+    .filter(
+      (rule) =>
+        assessmentHandoff.test(rule) && stopTriageAgent.test(rule) && releaseWorkerSlot.test(rule),
+    );
+
   assert.ok(
-    completedWorkerCapacity.test(instructions),
-    `${destination} must release capacity when a triage assignment completes`,
+    workerInstructions.length,
+    `${destination} must stop the triage agent and release its worker slot when its assessment returns`,
+  );
+  assert.ok(
+    workerInstructions.some((rule) => waitForTerminalWorker.test(rule)),
+    `${destination} must confirm that the triage agent has stopped or already completed before releasing its worker slot`,
   );
 }
+
+test("triage lifecycle distinguishes Ready capacity from a worker confirmed to have stopped", () => {
+  const background = "Run triage in the background alongside implementation.";
+  const assessment =
+    "When an assessment is returned, request that the harness stop the triage agent.";
+  const readyCapacity = "When a claim frees a Ready slot, replenish Ready from Backlog.";
+  assert.throws(
+    () =>
+      assertTriageLifecycle(
+        `${background} ${assessment} ${readyCapacity} Keep counting the triage worker.`,
+        "policy",
+      ),
+    /must stop the triage agent and release its worker slot/,
+  );
+  assert.throws(
+    () =>
+      assertTriageLifecycle(
+        `${background} ${assessment} Release its worker slot immediately.`,
+        "policy",
+      ),
+    /must confirm that the triage agent has stopped or already completed/,
+  );
+  assert.doesNotThrow(() =>
+    assertTriageLifecycle(
+      `${background} ${assessment} Release its worker slot only after it has stopped or already completed.`,
+      "policy",
+    ),
+  );
+});
 
 test("repository orchestrator instructions and operator docs explain background triage and worker release", async () => {
   for (const destination of [
