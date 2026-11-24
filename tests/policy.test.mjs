@@ -201,21 +201,49 @@ test("duplicate metadata blocks cannot hide contradictory decisions", () => {
   assert.throws(() => parseBlock("```x\n{}\n```\n```x\n{}\n```", "x"), /exactly one/);
 });
 
-test("human merge authority does not bypass delivery requirements", () => {
-  const [gates, authority] = repositoryRules([{ id: 42 }], 1234, null, 98765);
-  assert.deepEqual(gates.bypass_actors, []);
-  assert.deepEqual(authority.bypass_actors, [
-    { actor_id: 42, actor_type: "User", bypass_mode: "pull_request" },
-  ]);
-  assert.deepEqual(authority.rules, [{ type: "update" }]);
-  assert.equal(
-    gates.rules.find((rule) => rule.type === "pull_request").parameters.require_code_owner_review,
-    true,
+test("repository rules let humans squash-merge when the delivery gates pass", () => {
+  const rules = repositoryRules([{ id: 42 }], 1234, 456, 98765);
+  const branchRules = rules.filter(({ target }) => target === "branch");
+  assert.deepEqual(
+    branchRules.map(({ name }) => name),
+    ["Required delivery gates"],
   );
-  assert.equal(
-    gates.rules.find((rule) => rule.type === "required_status_checks").parameters
-      .required_status_checks[1].integration_id,
-    1234,
+  const [gates] = branchRules;
+  assert.deepEqual(gates.bypass_actors, []);
+  assert.deepEqual(gates.conditions.ref_name, {
+    include: ["~DEFAULT_BRANCH"],
+    exclude: [],
+  });
+  assert.deepEqual(gates.rules.find(({ type }) => type === "pull_request").parameters, {
+    required_approving_review_count: 1,
+    dismiss_stale_reviews_on_push: true,
+    require_code_owner_review: true,
+    require_last_push_approval: true,
+    required_review_thread_resolution: true,
+    allowed_merge_methods: ["squash"],
+  });
+  assert.deepEqual(gates.rules.find(({ type }) => type === "required_status_checks").parameters, {
+    strict_required_status_checks_policy: true,
+    required_status_checks: [
+      { context: "Template validation", integration_id: 98765 },
+      { context: "Agent review", integration_id: 1234 },
+    ],
+  });
+
+  const releaseRules = rules.filter(({ target }) => target === "tag");
+  for (const rule of releaseRules) {
+    assert.deepEqual(rule.conditions.ref_name, {
+      include: ["refs/tags/v*"],
+      exclude: [],
+    });
+    assert.equal(rule.enforcement, "active");
+  }
+  assert.deepEqual(
+    releaseRules.map(({ name, rules }) => [name, rules.map(({ type }) => type)]),
+    [
+      ["Release tag creation", ["creation"]],
+      ["Immutable release tags", ["update", "deletion"]],
+    ],
   );
 });
 
