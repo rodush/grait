@@ -63,9 +63,7 @@ export function validateTddConfig(config) {
   if (
     !tdd ||
     !Array.isArray(tdd.testPatterns || tdd.testPaths) ||
-    !(tdd.testPatterns || tdd.testPaths).length ||
-    !Array.isArray(tdd.implementationPaths) ||
-    !tdd.implementationPaths.length
+    !Array.isArray(tdd.implementationPaths)
   )
     throw new Error("Configure explicit tester and implementer write scopes");
   if (tdd.testPatterns) {
@@ -81,7 +79,7 @@ export function validateTddConfig(config) {
       )
     )
       throw new Error("Invalid testPatterns glob");
-    if (!testerWritePatterns(config).length)
+    if (tdd.testPatterns.length && !testerWritePatterns(config).length)
       throw new Error("No test patterns intersect the write allowlist");
   }
   for (const group of [tdd.testPatterns ? [] : tdd.testPaths, tdd.implementationPaths])
@@ -119,8 +117,17 @@ export function validateTddConfig(config) {
   return tdd;
 }
 
-export function assertRoleChanges(files, role, config) {
+export function assertTddWriteScopes(config) {
   const tdd = validateTddConfig(config);
+  if (!(tdd.testPatterns || tdd.testPaths).length || !tdd.implementationPaths.length)
+    throw new Error(
+      "Configure allowedWritePaths, tdd.testPatterns (or tdd.testPaths), and tdd.implementationPaths in workflow.config.json before starting scoped changes",
+    );
+  return tdd;
+}
+
+export function assertRoleChanges(files, role, config) {
+  const tdd = assertTddWriteScopes(config);
   const scopes =
     role === "tester"
       ? config.allowedWritePaths

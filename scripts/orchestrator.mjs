@@ -11,11 +11,12 @@ import { resolveRoleProfile } from "./lib/role-profiles.mjs";
 import {
   createHandoff,
   assertRoleChanges,
+  assertTddWriteScopes,
   handoffToImplementer,
   completeImplementation,
   returnToTester,
 } from "./lib/tdd.mjs";
-import { verifyCommits } from "./lib/verification.mjs";
+import { assertApplicationRunner, verifyCommits } from "./lib/verification.mjs";
 
 function skillPath(engine, role) {
   const directory = {
@@ -243,6 +244,11 @@ export async function orchestratorMain() {
       result = await orchestrator.sync(number);
     } else if (["worktree", "worker"].includes(task)) {
       const claim = await orchestrator.claim(number);
+      const { state } = await orchestrator.ledger.load(number);
+      if (state.tdd || state.triage?.tdd?.required !== false) {
+        assertApplicationRunner(context.config.tdd?.runner);
+        assertTddWriteScopes(context.config);
+      }
       const common = resolve(
         (
           await command("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"])
@@ -279,7 +285,6 @@ export async function orchestratorMain() {
         worktree: target,
         head: (await command("git", ["rev-parse", "HEAD"], { cwd: target })).stdout.trim(),
       };
-      const { state } = await orchestrator.ledger.load(number);
       if (!state.tdd && state.triage?.tdd?.required !== false) {
         state.tdd = createHandoff({
           issue: number,
