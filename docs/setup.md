@@ -27,13 +27,20 @@ Copilot uses local CLI sub-agents; its `/delegate` cloud-agent flow is outside t
 
 ## Harness and model configuration
 
-`workflow.config.json` selects `engine: "codex"`, `"claude"`, or `"copilot"` and `execution: "local"`. Its six roles all run on the host. The main session is the orchestrator. `maxConcurrentWorkers` defaults to five, independently of the five-story Project cap. The orchestrator skill applies the worker cap; the generated Codex project config uses the same value to cap spawned threads. The provider's native limits still apply.
+`workflow.config.json` selects `engine: "codex"`, `"claude"`, or `"copilot"` and `execution: "local"`. Its six roles all run on the host. The main session is the orchestrator. `maxConcurrentWorkers` defaults to five, independently of the five-story Project cap. The orchestrator skill applies the worker cap. The native harness can impose its own limits.
 
 ### Configure worker concurrency
 
 Set `maxConcurrentWorkers` in `workflow.config.json` to an integer from **1 to 5**. The default is **5**. For example, use `"maxConcurrentWorkers": 3` to run at most three specialists at once. The orchestrator reads this value when it starts, and Copilot worker launches receive it. Native limits also apply.
 
-For a packaged Codex installation, [refresh the managed files](installation.md#upgrade-an-existing-grait-installation) when changing the generated `.codex/config.toml`. Generation applies the value to `agents.max_concurrent_threads_per_session` when the native config supplies no override. Start a new harness session after updating the configuration.
+For a packaged Codex installation, set the native cap in the trusted project's `.codex/config.toml` outside the GRAIT-managed block. Add the setting to the existing `[agents]` table or create that table. The example allows three spawned threads in addition to the primary session. [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
+
+```toml
+[agents]
+max_concurrent_threads_per_session = 3
+```
+
+In a GRAIT source or legacy template checkout, run `npm run harness:generate` to generate the native Codex setting from `maxConcurrentWorkers`. Start a new harness session after changing its configuration.
 
 Worker slots are shared across triage, testing, implementation, fixes, and review. Each active review uses one worker, with at most one active reviewer per story. Each story's tester and implementer take sequential exclusive ownership of its branch and worktree. The independent Project-wide ceiling is [five occupied story slots](workflow.md#claiming-and-delivery), shared by In Progress stories and Review reservations.
 

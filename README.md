@@ -49,7 +49,7 @@ The preview leaves the application checkout untouched. Follow the guide to apply
 
 | Component                                                 | Purpose                                                                                                |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| [Orchestrator and specialists](docs/agents.md)            | Native Codex/Claude/Copilot roles for coordination, triage, testing, implementation, review, and fixes |
+| [Operate GRAIT](docs/operations.md)                       | Native Codex/Claude/Copilot roles for coordination, triage, testing, implementation, review, and fixes |
 | [Shared engineering policy](AGENTS.md)                    | Language-neutral conventions, scoped changes, and human authority                                      |
 | [Project workflow](docs/workflow.md)                      | Backlog → Ready → In Progress → Review → Done, native blockers, and at most five active stories        |
 | [Worktrees and tester-first delivery](docs/tdd.md)        | Separate orchestrator checkout, sequential tester/implementer ownership, independent validation        |
