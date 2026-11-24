@@ -12,6 +12,8 @@ New packaged installations leave application write scopes, test patterns, and th
 
 Set `tdd.runner.command` to the application's test adapter and its arguments. If the adapter needs dependencies installed first, set the optional `tdd.runner.install` argument array. For example, GRAIT's own tooling explicitly uses `npm ci --ignore-scripts --no-audit --no-fund` and `node {nodeAdapter} tests/*.test.mjs`. The optional `{nodeAdapter}` placeholder resolves to GRAIT's Node JSON adapter. An application can use any adapter that reports `passed` IDs, `failed` entries with stable `id` and `kind`, and `infrastructureErrors`. Use repository-relative identities without temporary paths or line numbers.
 
+An accepted TDD exemption, such as a reasoned docs-only exemption, can publish scoped implementation changes with `allowedWritePaths` and `tdd.implementationPaths` configured. Protected paths and any configured test paths still apply.
+
 The verifier archives baseline and candidate commits into disposable directories, strips process credentials, assigns a disposable HOME, installs dependencies with scripts disabled, and runs the configured command. This is process hygiene, not an OS sandbox: arbitrary test code still runs as the user. Use an isolated user/container/host for untrusted execution. Private dependencies may need a deliberate read-only dependency credential mechanism; do not expose publishing/model credentials to tests.
 
 ## Red and Green handoff

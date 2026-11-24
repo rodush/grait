@@ -125,6 +125,8 @@ export async function orchestratorMain() {
       const { state } = await orchestrator.ledger.load(number);
       const tdd = state.tdd;
       if (!tdd) throw new Error("Prepare the claimed worktree before TDD handoffs");
+      assertApplicationRunner(context.config.tdd?.runner);
+      assertTddWriteScopes(context.config);
       const head = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
       const branch = (await command("git", ["branch", "--show-current"])).stdout.trim();
       if (branch !== tdd.branch || (await command("git", ["status", "--porcelain"])).stdout.trim())
