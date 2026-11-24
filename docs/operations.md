@@ -36,6 +36,10 @@ Create the issue with its problem, acceptance criteria, validation, and native b
 
 Compute the digest with `issueDigest` from `scripts/lib/policy.mjs` using the current API issue object (`number`, `title`, `body`). Blocker references use `owner/repository#N` and must exactly match native GitHub blockers. Use `ready: false` while any blocker remains incomplete. Ready holds up to `maxReady` stories across the Project (five by default). Claiming a Ready story frees a Ready slot for another eligible Backlog story. An exemption uses `"tdd": {"required": false, "reason": "Concrete reason testing is inapplicable"}`. An outsider needs maintainer admission via `agent:admitted` unless current write access or configured identity makes them trusted.
 
+The parent runs triage in the background alongside implementation and review when Ready is below `maxReady`. It selects Backlog candidates by Project priority, then queue order, and continues dispatching eligible Ready stories while triage runs. Triage uses the same `maxConcurrentWorkers` pool as the other specialists. When each assessment returns, the parent stops or closes the triage sub-agent, releases its worker slot, and records the assessment with the ready command below. A completed thread can stay visible in the harness after its worker slot is free.
+
+Blocked candidates stay in Backlog. The triage pass ends when Ready is full, no further candidate can become Ready, or a pause or capacity limit prevents further work. The parent rechecks when a claim frees a Ready slot, a completed dependency changes eligibility, or a worker becomes available.
+
 ```sh
 npm run orchestrator -- ready --issue 123 --file /tmp/triage.json
 npm run orchestrator -- claim --issue 123
