@@ -2,6 +2,19 @@ import { sameLogin } from "../scripts/lib/policy.mjs";
 import { installationPath } from "./installation-record.mjs";
 
 const shaPattern = /^[a-f0-9]{40}$/i;
+const pullRequestMergeQuery = `
+  query($owner: String!, $name: String!, $number: Int!) {
+    repository(owner: $owner, name: $name) {
+      pullRequest(number: $number) {
+        merged
+        mergeCommit { oid }
+        mergedBy { __typename }
+        baseRefName
+        baseRepository { nameWithOwner }
+      }
+    }
+  }
+`;
 
 export async function verifyInstallationMerge({ api, repo, defaultBranch, head }) {
   const failure =
@@ -19,15 +32,18 @@ export async function verifyInstallationMerge({ api, repo, defaultBranch, head }
   }
   if (!shaPattern.test(commit?.sha ?? "")) throw new Error(failure);
   const associated = await api.list(`repos/${repo}/commits/${commit.sha}/pulls`);
+  const [owner, name] = repo.split("/");
   for (const pull of associated) {
     if (!Number.isSafeInteger(pull.number) || pull.number < 1) continue;
-    const details = await api.request(`repos/${repo}/pulls/${pull.number}`);
+    // GitHub REST API 2026-03-10 omits merge_commit_sha.
+    const result = await api.graphql(pullRequestMergeQuery, { owner, name, number: pull.number });
+    const details = result.repository?.pullRequest;
     if (
-      details.merged === true &&
-      details.merge_commit_sha === commit.sha &&
-      details.base?.ref === defaultBranch &&
-      sameLogin(details.base?.repo?.full_name, repo) &&
-      details.merged_by?.type === "User"
+      details?.merged === true &&
+      details.mergeCommit?.oid === commit.sha &&
+      details.baseRefName === defaultBranch &&
+      sameLogin(details.baseRepository?.nameWithOwner, repo) &&
+      details.mergedBy?.__typename === "User"
     )
       return commit.sha;
   }
