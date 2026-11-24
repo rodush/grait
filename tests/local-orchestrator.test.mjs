@@ -524,6 +524,78 @@ for (const configuredLimit of [undefined, 3, 7]) {
   });
 }
 
+test("a replenishment pass fills only available Ready slots and reopens after a claim", async () => {
+  const f = fixture();
+  delete f.config.maxReady;
+  const { backlog, ready, inProgress, review } = f.config.statuses;
+  const dependency = openNativeDependency(f);
+  const assess = async (number, fields = {}) => {
+    const issue = f.issues.get(number);
+    return f.orchestrator.ready(
+      number,
+      f.assessment({ issue: number, digest: issueDigest(issue), ...fields }),
+    );
+  };
+  const status = (number) => f.project.find(repo, number)?.status;
+  const readyNumbers = () =>
+    f.project.items.filter((item) => item.status === ready).map((item) => item.content.number);
+
+  for (let number = 2; number <= 8; number++) {
+    const issue = { ...f.issue, number, node_id: `issue-node-${number}` };
+    f.issues.set(number, issue);
+    await f.project.add(issue, repo);
+  }
+  f.project.items.push({
+    status: review,
+    content: {
+      __typename: "Issue",
+      number: 20,
+      repository: { nameWithOwner: "other/repo" },
+    },
+  });
+
+  await assess(1, { ready: false, blockers: [`${repo}#2`] });
+  for (const number of [2, 3, 4, 5, 6]) await assess(number);
+  assert.deepEqual(readyNumbers(), [2, 3, 4, 5, 6]);
+  await assert.rejects(() => assess(7), /Ready capacity is exhausted/);
+  assert.equal(status(1), backlog);
+  assert.equal(status(7), backlog);
+  assert.equal(status(8), backlog);
+
+  await f.orchestrator.claim(2);
+  await assess(7);
+  assert.equal(status(2), inProgress);
+  assert.deepEqual(readyNumbers(), [3, 4, 5, 6, 7]);
+  assert.equal(status(1), backlog);
+
+  await f.orchestrator.claim(3);
+  dependency.state = "closed";
+  dependency.state_reason = "completed";
+  await assess(1, { blockers: [`${repo}#2`] });
+  assert.deepEqual(readyNumbers(), [1, 4, 5, 6, 7]);
+  assert.equal(status(8), backlog);
+});
+
+test("a small replenishment pass can exhaust eligible Backlog before filling Ready", async () => {
+  const f = fixture();
+  const { backlog, ready } = f.config.statuses;
+  openNativeDependency(f);
+  const eligible = { ...f.issue, number: 2, node_id: "issue-node-2" };
+  f.issues.set(eligible.number, eligible);
+  await f.project.add(eligible, repo);
+
+  await f.orchestrator.ready(1, f.assessment({ ready: false, blockers: [`${repo}#2`] }));
+  await f.orchestrator.ready(2, f.assessment({ issue: 2, digest: issueDigest(eligible) }));
+
+  assert.deepEqual(
+    f.project.items.map(({ status, content }) => [content.number, status]),
+    [
+      [1, backlog],
+      [2, ready],
+    ],
+  );
+});
+
 test("local claiming counts every active Project story and treats unknown work conservatively", async () => {
   const f = fixture();
   await f.orchestrator.ready(1, f.assessment());

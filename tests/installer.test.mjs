@@ -360,6 +360,60 @@ test("installed init previews generated artifacts without changing the repositor
   );
 });
 
+test("installed init leaves the application test layout and runner unconfigured", async (t) => {
+  const f = await installerFixture(t);
+  const result = await f.run([...init, "--yes"]);
+  assert.equal(result.status, 0, "An application can install before choosing its test layout");
+  const configuration = JSON.parse(await f.read("workflow.config.json"));
+  assert.deepEqual(
+    configuration.tdd?.testPatterns ?? configuration.tdd?.testPaths ?? [],
+    [],
+    "Do not adopt an application test path or filename convention by default",
+  );
+  assert.ok(!configuration.allowedWritePaths?.includes("tests/**"));
+  assert.ok(!configuration.tdd?.implementationPaths?.includes("src/**"));
+  assert.ok(!configuration.tdd?.runner?.command?.length);
+  assert.ok(!configuration.tdd?.runner?.install?.length);
+  assert.ok(configuration.protectedPaths.includes("workflow.config.json"));
+});
+
+test("installed init preserves separate and colocated application test configurations", async (t) => {
+  const layouts = [
+    {
+      allowedWritePaths: ["services/**", "quality/specifications/**"],
+      implementationPaths: ["services/**"],
+      testPaths: ["quality/specifications/**"],
+      command: ["make", "verification-report"],
+    },
+    {
+      allowedWritePaths: ["services/**"],
+      implementationPaths: ["services/**"],
+      testPatterns: ["services/**/specification/*.check"],
+      command: ["sh", "services/tooling/report.sh", "--local"],
+    },
+  ];
+  for (const { allowedWritePaths, command, ...layout } of layouts) {
+    const f = await installerFixture(t);
+    const tdd = {
+      ...layout,
+      profiles: { tester: { model: null }, implementer: { model: null } },
+      runner: { install: [], command },
+    };
+    await writeFile(
+      join(f.directory, "workflow.config.json"),
+      JSON.stringify({ allowedWritePaths, tdd }),
+    );
+
+    const result = await f.run([...init, "--yes"]);
+
+    assert.equal(result.status, 0, "Install with the application owner's explicit configuration");
+    const applied = JSON.parse(await f.read("workflow.config.json"));
+    assert.deepEqual(applied.allowedWritePaths, allowedWritePaths);
+    assert.deepEqual(applied.tdd, tdd);
+    assert.ok(applied.protectedPaths.includes("workflow.config.json"));
+  }
+});
+
 test("installed init requires explicit confirmation before provisioning in a noninteractive session", async (t) => {
   const f = await installerFixture(t, { localApps: undefined });
   const result = await f.run(init);

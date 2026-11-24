@@ -25,8 +25,12 @@ export function matchesPath(path, pattern) {
   return path === prefix || (pattern.endsWith("/**") && path.startsWith(prefix + "/"));
 }
 
+function testPathPatterns(tdd) {
+  return tdd.testPatterns ?? tdd.testPaths ?? [];
+}
+
 export function testerWritePatterns(config) {
-  const patterns = config.tdd.testPatterns || config.tdd.testPaths;
+  const patterns = testPathPatterns(config.tdd);
   const result = [];
   for (const scope of config.allowedWritePaths) {
     const prefix = root(scope);
@@ -54,19 +58,13 @@ export function isTestPath(path, config) {
     !!path &&
     !path.startsWith("/") &&
     !path.split("/").some((part) => !part || part === "." || part === "..") &&
-    (config.tdd.testPatterns || config.tdd.testPaths).some((pattern) => matchesGlob(path, pattern))
+    testPathPatterns(config.tdd).some((pattern) => matchesGlob(path, pattern))
   );
 }
 
 export function validateTddConfig(config) {
   const tdd = config.tdd;
-  if (
-    !tdd ||
-    !Array.isArray(tdd.testPatterns || tdd.testPaths) ||
-    !(tdd.testPatterns || tdd.testPaths).length ||
-    !Array.isArray(tdd.implementationPaths) ||
-    !tdd.implementationPaths.length
-  )
+  if (!tdd || !Array.isArray(testPathPatterns(tdd)) || !Array.isArray(tdd.implementationPaths))
     throw new Error("Configure explicit tester and implementer write scopes");
   if (tdd.testPatterns) {
     if (
@@ -81,10 +79,11 @@ export function validateTddConfig(config) {
       )
     )
       throw new Error("Invalid testPatterns glob");
-    if (!testerWritePatterns(config).length)
+    if (tdd.testPatterns.length && !testerWritePatterns(config).length)
       throw new Error("No test patterns intersect the write allowlist");
   }
-  for (const group of [tdd.testPatterns ? [] : tdd.testPaths, tdd.implementationPaths])
+  const exactTestPaths = tdd.testPatterns ? [] : testPathPatterns(tdd);
+  for (const group of [exactTestPaths, tdd.implementationPaths])
     for (const pattern of group) {
       root(pattern);
       if (
@@ -104,7 +103,7 @@ export function validateTddConfig(config) {
       )
         throw new Error("TDD scopes cannot include protected policy");
     }
-  for (const test of tdd.testPatterns ? [] : tdd.testPaths)
+  for (const test of exactTestPaths)
     for (const code of tdd.implementationPaths)
       if (matchesPath(root(test), code) || matchesPath(root(code), test))
         throw new Error("Tester and implementer write scopes must be disjoint");
@@ -119,6 +118,14 @@ export function validateTddConfig(config) {
   return tdd;
 }
 
+export function assertTddWriteScopes(config) {
+  const tdd = validateTddConfig(config);
+  if (!testPathPatterns(tdd).length || !tdd.implementationPaths.length)
+    throw new Error(
+      "Configure allowedWritePaths, tdd.testPatterns (or tdd.testPaths), and tdd.implementationPaths in workflow.config.json before starting scoped changes",
+    );
+}
+
 export function assertRoleChanges(files, role, config) {
   const tdd = validateTddConfig(config);
   const scopes =
@@ -128,6 +135,14 @@ export function assertRoleChanges(files, role, config) {
         ? tdd.implementationPaths
         : null;
   if (!scopes) throw new Error("Unknown TDD role");
+  if (role === "tester" && !testPathPatterns(tdd).length)
+    throw new Error(
+      "Configure tdd.testPatterns (or tdd.testPaths) in workflow.config.json before changing tests",
+    );
+  if (role === "implementer" && !scopes.length)
+    throw new Error(
+      "Configure allowedWritePaths and tdd.implementationPaths in workflow.config.json before making implementation changes",
+    );
   for (const file of files) {
     if (!file.filename) throw new Error("Missing changed filename");
     // Both sides of a rename must belong to the same role. Deleting or moving
