@@ -16,6 +16,15 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  adoptionArguments,
+  adoptionGuide,
+  applicationFiles,
+  applicationStacks,
+  assertAdoptionExamples,
+  assertApplicationWorks,
+  gitPinnedDistribution,
+} from "./helpers/cli-adoption-fixture.mjs";
 import { setupFixture } from "./helpers/setup-fixture.mjs";
 
 const sourceRoot =
@@ -162,7 +171,7 @@ globalThis.fetch = async (url, options = {}) => {
 };
 `;
 
-async function installerFixture(t, overrides = {}) {
+async function copyInstallerDistribution(t) {
   const packageDirectory = await mkdtemp(join(tmpdir(), "grait-installer-package-"));
   t.after(() => rm(packageDirectory, { recursive: true, force: true }));
   const installedPackage = join(packageDirectory, "node_modules", "grait");
@@ -184,6 +193,18 @@ async function installerFixture(t, overrides = {}) {
     JSON.stringify({ lockfileVersion: 3, packages }),
   );
 
+  return cli;
+}
+
+async function installerFixture(t, overrides = {}, distribution) {
+  const {
+    initial: installedPin = revision,
+    next: nextPin = otherRevision,
+    stack,
+  } = distribution ?? {};
+  const cli = distribution
+    ? await distribution.install(installedPin)
+    : await copyInstallerDistribution(t);
   const f = await setupFixture({
     localApps,
     hidePublishingApps: true,
@@ -211,7 +232,8 @@ async function installerFixture(t, overrides = {}) {
   }
   await mkdir(join(f.directory, "app"));
   await mkdir(join(f.directory, ".github/workflows"));
-  for (const [path, content] of Object.entries(application))
+  const projectFiles = stack ? { ...application, ...applicationFiles(stack) } : application;
+  for (const [path, content] of Object.entries(projectFiles))
     await writeFile(join(f.directory, path), content);
   f.git(["add", "--all"]);
   f.git(["commit", "--quiet", "-m", "test: retain only adopting application artifacts"]);
@@ -220,9 +242,9 @@ async function installerFixture(t, overrides = {}) {
   const initialHead = f.git(["rev-parse", "HEAD"]);
   const remoteFixture = join(f.directory, ".git/installer-remote.mjs");
   await writeFile(remoteFixture, remoteService);
-  const run = (args) =>
+  const run = (args, executable = cli) =>
     f.run(
-      relative(join(f.directory, "scripts"), cli),
+      relative(join(f.directory, "scripts"), executable),
       ["--cwd", join(f.directory, "app"), ...args],
       {
         env: {
@@ -253,8 +275,8 @@ async function installerFixture(t, overrides = {}) {
   };
   await f.update({
     runningCLI: cli,
-    sourceCommits: [revision, otherRevision],
-    installedRevision: revision,
+    sourceCommits: [installedPin, nextPin],
+    installedRevision: installedPin,
     targetRoot: f.directory,
     previousDefaultHead: initialHead,
   });
@@ -570,3 +592,67 @@ test("installed activation rejects a record-only merge followed by direct config
   assert.match(activation.output, /merge|pull request/i);
   await assertInactive(f);
 });
+
+test("operators can follow the tested Git-pinned CLI adoption examples", async () => {
+  assertAdoptionExamples(await adoptionGuide());
+});
+
+for (const [stackName, stack] of Object.entries(applicationStacks)) {
+  test(`Git-pinned CLI installs, operates, and upgrades the ${stackName}`, async (t) => {
+    const distribution = await gitPinnedDistribution(t);
+    const f = await installerFixture(t, {}, { ...distribution, stack });
+    const guide = await adoptionGuide();
+    const values = {
+      "OWNER/REPOSITORY": target,
+      MAINTAINER: "operator",
+      GIT_PIN: distribution.initial,
+      UPGRADE_PIN: distribution.next,
+    };
+    const run = (operation, executable) =>
+      f.run(adoptionArguments(guide, operation, values), executable);
+    const assertSuccess = (result) => assert.equal(result.status, 0, result.output);
+    await assertApplicationWorks(f.directory, stack, distribution.env);
+
+    assertSuccess(await run("init preview"));
+    assert.equal(f.git(["status", "--porcelain"]), "");
+    assert.equal(existsSync(join(f.directory, recordPath)), false);
+    assertSuccess(await run("init apply"));
+    assert.equal(JSON.parse(await f.read(recordPath)).revision, distribution.initial);
+    await f.mergeConfiguration();
+    await f.update({
+      ciConclusion: "success",
+      projectItems: [
+        {
+          id: "adoption-issue",
+          isArchived: false,
+          fieldValueByName: { name: "Ready" },
+          content: {
+            __typename: "Issue",
+            number: 24,
+            title: "Try the adopted workflow",
+            repository: { nameWithOwner: target },
+          },
+        },
+      ],
+    });
+    assertSuccess(await run("activate"));
+    const status = await run("status");
+    assertSuccess(status);
+    assert.equal(JSON.parse(status.output.trim())[0].status, "Ready");
+
+    const nextExecutable = await distribution.install(distribution.next);
+    assertSuccess(await run("upgrade preview", nextExecutable));
+    assert.equal(f.git(["status", "--porcelain"]), "");
+    assertSuccess(await run("upgrade apply", nextExecutable));
+    assert.equal(JSON.parse(await f.read(recordPath)).revision, distribution.next);
+    assertSuccess(await f.run(["validate"], nextExecutable));
+    assert.match(await f.read(".github/workflows/grait.yml"), new RegExp(distribution.next));
+
+    await assertApplicationWorks(f.directory, stack, distribution.env);
+    for (const path of ["scripts", "automation", "config", "node_modules", ".npmrc"])
+      assert.equal(existsSync(join(f.directory, path)), false, path);
+    if (!stack.files["package.json"])
+      for (const path of ["package.json", "package-lock.json"])
+        assert.equal(existsSync(join(f.directory, path)), false, path);
+  });
+}

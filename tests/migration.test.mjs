@@ -16,6 +16,15 @@ import { basename, dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import {
+  adoptionArguments,
+  adoptionGuide,
+  applicationFiles,
+  applicationStacks,
+  assertApplicationWorks,
+  gitPinnedDistribution,
+} from "./helpers/cli-adoption-fixture.mjs";
+
 const source = fileURLToPath(new URL("..", import.meta.url));
 const canonical = "https://github.com/rodush/grait.git";
 const repository = "acme/service";
@@ -41,18 +50,23 @@ async function put(root, path, content, options) {
   await writeFile(destination, content, options);
 }
 
-async function fixture(t, { customized = {}, verifiedPackage = true, stockWorkflow = false } = {}) {
+async function fixture(
+  t,
+  { customized = {}, verifiedPackage = true, stockWorkflow = false, distribution, stack } = {},
+) {
   const directory = await mkdtemp(join(tmpdir(), "grait-migrate-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const home = join(directory, "home");
   const baseline = join(directory, "template");
   const target = join(directory, "target");
   const installed = join(directory, "package", "node_modules");
-  const entry = join(installed, "grait/dist/cli.mjs");
+  const entry = distribution
+    ? await distribution.install(distribution.initial)
+    : join(installed, "grait/dist/cli.mjs");
   const version = JSON.parse(await readFile(join(source, "package.json"), "utf8")).version;
   for (const path of [home, baseline, dirname(entry)]) await mkdir(path, { recursive: true });
-  await copyFile(join(source, "dist/cli.mjs"), entry);
-  if (verifiedPackage)
+  if (!distribution) await copyFile(join(source, "dist/cli.mjs"), entry);
+  if (!distribution && verifiedPackage)
     await put(
       installed,
       ".package-lock.json",
@@ -67,7 +81,7 @@ async function fixture(t, { customized = {}, verifiedPackage = true, stockWorkfl
       }),
     );
 
-  const env = {
+  const env = distribution?.env ?? {
     PATH: process.env.PATH,
     HOME: home,
     USERPROFILE: home,
@@ -118,13 +132,17 @@ jobs:
     stockWorkflow ? await readFile(join(source, legacyWorkflow), "utf8") : toolingOnlyWorkflow,
   );
   const legacyRevision = commit(baseline);
-  for (const url of [
-    canonical,
-    "https://github.com/rodush/grait",
-    "git@github.com:rodush/grait.git",
-    "ssh://git@github.com/rodush/grait.git",
-  ]) {
-    git(baseline, "config", "--global", "--add", `url.${baseline}.insteadOf`, url);
+  if (distribution) {
+    distribution.includeLegacyTemplate(baseline, legacyRevision);
+  } else {
+    for (const url of [
+      canonical,
+      "https://github.com/rodush/grait",
+      "git@github.com:rodush/grait.git",
+      "ssh://git@github.com/rodush/grait.git",
+    ]) {
+      git(baseline, "config", "--global", "--add", `url.${baseline}.insteadOf`, url);
+    }
   }
   git(directory, "clone", "-q", "--no-hardlinks", baseline, target);
   git(target, "remote", "set-url", "origin", origin);
@@ -135,8 +153,9 @@ jobs:
     humanOperators: ["operator"],
     applicationMarker: "keep project configuration",
   };
-  const projectFiles = { ...application, ...customized };
+  const projectFiles = stack ? applicationFiles(stack) : { ...application, ...customized };
   for (const [path, content] of Object.entries(projectFiles)) await put(target, path, content);
+  if (stack && !Object.hasOwn(stack.files, "package.json")) await rm(join(target, "package.json"));
   await put(target, "workflow.config.json", JSON.stringify(config, null, 2) + "\n");
   const head = commit(target);
 
@@ -188,6 +207,9 @@ globalThis.fetch = () => {
       { ...env, PATH: join(directory, "bin") + ":" + env.PATH },
     );
   return {
+    run: cli,
+    target,
+    legacyRevision,
     exists: (path) => existsSync(join(target, path)),
     read: (path) => readFile(join(target, path), "utf8"),
     status: () => git(target, "status", "--porcelain", "--untracked-files=all"),
@@ -451,3 +473,42 @@ test("runs project behavior from the inherited test glob", async () => {
   assert.match(after.output, /runs project behavior from the inherited test glob/);
   await f.assertPreserved();
 });
+
+for (const [stackName, stack] of Object.entries(applicationStacks)) {
+  test(`Git-pinned CLI migrates the ${stackName} and preserves its application checks`, async (t) => {
+    const distribution = await gitPinnedDistribution(t);
+    const f = await fixture(t, { distribution, stack });
+    const values = {
+      GIT_PIN: distribution.initial,
+      TEMPLATE_SHA: f.legacyRevision,
+    };
+    const guide = await adoptionGuide();
+    await assertApplicationWorks(f.target, stack, distribution.env);
+
+    assertSuccess(f.run(...adoptionArguments(guide, "migration preview", values)));
+    assert.equal(f.status(), "");
+    assert.equal(f.exists(installation), false);
+    assertSuccess(f.run(...adoptionArguments(guide, "migration apply", values)));
+    const record = JSON.parse(await f.read(installation));
+    assert.equal(record.revision, distribution.initial);
+    assert.match(await f.read(".github/workflows/grait.yml"), new RegExp(distribution.initial));
+    assertSuccess(f.validate());
+    await f.assertPreserved();
+
+    await assertApplicationWorks(f.target, stack, distribution.env);
+    for (const path of [
+      legacyRunner,
+      legacyDependency,
+      legacyWorkflow,
+      "scripts/bootstrap.mjs",
+      "scripts/check.mjs",
+      "automation/agents.json",
+      "node_modules",
+      ".npmrc",
+    ])
+      assert.equal(f.exists(path), false, path);
+    if (!stack.files["package.json"])
+      for (const path of ["package.json", "package-lock.json"])
+        assert.equal(f.exists(path), false, path);
+  });
+}
