@@ -65,7 +65,6 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
     repositorySettings,
     rulesets: [
       "Required delivery gates (staged disabled until activation)",
-      "Human merge authority (staged disabled until activation)",
       "Release tag creation and immutability (active immediately)",
     ],
     releaseEnvironment:

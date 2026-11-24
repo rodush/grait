@@ -56,19 +56,6 @@ export function repositoryRules(actors, statusAppId, releaseAppId, actionsAppId)
       ],
     },
     {
-      // Human actors bypass only update restriction, never the independent delivery-gate ruleset.
-      name: "Human merge authority",
-      target: "branch",
-      enforcement: "active",
-      conditions,
-      bypass_actors: actors.map((actor) => ({
-        actor_id: actor.id,
-        actor_type: "User",
-        bypass_mode: "pull_request",
-      })),
-      rules: [{ type: "update" }],
-    },
-    {
       name: "Release tag creation",
       target: "tag",
       enforcement: "active",
