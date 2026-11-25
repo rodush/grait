@@ -67,7 +67,9 @@ async function artifactDirectory(path, create, restricted = true) {
 function validate(state, repo) {
   if (
     state.version !== 1 ||
-    state.repo?.toLowerCase() !== repo.toLowerCase() ||
+    typeof state.repo !== "string" ||
+    !/^[\w.-]+\/[\w.-]+$/.test(state.repo) ||
+    (repo !== undefined && state.repo.toLowerCase() !== repo.toLowerCase()) ||
     !state.apps ||
     typeof state.apps !== "object" ||
     Array.isArray(state.apps)
@@ -80,6 +82,22 @@ function validate(state, repo) {
     typeof state.setupPublishingBindingsPending !== "boolean"
   )
     throw new Error("Invalid initial publishing identity checkpoint");
+  if (state.initAnswers !== undefined) {
+    const answers = state.initAnswers;
+    if (
+      !answers ||
+      typeof answers !== "object" ||
+      Array.isArray(answers) ||
+      (answers.maintainers !== undefined && !Array.isArray(answers.maintainers))
+    )
+      throw new Error("Invalid saved setup answers; inspect the private setup checkpoint");
+  }
+  if (
+    state.activation !== undefined &&
+    (!/^[a-f0-9]{64}$/.test(state.activation?.fingerprint ?? "") ||
+      !["active", "unenforced"].includes(state.activation?.enforcement))
+  )
+    throw new Error("Invalid activation recovery checkpoint");
   if (state.enabled !== undefined && typeof state.enabled !== "boolean")
     throw new Error("Local activation state must be boolean");
   if (
@@ -164,7 +182,74 @@ export class SetupState {
     this.lock = null;
   }
 
-  async acquire() {
+  async recoverStaleLock(path, onStale) {
+    const guardPath = join(this.directory, "lock-recovery");
+    let guard;
+    try {
+      guard = await open(
+        guardPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+        0o600,
+      );
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      throw new Error(
+        "Another process is checking the setup lock. If recovery was interrupted, verify its owner has stopped before removing lock-recovery.",
+      );
+    }
+    let owner;
+    try {
+      await guard.writeFile(String(process.pid));
+      try {
+        owner = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      } catch (error) {
+        if (error.code === "ENOENT") return;
+        throw error;
+      }
+      const original = await owner.stat();
+      if (
+        !original.isFile() ||
+        original.mode & 0o077 ||
+        original.size < 1 ||
+        original.size > 12 ||
+        (process.getuid && original.uid !== process.getuid())
+      )
+        throw new Error(
+          "Cannot safely identify the setup lock owner. Inspect the private setup lock before retrying.",
+        );
+      const pid = Number((await owner.readFile("utf8")).trim());
+      if (!Number.isSafeInteger(pid) || pid < 1 || pid > 2147483647)
+        throw new Error(
+          "Cannot safely identify the setup lock owner. Inspect the private setup lock before retrying.",
+        );
+      try {
+        process.kill(pid, 0);
+        throw new Error(
+          "Setup/orchestrator lock already exists and is held by a live process (PID " +
+            pid +
+            "). Wait for it or stop it normally before retrying.",
+        );
+      } catch (error) {
+        if (error.code === "EPERM")
+          throw new Error(
+            "Setup/orchestrator lock already exists and is held by a live process (PID " +
+              pid +
+              "). Wait for it to finish before retrying.",
+          );
+        if (error.code !== "ESRCH") throw error;
+      }
+      const current = await localInfo(path);
+      if (!current || current.dev !== original.dev || current.ino !== original.ino) return;
+      await unlink(path);
+      onStale?.(pid);
+    } finally {
+      await owner?.close();
+      await guard.close();
+      await unlink(guardPath);
+    }
+  }
+
+  async acquire({ recoverStale = false, onStale } = {}) {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const info = await lstat(this.directory);
     if (
@@ -176,11 +261,19 @@ export class SetupState {
       throw new Error("Setup metadata directory must be private and not a symbolic link");
     const path = join(this.directory, "lock");
     try {
-      this.lock = await open(
-        path,
-        constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-        0o600,
-      );
+      const openLock = () =>
+        open(
+          path,
+          constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+          0o600,
+        );
+      try {
+        this.lock = await openLock();
+      } catch (error) {
+        if (error.code !== "EEXIST" || !recoverStale) throw error;
+        await this.recoverStaleLock(path, onStale);
+        this.lock = await openLock();
+      }
       await this.lock.writeFile(String(process.pid));
     } catch (error) {
       if (this.lock) {
@@ -256,9 +349,15 @@ export class SetupState {
 
   async release() {
     if (!this.lock) return;
-    await this.lock.close();
-    this.lock = null;
-    await unlink(join(this.directory, "lock"));
+    const path = join(this.directory, "lock");
+    const owned = await this.lock.stat();
+    try {
+      const current = await localInfo(path);
+      if (current?.dev === owned.dev && current.ino === owned.ino) await unlink(path);
+    } finally {
+      await this.lock.close();
+      this.lock = null;
+    }
   }
 
   async issueArtifactPath(issue, kind, create = false) {

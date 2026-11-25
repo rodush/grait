@@ -18,6 +18,7 @@ import {
 import { sameLogin } from "./lib/policy.mjs";
 import { SetupState } from "./lib/setup-state.mjs";
 import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
+import { askSetupRules, rulesetSetupLog } from "../src/setup-terminal.mjs";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 import { bundledRuntime } from "./lib/runtime-resources.mjs";
 
@@ -348,6 +349,7 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
         rules: repositoryRules(actors, statusAppId, values["release-app-id"], actionsAppId),
         phase: "stage",
         acknowledgeUnenforced: Boolean(values["acknowledge-unenforced-rules"]),
+        ...(values["setup-root"] ? { prompt: () => askSetupRules(), log: rulesetSetupLog } : {}),
       });
       await setVariable("RULESET_ENFORCEMENT", enforcement);
       for (const [name, color] of [
