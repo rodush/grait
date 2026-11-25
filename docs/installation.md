@@ -33,10 +33,11 @@ GitHub rulesets provide optional server-side enforcement of the delivery policy.
 1. Install the CLI globally from Git, then create an integration branch in the target checkout.
 2. Run GRAIT init and review its plan. Complete the GitHub approvals when prompted.
 3. Commit the generated files together, push the integration branch, and open a configuration PR into the default branch.
-4. Have a human merge the configuration PR and wait for GRAIT validation on the current default-branch head.
+4. Have the configuration PR merged and wait for GRAIT validation on the current default-branch head (e.g. `main`).
 5. Update your checkout to the default branch and activate GRAIT.
 
-**Always use a configuration PR.** A direct push of the setup commit to the default branch blocks activation even when GitHub allows the push.
+**Always use a configuration PR!**\
+A direct push of the setup commit to the default branch blocks activation even when GitHub allows the push.
 
 Install the packaged CLI with npm. The bootstrap selects the tip of `main` at install time, verifies npm's resolved Git SHA, and records that SHA against the global executable.
 
