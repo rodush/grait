@@ -8,7 +8,7 @@ The native local orchestrator records the assessment against the current issue d
 
 ## Claiming and delivery
 
-One designated host/repository coordinates each Project. All claims go through `npm run orchestrator -- claim --issue N`; do not move Status manually. The deterministic command checks current readiness, blockers, pause state, and Project-wide capacity before reserving In Progress. It records intent before changing remote status. An uncertain operation requires human reconciliation.
+One designated host/repository coordinates each Project. All claims go through `grait orchestrator claim --issue N`; do not move Status manually. The deterministic command checks current readiness, blockers, pause state, and Project-wide capacity before reserving In Progress. It records intent before changing remote status. An uncertain operation requires human reconciliation.
 
 The orchestrator resumes existing claims, prioritizes pending reviews and fixes, and selects eligible Ready stories while both Project and worker capacity are available. For each new claim, it counts each In Progress story and each Review reservation once across the Project. It reads current review evidence for Review stories, including stories from other repositories.
 
@@ -28,4 +28,4 @@ Incremental fixes stay Review. A rethink needs an In Progress slot before redesi
 
 One completed review of a distinct head is a round. The PR has a lifetime cap of ten rounds. Stop earlier for a blocker surviving two fix attempts, an oscillating patch state, conflicting reviewer instructions, uncertain external writes, or unavailable/invalid evidence. An author push does not reset history. Pause labels and recorded reasons stop further automatic stages.
 
-Only a human reviews and squash merges after all gates pass. `npm run orchestrator -- sync --pr N` moves a linked claimed issue to Done only when GitHub reports that PR merged. Closing an unmerged PR returns to triage/human judgment and never automatically completes the story. Agents never merge or release.
+Only a human reviews and squash merges after all gates pass. `grait orchestrator sync --pr N` moves a linked claimed issue to Done only when GitHub reports that PR merged. Closing an unmerged PR returns to triage/human judgment and never automatically completes the story. Agents never merge or release.

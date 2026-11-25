@@ -32,22 +32,24 @@ Your local Codex CLI, Claude Code, or GitHub Copilot CLI session acts as the orc
 
 ## Quick start
 
-Install Git, Node.js 24 with npm, GitHub CLI, and Codex CLI, Claude Code, or GitHub Copilot CLI. Sign in to GitHub with `gh auth login`, then run from your clone:
+Use the prebuilt GRAIT CLI from a pinned Git commit in a new or existing GitHub application checkout. The host needs Git, Node.js 24 or newer, npm 11.10.0 or newer, GitHub CLI, and Codex CLI, Claude Code, or GitHub Copilot CLI. Adoption requires no GRAIT source checkout, application npm manifest, or local build.
 
 ```sh
-npm run setup -- --plan
-npm run setup
+GRAIT_REVISION=de8f47e87eea5e68c861e2dbf4855fbda5c56249
+npm exec --yes --allow-git=all --ignore-scripts \
+  --package="git+https://github.com/rodush/grait.git#$GRAIT_REVISION" -- \
+  grait init --plan --repo OWNER/REPOSITORY --revision "$GRAIT_REVISION" --harness codex
 ```
 
-Setup guides native harness login and the two GitHub App approvals, creates or reuses a Project, preserves application ownership rules, installs native roles, and prepares a configuration PR for your target repository. The App keys stay in private Git metadata on your host.
+Replace `OWNER/REPOSITORY` with your target. Choose a reviewed GRAIT commit and keep its full SHA for preview, apply, and activation. Use `--harness claude` for Claude Code or `--harness copilot` for GitHub Copilot CLI.
 
-Choose Claude with `npm run setup -- --harness claude` or Copilot with `npm run setup -- --harness copilot`; Codex is the default. Follow [installation and activation](docs/installation.md#guided-configuration) to complete setup and start the orchestrator. The guide also covers administrator access, existing identities, remote hosts, and interrupted setup.
+The preview leaves the application checkout untouched. Follow the guide to apply as a repository administrator, open a configuration PR, and activate after human merge and successful CI. [Installation and activation](docs/installation.md#guided-configuration)
 
 ## What you get
 
 | Component                                                 | Purpose                                                                                                |
 | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| [Orchestrator and specialists](docs/agents.md)            | Native Codex/Claude/Copilot roles for coordination, triage, testing, implementation, review, and fixes |
+| [Operate GRAIT](docs/operations.md)                       | Native Codex/Claude/Copilot roles for coordination, triage, testing, implementation, review, and fixes |
 | [Shared engineering policy](AGENTS.md)                    | Language-neutral conventions, scoped changes, and human authority                                      |
 | [Project workflow](docs/workflow.md)                      | Backlog → Ready → In Progress → Review → Done, native blockers, and at most five active stories        |
 | [Worktrees and tester-first delivery](docs/tdd.md)        | Separate orchestrator checkout, sequential tester/implementer ownership, independent validation        |
@@ -65,7 +67,7 @@ GitHub Apps identify **who publishes**, independently of where agents execute. O
 
 ### 1. Create your repository
 
-Use GRAIT as a GitHub repository template to create a new repository, or incorporate its configuration files into an existing project.
+Create or clone your application repository and install GRAIT with the pinned CLI. If your repository already uses the GRAIT template, follow [packaged migration](docs/installation.md#existing-template-based-repository).
 
 ### 2. Review the defaults
 
@@ -104,7 +106,7 @@ npm run format:check
 npm run lint:md
 ```
 
-Read [setup](docs/setup.md) for configuration, [operations](docs/operations.md) for commands and recovery, and [CONTRIBUTING.md](CONTRIBUTING.md) for changes. Existing installations should follow the migration guide before enabling the local orchestrator.
+Read [setup](docs/setup.md) for configuration, [operations](docs/operations.md) for commands and recovery, and [CONTRIBUTING.md](CONTRIBUTING.md) for changes.
 
 ## Technology and Platform Support
 
