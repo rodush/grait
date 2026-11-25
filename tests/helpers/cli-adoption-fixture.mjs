@@ -193,6 +193,13 @@ export async function gitPinnedDistribution(t) {
   t.after(() => new Promise((resolve) => proxy.close(resolve)));
   const proxyUrl = "http://127.0.0.1:" + proxy.address().port;
 
+  const npmEnvironment = {
+    ...env,
+    npm_config_cache: join(directory, "npm-selected"),
+    npm_config_https_proxy: proxyUrl,
+    npm_config_proxy: proxyUrl,
+    npm_config_fetch_retries: "0",
+  };
   const install = async (pin) => {
     const cache = join(directory, "npm-" + pin);
     await runAsync(
@@ -212,12 +219,7 @@ export async function gitPinnedDistribution(t) {
       {
         cwd: runtime,
         timeout: 45_000,
-        env: {
-          ...env,
-          npm_config_https_proxy: proxyUrl,
-          npm_config_proxy: proxyUrl,
-          npm_config_fetch_retries: "0",
-        },
+        env: npmEnvironment,
       },
     );
     const [installed] = await readdir(join(cache, "_npx"));
@@ -233,6 +235,8 @@ export async function gitPinnedDistribution(t) {
 
   return {
     env,
+    npmEnvironment,
+    tag: (name, pin) => git("tag", "--force", name, pin),
     initial,
     next,
     install,

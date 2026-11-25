@@ -11,11 +11,12 @@ import {
   readFile,
   readdir,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { delimiter, dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   adoptionArguments,
@@ -107,8 +108,7 @@ globalThis.fetch = async (url, options = {}) => {
     const isContents = endpoint === "contents/dist/cli.mjs";
     const rawRef = raw && endpoint.endsWith("/dist/cli.mjs") ? endpoint.split("/")[0] : null;
     const ref = commitRef ?? (isContents ? parsed.searchParams.get("ref") : rawRef);
-    const selected = state.sourceTags?.[ref] ?? ref;
-    const sha = selected && state.sourceCommits.find((candidate) => candidate.startsWith(selected));
+    const sha = ref && state.sourceCommits.find((candidate) => candidate.startsWith(ref));
     state.calls.push({ path, method, query: parsed.search });
     writeFileSync(stateFile, JSON.stringify(state));
     if (method !== "GET" || !sha) return Response.json({ message: "Not Found" }, { status: 404 });
@@ -808,21 +808,55 @@ test("installed init infers the target and verifies the npm-pinned revision with
   assert.equal(record.repository, target);
   assert.equal(record.revision, revision);
   assert.match(await f.read(".github/workflows/grait.yml"), new RegExp(revision));
-  assert.match(applied.output, /git (?:add|commit)/i);
-  assert.match(applied.output, /git push/i);
-  assert.match(applied.output, /pull request|gh pr create/i);
-  assert.match(applied.output, /grait activate/i);
+  const nextSteps = applied.output
+    .split("\n")
+    .filter((line) => !line.startsWith("+"))
+    .join("\n");
+  assert.match(nextSteps, /commit[\s\S]*push/i);
+  assert.match(
+    nextSteps,
+    /(?:pull request|configuration PR|gh pr create)[\s\S]*human[\s\S]*merge/i,
+  );
+  assert.match(nextSteps, /validation[\s\S]*grait activate/i);
 });
 
 test("installed init accepts an exact version tag and persists its immutable commit", async (t) => {
-  const f = await installerFixture(t, { sourceTags: { "v1.2.3": revision } });
-  const result = await f.run([...initAt("v1.2.3"), "--yes"]);
-  assert.equal(result.status, 0, "An available strict version tag resolves to its Git commit");
-  assert.equal(JSON.parse(await f.read(recordPath)).revision, revision);
-  await f.update({ sourceTags: { "v1.2.3": otherRevision } });
-  const plan = await f.run(["init", "--plan"]);
+  const distribution = await gitPinnedDistribution(t);
+  distribution.tag("v1.2.3", distribution.next);
+  const f = await installerFixture(t, {}, distribution);
+  const hostCommand = (name) =>
+    process.env.PATH.split(delimiter)
+      .map((dir) => join(dir, name))
+      .find(existsSync);
+  await rm(join(f.directory, "bin/npm"));
+  await symlink(hostCommand("npm"), join(f.directory, "bin/npm"));
+  const child = f.spawnInstalled([...initAt("v1.2.3"), "--yes"], {
+    ...distribution.npmEnvironment,
+    PATH: join(f.directory, "bin") + delimiter + process.env.PATH,
+    npm_config_git: hostCommand("git"),
+  });
+  let output = "";
+  for (const stream of [child.stdout, child.stderr])
+    stream.on("data", (chunk) => (output += chunk));
+  child.stdin.end();
+  const timer = setTimeout(() => child.kill("SIGKILL"), 45_000);
+  t.after(() => clearTimeout(timer));
+  const [status] = await once(child, "close");
+  clearTimeout(timer);
+  assert.equal(
+    status,
+    0,
+    "The selected version tag resolves and applies even from another pinned CLI",
+  );
+  assert.ok(output.includes(distribution.next));
+  assert.equal(JSON.parse(await f.read(recordPath)).revision, distribution.next);
+  assert.ok((await f.read(".github/workflows/grait.yml")).includes(distribution.next));
+
+  distribution.tag("v1.2.3", distribution.initial);
+  const exactPackage = await distribution.install(distribution.next);
+  const plan = await f.run(["init", "--plan"], exactPackage);
   assert.equal(plan.status, 0, "A moved tag does not reinterpret the existing installation");
-  assert.equal(JSON.parse(await f.read(recordPath)).revision, revision);
+  assert.equal(JSON.parse(await f.read(recordPath)).revision, distribution.next);
 });
 
 test("installed init offers a recovery command before showing a plan with missing provenance", async (t) => {
@@ -842,7 +876,7 @@ test("installed init offers a recovery command before showing a plan with missin
 });
 
 test("installed init reports ambiguous remotes and accepts an explicit target override", async (t) => {
-  const f = await installerFixture(t);
+  const f = await installerFixture(t, { localApps: undefined });
   f.git(["remote", "set-url", "origin", "git@github.com:operator/service.git"]);
   f.git(["remote", "add", "upstream", "https://github.com/acme/service.git"]);
   const result = await f.run(["init", "--plan", "--revision", revision]);
@@ -889,19 +923,19 @@ test("installed init describes partial publishing bindings before any confirmati
   await f.update({
     variables: [
       { name: "AUTOMATION_ENABLED", value: "false" },
-      { name: "WRITER_APP_ID", value: "123" },
+      { name: "AUTOMATION_APP_ID", value: "123" },
     ],
   });
-  const result = await f.run(init, undefined, { NO_COLOR: "1" });
+  const result = await f.run(init, undefined, { GRAIT_FIXTURE_TERMINAL: "1", NO_COLOR: "1" });
   assert.notEqual(result.status, 0);
   assert.match(result.output, /(?:^|\n)ERROR\b/);
   assert.match(result.output, /acme\/service/);
-  assert.match(result.output, /WRITER_APP_ID/);
-  assert.match(result.output, /REVIEWER_APP_ID/);
+  assert.match(result.output, /AUTOMATION_APP_ID/);
+  assert.match(result.output, /REVIEW_APP_ID/);
   assert.match(result.output, /reconcile|verify|existing|stale/i);
   assert.doesNotMatch(
     result.output,
-    /Apply this plan|use --yes to authorize|PRIVATE KEY|synthetic-setup-token/i,
+    /Apply this plan|Confirm the proposed|PRIVATE KEY|synthetic-setup-token/i,
   );
   assert.equal((await f.state()).createdProjects, 0);
 });
@@ -1021,7 +1055,7 @@ test("installed activation identifies a direct push even when a later PR lists t
   assert.ok(result.output.includes(recordPath));
   assert.ok(result.output.includes(directCommit.slice(0, 12)));
   assert.match(result.output, /revert/i);
-  assert.match(result.output, /reapply|re-apply/i);
+  assert.match(result.output, /re-?appl(?:y|ication)/i);
   await assertInactive(f);
 
   // Review and merge the revert first, then generate the reapplication PR from that default head.
@@ -1095,4 +1129,34 @@ test("installed activation reports a pending configuration PR separately from a 
   assert.match(result.output, /human[^\n]*merg|merg[^\n]*human/i);
   assert.doesNotMatch(result.output, /direct (?:push|commit)|committed directly/i);
   await assertInactive(f);
+});
+
+test("installed activation rechecks missing delivery rulesets before reconciling a completed checkpoint", async (t) => {
+  const f = await installerFixture(t);
+  assert.equal((await f.run([...init, "--yes"])).status, 0);
+  await f.mergeConfiguration();
+  await f.update({ ciConclusion: "success" });
+  assert.equal((await f.run(["activate"])).status, 0);
+  const { rules, variables } = await f.state();
+  const required = rules.find(
+    ({ target, enforcement }) => target === "branch" && enforcement === "active",
+  );
+  assert.ok(required, "Establish an active delivery branch ruleset before simulating removal");
+  assert.equal(variables.find(({ name }) => name === "AUTOMATION_ENABLED").value, "true");
+  assert.equal(variables.find(({ name }) => name === "RULESET_ENFORCEMENT").value, "active");
+  await f.update({ rules: rules.filter(({ id }) => id !== required.id) });
+
+  const retry = await f.run(["activate"]);
+  const restored = (await f.state()).rules.some(
+    ({ name, enforcement }) => name === required.name && enforcement === "active",
+  );
+  assert.ok(
+    retry.status !== 0 || restored,
+    "Never report successful reconciliation with a missing required ruleset",
+  );
+  if (!restored) {
+    assert.match(retry.output, /ruleset/i);
+    assert.match(retry.output, /retry|resume|verify|configure/i);
+    assert.doesNotMatch(retry.output, /Delivery rules are active/i);
+  }
 });
