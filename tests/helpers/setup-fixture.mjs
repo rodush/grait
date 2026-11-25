@@ -2,7 +2,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/pr
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, realpathSync } from "node:fs";
 
 const sourceRoot =
@@ -150,6 +150,13 @@ export async function setupFixture(overrides = {}) {
       });
       if (result.error) throw result.error;
       return { status: result.status, output: `${result.stdout}${result.stderr}` };
+    },
+    spawn(entry, args, env) {
+      return spawn(process.execPath, [join(directory, "scripts", entry), ...args], {
+        cwd: directory,
+        env: { ...baseEnvironment, ...env },
+        stdio: ["pipe", "pipe", "pipe"],
+      });
     },
     async read(path) {
       return readFile(join(directory, path), "utf8");

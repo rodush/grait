@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { once } from "node:events";
 import {
   copyFile,
   lstat,
@@ -14,7 +15,7 @@ import {
 } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   adoptionArguments,
@@ -31,6 +32,7 @@ const sourceRoot =
   process.env.GRAIT_TEST_SOURCE_ROOT || fileURLToPath(new URL("..", import.meta.url));
 const revision = "a1".repeat(20);
 const otherRevision = "b2".repeat(20);
+const unknownRevision = "c3".repeat(20);
 const target = "acme/service";
 const sourceRepository = "rodush/grait";
 const recordPath = ".grait/installation.json";
@@ -86,6 +88,10 @@ if (stateAtStart.interruptAtRecord) {
   };
   syncBuiltinESMExports();
 }
+if (process.env.GRAIT_FIXTURE_TERMINAL === "1") {
+  process.stdin.isTTY = true;
+  process.stdout.isTTY = true;
+}
 const request = globalThis.fetch;
 globalThis.fetch = async (url, options = {}) => {
   const parsed = new URL(url);
@@ -101,7 +107,8 @@ globalThis.fetch = async (url, options = {}) => {
     const isContents = endpoint === "contents/dist/cli.mjs";
     const rawRef = raw && endpoint.endsWith("/dist/cli.mjs") ? endpoint.split("/")[0] : null;
     const ref = commitRef ?? (isContents ? parsed.searchParams.get("ref") : rawRef);
-    const sha = ref && state.sourceCommits.find((candidate) => candidate.startsWith(ref));
+    const selected = state.sourceTags?.[ref] ?? ref;
+    const sha = selected && state.sourceCommits.find((candidate) => candidate.startsWith(selected));
     state.calls.push({ path, method, query: parsed.search });
     writeFileSync(stateFile, JSON.stringify(state));
     if (method !== "GET" || !sha) return Response.json({ message: "Not Found" }, { status: 404 });
@@ -138,6 +145,11 @@ globalThis.fetch = async (url, options = {}) => {
   if (parsed.hostname !== "api.github.com" || !path.startsWith(prefix))
     return request(url, options);
   const endpoint = path.slice(prefix.length);
+  if (method === "PATCH" && endpoint === "actions/variables/AUTOMATION_ENABLED" &&
+      state.interruptAtEnablement && JSON.parse(options.body).value === "true") {
+    await request(url, options);
+    process.kill(process.pid, "SIGKILL");
+  }
   let value;
   let status = 200;
   if (state.rulesUnavailable && /^rulesets(?:\\/|$)/.test(endpoint)) {
@@ -167,8 +179,10 @@ globalThis.fetch = async (url, options = {}) => {
     value = state.configurationPR && (state.associatedCommit ?? state.configurationPR.merge_commit_sha) === sha
       ? [state.configurationPR] : [];
     if (state.omitRestMergeCommit) value = value.map(({ number }) => ({ number }));
-  } else if (method === "GET" && endpoint === "pulls" && parsed.searchParams.get("state") === "closed") {
+  } else if (method === "GET" && endpoint === "pulls") {
     value = state.configurationPR ? [state.configurationPR] : [];
+    value = value.filter((pull) => !parsed.searchParams.get("state") ||
+      parsed.searchParams.get("state") === "all" || parsed.searchParams.get("state") === pull.state);
   } else if (method === "GET" && endpoint === "pulls/99" && state.configurationPR) {
     value = { ...state.configurationPR };
     if (state.omitRestMergeCommit) delete value.merge_commit_sha;
@@ -267,16 +281,14 @@ async function installerFixture(t, overrides = {}, distribution) {
   const initialHead = f.git(["rev-parse", "HEAD"]);
   const remoteFixture = join(f.directory, ".git/installer-remote.mjs");
   await writeFile(remoteFixture, remoteService);
-  const run = (args, executable = cli) =>
-    f.run(
-      relative(join(f.directory, "scripts"), executable),
-      ["--cwd", join(f.directory, "app"), ...args],
-      {
-        env: {
-          NODE_OPTIONS: `--import=${join(f.directory, "preload.mjs")} --import=${remoteFixture}`,
-        },
-      },
-    );
+  const cliEnv = {
+    NODE_OPTIONS: `--import=${join(f.directory, "preload.mjs")} --import=${remoteFixture}`,
+  };
+  const entry = (executable) => relative(join(f.directory, "scripts"), executable);
+  const cliArgs = (args) => ["--cwd", join(f.directory, "app"), ...args];
+  const run = (args, executable = cli, env) =>
+    f.run(entry(executable), cliArgs(args), { env: { ...cliEnv, ...env } });
+  const spawnInstalled = (args, env) => f.spawn(entry(cli), cliArgs(args), { ...cliEnv, ...env });
   const syncDefault = async (ciConclusion) => {
     const defaultHead = f.git(["rev-parse", "HEAD"]);
     const paths = f.git(["ls-tree", "-r", "--name-only", defaultHead]).split("\n");
@@ -350,6 +362,8 @@ async function installerFixture(t, overrides = {}, distribution) {
   return {
     ...f,
     run,
+    cli,
+    spawnInstalled,
     initialHead,
     mergeConfiguration: () => commitConfiguration("merged"),
     mergeRecordOnly: () => commitConfiguration("record-only"),
@@ -670,14 +684,10 @@ test("installed activation rejects a configuration PR merged by a bot", async (t
   await assertInactive(f);
 });
 
-test("installed init rejects a different Git pin before provisioning or changing application files", async (t) => {
+test("installed init rejects an unavailable Git pin before provisioning or changing application files", async (t) => {
   const f = await installerFixture(t);
-  const rejected = await f.run([...initAt(otherRevision), "--yes"]);
-  assert.notEqual(
-    rejected.status,
-    0,
-    "The requested commit contains a different installed executable",
-  );
+  const rejected = await f.run([...initAt(unknownRevision), "--yes"]);
+  assert.notEqual(rejected.status, 0, "The requested commit is unavailable for verification");
   assert.match(rejected.output, /revision|commit|pin/i);
   assert.equal((await f.state()).createdProjects, 0);
   assert.equal(f.git(["status", "--porcelain"]), "");
@@ -775,3 +785,314 @@ for (const [stackName, stack] of Object.entries(applicationStacks)) {
         assert.equal(existsSync(join(f.directory, path)), false, path);
   });
 }
+
+const lockPath = ".git/grait-setup/lock";
+
+test("installed init infers the target and verifies the npm-pinned revision without flags", async (t) => {
+  const f = await installerFixture(t);
+  const preview = await f.run(["init", "--plan"]);
+  assert.equal(preview.status, 0, "Use the only GitHub remote and the verified installed revision");
+  assert.match(preview.output, /acme\/service/i);
+  assert.match(preview.output, /codex/i);
+  assert.ok(preview.output.includes(revision));
+  assert.equal(f.git(["status", "--porcelain"]), "");
+  assert.equal((await f.state()).createdProjects, 0);
+
+  const applied = await f.run(["init", "--yes", "--no-browser"]);
+  assert.equal(
+    applied.status,
+    0,
+    "The inferred setup can be applied without revision or repo flags",
+  );
+  const record = JSON.parse(await f.read(recordPath));
+  assert.equal(record.repository, target);
+  assert.equal(record.revision, revision);
+  assert.match(await f.read(".github/workflows/grait.yml"), new RegExp(revision));
+  assert.match(applied.output, /git (?:add|commit)/i);
+  assert.match(applied.output, /git push/i);
+  assert.match(applied.output, /pull request|gh pr create/i);
+  assert.match(applied.output, /grait activate/i);
+});
+
+test("installed init accepts an exact version tag and persists its immutable commit", async (t) => {
+  const f = await installerFixture(t, { sourceTags: { "v1.2.3": revision } });
+  const result = await f.run([...initAt("v1.2.3"), "--yes"]);
+  assert.equal(result.status, 0, "An available strict version tag resolves to its Git commit");
+  assert.equal(JSON.parse(await f.read(recordPath)).revision, revision);
+  await f.update({ sourceTags: { "v1.2.3": otherRevision } });
+  const plan = await f.run(["init", "--plan"]);
+  assert.equal(plan.status, 0, "A moved tag does not reinterpret the existing installation");
+  assert.equal(JSON.parse(await f.read(recordPath)).revision, revision);
+});
+
+test("installed init offers a recovery command before showing a plan with missing provenance", async (t) => {
+  const f = await installerFixture(t);
+  const modules = dirname(dirname(dirname(f.cli)));
+  await rm(join(modules, ".package-lock.json"));
+  await rm(join(dirname(modules), "package-lock.json"));
+  await f.update({ sourceCommits: [] });
+  const result = await f.run(init, undefined, { NO_COLOR: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /(?:^|\n)ERROR\b/);
+  assert.match(result.output, /provenance|cannot verify|revision.+unavailable/i);
+  assert.match(result.output, /(?:npm (?:exec|install)|npx)\s+[^\n]+/i);
+  assert.doesNotMatch(result.output, /Apply this plan|^\+\+\+/m);
+  assert.doesNotMatch(result.output, /\u001b\[/);
+  assert.equal((await f.state()).createdProjects, 0);
+});
+
+test("installed init reports ambiguous remotes and accepts an explicit target override", async (t) => {
+  const f = await installerFixture(t);
+  f.git(["remote", "set-url", "origin", "git@github.com:operator/service.git"]);
+  f.git(["remote", "add", "upstream", "https://github.com/acme/service.git"]);
+  const result = await f.run(["init", "--plan", "--revision", revision]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /operator\/service/i);
+  assert.match(result.output, /acme\/service/i);
+  assert.match(result.output, /--repo/);
+  assert.equal(f.git(["status", "--porcelain"]), "");
+  assert.equal((await f.run([...init, "--plan"])).status, 0, "Respect an unambiguous override");
+});
+
+test("installed init blocks default-branch apply before plan confirmation", async (t) => {
+  const f = await installerFixture(t);
+  f.git(["switch", "main"]);
+  const result = await f.run(init, undefined, { NO_COLOR: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /(?:^|\n)ERROR\b/);
+  assert.match(result.output, /default branch.*main|main.*default branch/i);
+  assert.match(result.output, /git (?:switch -c|checkout -b)/);
+  assert.doesNotMatch(result.output, /Apply this plan|use --yes to authorize/i);
+  assert.equal(f.git(["status", "--porcelain"]), "");
+  assert.equal((await f.state()).createdProjects, 0);
+});
+
+test("installed init resumes interrupted setup with its saved harness and verified bindings", async (t) => {
+  const f = await installerFixture(t, { failProjectDetails: true });
+  const attempt = [
+    ...init.map((argument) => (argument === "codex" ? "claude" : argument)),
+    "--yes",
+  ];
+  const interrupted = await f.run(attempt);
+  assert.notEqual(interrupted.status, 0);
+  assert.equal((await f.state()).createdProjects, 1);
+  await f.update({ failProjectDetails: false });
+  const retry = await f.run(["init", "--yes", "--no-browser"]);
+  assert.equal(retry.status, 0, "Retry uses the already supplied setup inputs");
+  assert.equal(JSON.parse(await f.read(recordPath)).harness, "claude");
+  assert.equal((await f.state()).createdProjects, 1);
+  assert.equal((await f.localState()).apps.writer.id, localApps.writer.id);
+});
+
+test("installed init describes partial publishing bindings before any confirmation", async (t) => {
+  const f = await installerFixture(t, { localApps: undefined });
+  await f.update({
+    variables: [
+      { name: "AUTOMATION_ENABLED", value: "false" },
+      { name: "WRITER_APP_ID", value: "123" },
+    ],
+  });
+  const result = await f.run(init, undefined, { NO_COLOR: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /(?:^|\n)ERROR\b/);
+  assert.match(result.output, /acme\/service/);
+  assert.match(result.output, /WRITER_APP_ID/);
+  assert.match(result.output, /REVIEWER_APP_ID/);
+  assert.match(result.output, /reconcile|verify|existing|stale/i);
+  assert.doesNotMatch(
+    result.output,
+    /Apply this plan|use --yes to authorize|PRIVATE KEY|synthetic-setup-token/i,
+  );
+  assert.equal((await f.state()).createdProjects, 0);
+});
+
+test("installed init renders a plain warning for recoverable ruleset setup", async (t) => {
+  const f = await installerFixture(t, { rulesUnavailable: true });
+  const result = await f.run([...init, "--yes"], undefined, { NO_COLOR: "1" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /(?:^|\n)WARNING\b/);
+  assert.match(result.output, /https:\/\/github\.com\/acme\/service\/settings\/rules/);
+  assert.doesNotMatch(result.output, /\u001b\[/);
+  await assertInactive(f);
+});
+
+async function interruptRulesetPrompt(t, f) {
+  const child = f.spawnInstalled(["activate"], {
+    GRAIT_FIXTURE_TERMINAL: "1",
+    NO_COLOR: "1",
+  });
+  const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  t.after(() => clearTimeout(timer));
+  let output = "";
+  let interrupted = false;
+  child.stderr.on("data", (chunk) => (output += chunk));
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+    if (!interrupted && /type ['’]?completed|choose.+['’]completed/i.test(output)) {
+      interrupted = true;
+      child.kill("SIGINT");
+    }
+  });
+  const [status, signal] = await once(child, "close");
+  clearTimeout(timer);
+  assert.ok(interrupted, "Reach the ruleset decision before interrupting activation");
+  return { output, status, signal };
+}
+
+test("installed activation reports Ctrl+C at the ruleset prompt and releases its own lock", async (t) => {
+  const f = await installerFixture(t, { rulesUnavailable: true });
+  assert.equal((await f.run([...init, "--yes", "--acknowledge-unenforced-rules"])).status, 0);
+  await f.mergeConfiguration();
+  await f.update({ ciConclusion: "success" });
+  const interrupted = await interruptRulesetPrompt(t, f);
+  assert.notEqual(interrupted.status, 0);
+  assert.match(interrupted.output, /'completed'[\s\S]*'continue'[\s\S]*'pause'/i);
+  assert.match(interrupted.output, /interrupt[^\n]*ruleset|ruleset[^\n]*interrupt/i);
+  assert.match(interrupted.output, /grait activate/i);
+  assert.equal(existsSync(join(f.directory, lockPath)), false);
+  await assertInactive(f);
+  const resumed = await f.run(["activate", "--acknowledge-unenforced-rules"]);
+  assert.equal(resumed.status, 0);
+  assert.equal((await f.state()).createdProjects, 1);
+});
+
+test("installed activation recovers a stale lock and a remote enablement interrupted before local persistence", async (t) => {
+  const f = await installerFixture(t, { rulesUnavailable: true });
+  assert.equal((await f.run([...init, "--yes", "--acknowledge-unenforced-rules"])).status, 0);
+  await f.mergeConfiguration();
+  await f.update({ ciConclusion: "success", interruptAtEnablement: true });
+  const interrupted = await f.run(["activate", "--acknowledge-unenforced-rules"]);
+  assert.notEqual(interrupted.status, 0);
+  assert.equal((await f.localState()).enabled, false);
+  assert.equal(
+    (await f.state()).variables.find(({ name }) => name === "AUTOMATION_ENABLED").value,
+    "true",
+  );
+
+  await f.update({ interruptAtEnablement: false });
+  const retry = await f.run(["activate"]);
+  assert.equal(
+    retry.status,
+    0,
+    "Reconcile an already recorded remote decision without asking again",
+  );
+  assert.equal((await f.localState()).enabled, true);
+  assert.equal(existsSync(join(f.directory, lockPath)), false);
+  assert.equal((await f.state()).createdProjects, 1);
+});
+
+test("installed activation preserves a live setup lock", async (t) => {
+  const f = await installerFixture(t);
+  assert.equal((await f.run([...init, "--yes"])).status, 0);
+  await f.mergeConfiguration();
+  await f.update({ ciConclusion: "success" });
+  const owner = String(process.pid);
+  await writeFile(join(f.directory, lockPath), owner, { mode: 0o600 });
+  const result = await f.run(["activate"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /lock/i);
+  assert.equal(await f.read(lockPath), owner);
+  await assertInactive(f);
+});
+
+test("installed activation identifies a direct push even when a later PR lists the record", async (t) => {
+  const f = await installerFixture(t);
+  assert.equal((await f.run([...init, "--yes"])).status, 0);
+  await f.commitDirectly();
+  const directCommit = (await f.state()).installationCommit;
+  await writeFile(join(f.directory, "app/notes.md"), "A later PR did not change the record.\n");
+  await f.commitFollowup("test: unrelated merge into the default branch");
+  const mergeCommit = f.git(["rev-parse", "HEAD"]);
+  await f.update({
+    associatedCommit: directCommit,
+    configurationPR: {
+      number: 99,
+      state: "closed",
+      merged: true,
+      merge_commit_sha: mergeCommit,
+      merged_by: { login: "operator", id: 42, type: "User" },
+      base: { ref: "main", repo: { full_name: target } },
+    },
+    configurationFiles: [{ filename: recordPath, status: "added" }],
+  });
+  const result = await f.run(["activate"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /direct (?:push|commit)|committed directly/i);
+  assert.ok(result.output.includes(recordPath));
+  assert.ok(result.output.includes(directCommit.slice(0, 12)));
+  assert.match(result.output, /revert/i);
+  assert.match(result.output, /reapply|re-apply/i);
+  await assertInactive(f);
+
+  // Review and merge the revert first, then generate the reapplication PR from that default head.
+  f.git(["switch", "-c", "revert-configuration"]);
+  f.git(["revert", "--no-edit", directCommit]);
+  f.git(["switch", "main"]);
+  f.git(["merge", "--squash", "revert-configuration"]);
+  f.git(["commit", "--quiet", "-m", "test: human merges the reviewed revert"]);
+  f.git(["branch", "-f", "configuration", "main"]);
+  f.git(["switch", "configuration"]);
+  f.git(["cherry-pick", "--no-commit", directCommit]);
+  await f.mergeConfiguration();
+  await f.update({ ciConclusion: "success", associatedCommit: undefined });
+  const recovered = await f.run(["activate"]);
+  assert.equal(recovered.status, 0, "The reapplication PR establishes the unchanged artifacts");
+  assert.equal((await f.localState()).enabled, true);
+  assert.equal((await f.state()).createdProjects, 1);
+});
+
+test("interactive init separates the plan from a quoted confirmation of proposed maintainer access", async (t) => {
+  const f = await installerFixture(t);
+  const args = init.map((argument) =>
+    argument === "operator" ? "operator,additional-maintainer" : argument,
+  );
+  const child = f.spawnInstalled(args, { GRAIT_FIXTURE_TERMINAL: "1", NO_COLOR: "1" });
+  const timer = setTimeout(() => child.kill("SIGKILL"), 10_000);
+  t.after(() => clearTimeout(timer));
+  let output = "";
+  let answered = false;
+  child.stderr.on("data", (chunk) => (output += chunk));
+  child.stdout.on("data", (chunk) => {
+    output += chunk;
+    if (!answered && /(?:\[y\/n\]|'(?:y|yes)'[^\r\n]*'(?:n|no)')/i.test(output)) {
+      answered = true;
+      child.stdin.end("n\n");
+    }
+  });
+  const [status] = await once(child, "close");
+  clearTimeout(timer);
+  assert.notEqual(status, 0);
+  assert.match(output, /@additional-maintainer/i);
+  assert.match(output, /\r?\n[\t ]*\r?\n[^\r\n]*(?:apply|confirm|proceed)/i);
+  assert.match(output, /'(?:y|yes)'[^\r\n]*'(?:n|no)'/i);
+  assert.equal((await f.state()).createdProjects, 0);
+  assert.equal(f.git(["status", "--porcelain"]), "");
+});
+
+test("installed activation reports a pending configuration PR separately from a direct push", async (t) => {
+  const f = await installerFixture(t);
+  assert.equal((await f.run([...init, "--yes"])).status, 0);
+  f.git(["add", "--all"]);
+  f.git(["commit", "--quiet", "-m", "test: propose configuration"]);
+  await f.update({
+    configurationPR: {
+      number: 99,
+      html_url: "https://github.com/acme/service/pull/99",
+      state: "open",
+      merged: false,
+      base: { ref: "main", repo: { full_name: target } },
+      head: {
+        ref: "configuration",
+        sha: f.git(["rev-parse", "HEAD"]),
+        repo: { full_name: target },
+      },
+    },
+    configurationFiles: [{ filename: recordPath, status: "added" }],
+  });
+  const result = await f.run(["activate"]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.output, /#99|\/pull\/99/);
+  assert.match(result.output, /human[^\n]*merg|merg[^\n]*human/i);
+  assert.doesNotMatch(result.output, /direct (?:push|commit)|committed directly/i);
+  await assertInactive(f);
+});
