@@ -27,7 +27,7 @@ Prepare the issue worktree using the orchestrator. The initial accepted head is 
 From the assigned worktree, independently run:
 
 ```sh
-npm run orchestrator -- verify --issue 123 --phase red --expected /tmp/expected-tests.json
+grait orchestrator verify --issue 123 --phase red --expected /tmp/expected-tests.json
 ```
 
 Red requires a passing/valid-empty baseline and exactly the named new assertion failures. Syntax/import errors, missing dependencies, unexpected regressions, and infrastructure errors never qualify. The verifier checks the tester-only diff, binds evidence to issue/digest/baseline/head, and transfers ownership to the implementer. It publishes hashes and source-free results in the writer-authenticated issue ledger.
@@ -35,22 +35,22 @@ Red requires a passing/valid-empty baseline and exactly the named new assertion 
 The implementer verifies that accepted SHA and changes production only. It receives acceptance criteria, public interfaces, stable failing IDs, and explicitly public sanitized observations—never test code or raw fixture/stack output. After committing its implementation, the independent verifier runs:
 
 ```sh
-npm run orchestrator -- verify --issue 123 --phase green
+grait orchestrator verify --issue 123 --phase green
 ```
 
-Green reruns the accepted Red baseline and the complete candidate suite. It must execute and pass all accepted tests with no infrastructure errors, and the diff must stay in implementer paths. The ledger moves to review ownership only after validation succeeds. Push the exact commit and publish a normal ready-for-review PR after completing the accepted scope and documentation, then synchronize it with `npm run orchestrator -- sync --pr N`. Drafts are only for explicitly user-requested work in progress or early feedback; use `npm run orchestrator -- ready-pr --pr N` after finishing such a draft. A different head needs fresh evidence.
+Green reruns the accepted Red baseline and the complete candidate suite. It must execute and pass all accepted tests with no infrastructure errors, and the diff must stay in implementer paths. The ledger moves to review ownership only after validation succeeds. Push the exact commit and publish a normal ready-for-review PR after completing the accepted scope and documentation, then synchronize it with `grait orchestrator sync --pr N`. Drafts are only for explicitly user-requested work in progress or early feedback; use `grait orchestrator ready-pr --pr N` after finishing such a draft. A different head needs fresh evidence.
 
 ## Test corrections
 
 An implementer with a contract-based test concern commits its allowed production changes and returns ownership:
 
 ```sh
-npm run orchestrator -- handoff --issue 123 --reason 'Acceptance criterion, expected behavior, observed behavior, and requested clarification'
+grait orchestrator handoff --issue 123 --reason 'Acceptance criterion, expected behavior, observed behavior, and requested clarification'
 ```
 
 The tester independently evaluates that reason. It may revise tests but never production. Unresolved disagreement returns to triage or a human. The next Red uses the known Green baseline and checks only the new owner's changes for scope. Never weaken an assertion to bypass a failure. TDD handoffs are bounded to ten cycles; review rounds retain their separate lifetime limit.
 
-After a published review calls for fixes, `npm run orchestrator -- next --issue N --pr N` starts a new tester-first cycle at the accepted current PR head. Incremental work remains Review; redesign first reacquires In Progress capacity. Every stage checks pause state and current claim. A reasoned triage exemption can skip testing only when the accepted assessment explicitly declares testing inapplicable.
+After a published review calls for fixes, `grait orchestrator next --issue N --pr N` starts a new tester-first cycle at the accepted current PR head. Incremental work remains Review; redesign first reacquires In Progress capacity. Every stage checks pause state and current claim. A reasoned triage exemption can skip testing only when the accepted assessment explicitly declares testing inapplicable.
 
 ## Public feedback boundary
 

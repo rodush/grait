@@ -1,6 +1,6 @@
 # Troubleshoot setup and Project access
 
-A successful GitHub CLI login in an interactive terminal can hide a different identity in the orchestrator's environment. Run these checks in the same shell or launcher environment as the failing setup or orchestrator command. See the [setup reference](../setup.md) and [installation guide](../installation.md) for the full workflow.
+A successful GitHub CLI login in an interactive terminal can hide a different identity in the orchestrator's environment. Run these checks in the same shell or launcher environment as the failing `grait init`, `grait activate`, or orchestrator command. See the [setup reference](../setup.md) and [installation guide](../installation.md) for the full workflow.
 
 ## Check the credentials and recorded binding
 
@@ -72,7 +72,7 @@ Compare the returned owner and number with `PROJECT_OWNER` and `PROJECT_NUMBER`.
 
 For a user-owned Project, have the owner or a Project admin open the Project's **Settings → Manage access**. Under **Invite collaborators**, select the Project login and invite it with the **Write** role, or set its existing role to **Write**. Have that account accept the invitation if prompted. See [GitHub's Project access instructions](https://docs.github.com/en/issues/planning-and-tracking-with-projects/managing-your-project/managing-access-to-your-projects#managing-access-for-user-level-projects).
 
-Repeat the lookup with the same credential. On an activated host, rerun the queue check with `npm run orchestrator -- status` in the GRAIT checkout or `grait orchestrator status` when using the installed CLI. If setup has yet to complete, retry the blocked setup step with the same identity.
+Repeat the lookup with the same credential. On an activated host, rerun `grait orchestrator status` from the application checkout with the [pinned package](../installation.md#choose-and-run-a-pinned-cli). If setup is still pending, retry `grait init` with the original options or retry `grait activate` after human merge and CI. Use the same package pin and the GitHub identity you verified.
 
 ## Rebinding a Project intentionally
 
