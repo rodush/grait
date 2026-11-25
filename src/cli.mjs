@@ -8,7 +8,7 @@ import reporter from "../scripts/adapters/node-test-reporter.mjs";
 import { runRuntime } from "./runtime.mjs";
 import { runInstallation } from "./installation-cli.mjs";
 import { installGlobal } from "./installation-revision.mjs";
-import { setupError, setupWarning } from "./setup-terminal.mjs";
+import { setupError, setupWarning } from "../scripts/lib/bootstrap.mjs";
 import { runUpgrade } from "./upgrade.mjs";
 import { runMigration } from "./migration.mjs";
 import { installerWorkflow, validateInstallation } from "./installation-record.mjs";

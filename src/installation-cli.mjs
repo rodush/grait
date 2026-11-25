@@ -1,19 +1,26 @@
 import { realpath, rm } from "node:fs/promises";
 import { parseArgs } from "node:util";
 import { command } from "../scripts/lib/setup-process.mjs";
+import { SetupState } from "../scripts/lib/setup-state.mjs";
+import { sameLogin } from "../scripts/lib/policy.mjs";
 import { targetRoot } from "./runtime.mjs";
 import { activateMain } from "../scripts/activate.mjs";
 import { installWorkflow, planInstallation } from "./installer.mjs";
 import { assertIntegrationBranch, initContext } from "./init-context.mjs";
 import { preflightInstallation, privateStagingDirectory } from "./installer-services.mjs";
-import { installerWorkflow, validateInstallation } from "./installation-record.mjs";
+import {
+  installerWorkflow,
+  readInstallation,
+  validateInstallation,
+} from "./installation-record.mjs";
 import { verifyInstallationMerge } from "./installation-merge.mjs";
 import {
   fetchInitRevision,
   initSelector,
   requireInstalledProvenance,
 } from "./installation-revision.mjs";
-import { confirmSetup, setupWarning } from "./setup-terminal.mjs";
+import { setupWarning } from "../scripts/lib/bootstrap.mjs";
+import { confirmSetup } from "./setup-terminal.mjs";
 
 export function renderInstallationPlan(plan) {
   return (
@@ -56,8 +63,8 @@ async function runSelectedInit(root, selector, args) {
     const { cliPath, revision } = await fetchInitRevision({ stage, selector });
     const { code } = await command(
       process.execPath,
-      [cliPath, "init", ...selectedRevisionArgs(args, revision)],
-      { cwd: root, interactive: true, allowFailure: true },
+      [cliPath, "--cwd", root, "init", ...selectedRevisionArgs(args, revision)],
+      { interactive: true, allowFailure: true },
     );
     return code ?? 1;
   } finally {
@@ -154,10 +161,27 @@ export async function runInstallation({ command: operation, args, cwd, version }
   }
 
   if (values.plan && values.yes) throw new Error("Choose either --plan or --yes");
-  const selector = initSelector(values.revision);
+  const explicitSelector = initSelector(values.revision);
   const provenance = await requireInstalledProvenance();
+  const { state: recordedState } = await SetupState.read(undefined, root);
+  const transaction = recordedState.artifactTransaction;
+  const sameTarget = !values.repo || sameLogin(values.repo, recordedState.repo);
+  let savedRevision;
+  if (!explicitSelector && sameTarget) {
+    savedRevision =
+      transaction && (transaction.operation ?? "init") === "init"
+        ? transaction.revision
+        : !(await readInstallation(root))
+          ? recordedState.initAnswers?.revision
+          : undefined;
+  }
+  const selector = explicitSelector ?? savedRevision;
   if (selector && !provenance.revision.startsWith(selector)) {
-    if (selector.startsWith("v") || (provenance.kind === "global" && selector.length === 40))
+    if (
+      savedRevision ||
+      selector.startsWith("v") ||
+      (provenance.kind === "global" && selector.length === 40)
+    )
       return runSelectedInit(root, selector, args);
     throw new Error(
       "Requested Git revision " +
@@ -172,6 +196,7 @@ export async function runInstallation({ command: operation, args, cwd, version }
     root,
     version,
     verifiedRevision: provenance.revision,
+    recordedState,
     repo: values.repo,
     harness: values.harness,
     maintainers: values.maintainers,
@@ -188,10 +213,9 @@ export async function runInstallation({ command: operation, args, cwd, version }
   const canApprove = values.yes || process.stdin.isTTY;
   const existingPlan = options.prior ? await planInstallation(options) : null;
   const unchanged = existingPlan && !existingPlan.pendingRecovery && !existingPlan.changes.length;
-  if (!values.plan && canApprove && !unchanged) {
-    if (options.defaultBranch) await assertIntegrationBranch(root, options.defaultBranch);
-    options = await preflightInstallation(options);
-  }
+  if (!values.plan && !unchanged && options.defaultBranch)
+    await assertIntegrationBranch(root, options.defaultBranch);
+  if (!values.plan && canApprove && !unchanged) options = await preflightInstallation(options);
   const plan = unchanged ? existingPlan : await planInstallation(options);
   summarizeInputs(options);
   if (plan.pendingRecovery) {

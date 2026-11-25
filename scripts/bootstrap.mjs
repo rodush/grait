@@ -4,8 +4,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { GitHub } from "./lib/github.mjs";
 import {
   repositoryRules,
+  askSetupRules,
   repositorySettings,
   resolveActionsAppId,
+  rulesetSetupLog,
   preserveCodeowners,
 } from "./lib/bootstrap.mjs";
 import {
@@ -18,7 +20,6 @@ import {
 import { sameLogin } from "./lib/policy.mjs";
 import { SetupState } from "./lib/setup-state.mjs";
 import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
-import { askSetupRules, rulesetSetupLog } from "../src/setup-terminal.mjs";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 import { bundledRuntime } from "./lib/runtime-resources.mjs";
 
@@ -63,6 +64,7 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
     maintainers,
     writer: values["writer-login"] || "UNCONFIGURED",
     reviewer: values["reviewer-login"] || "UNCONFIGURED",
+    askSetupRules,
     repositorySettings,
     rulesets: [
       "Required delivery gates (staged disabled until activation)",

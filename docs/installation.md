@@ -71,7 +71,7 @@ npm exec --yes --allow-git=all --ignore-scripts \\
   --harness codex --maintainers OWNER
 ```
 
-The installer reuses confirmed setup answers, verified writer and reviewer Apps, and the recorded Project on retry. It stages provisioning privately and then applies the generated harness instructions, `workflow.config.json`, human CODEOWNERS, `.github/workflows/grait.yml`, and `.grait/installation.json` together. Publishing keys and recovery state stay under private Git metadata. Preserve the metadata and retry from the same checkout after an interruption. The CLI gives a recovery command if it cannot read verified provenance.
+The installer reuses confirmed setup answers, verified writer and reviewer Apps, and the recorded Project on retry. It stages provisioning privately and then applies the generated harness instructions, `workflow.config.json`, human CODEOWNERS, `.github/workflows/grait.yml`, and `.grait/installation.json` together. Publishing keys and recovery state stay under private Git metadata. Preserve the metadata and retry from the same checkout after an interruption. A bare retry uses the original verified revision saved with the setup answers. The CLI gives a recovery command if it cannot read verified provenance.
 
 Review `maxReady` in `workflow.config.json` before committing. It defaults to five, and matching your harness's maximum concurrent workers or subagents is a reasonable starting point. See [Ready queue capacity](setup.md#configure-ready-queue-capacity).
 
@@ -83,7 +83,7 @@ grait activate
 
 Activation verifies the human merge, exact artifacts at the merge commit and current default-branch head, current CI, Project access, human CODEOWNERS, and both App installations. If the installation record reached the default branch by direct push, follow [direct-push recovery](#recover-a-direct-push-of-the-installation-record). The generated workflow runs `grait validate` for GRAIT configuration and managed content. Keep your application checks and configure the application runner and write scopes in `workflow.config.json` before starting testable work.
 
-If a ruleset prompt pauses, follow the displayed GitHub settings instructions and rerun the same command. The separate `--acknowledge-unenforced-rules` confirms an unenforced ruleset. Ordinary `--yes` confirms the installation plan. Human approval and merge remain required. If activation is interrupted, it reports the active step and releases its local lock on Ctrl+C. Rerun `grait activate` to check the saved decision and remote settings. A retry can recover a private lock whose owner has stopped and leaves a lock held by a live process in place.
+If a ruleset prompt pauses, follow the displayed GitHub settings instructions and rerun the same command. The separate `--acknowledge-unenforced-rules` confirms an unenforced ruleset. Ordinary `--yes` confirms the installation plan. Human approval and merge remain required. If activation is interrupted, it reports the active step and releases its local lock on Ctrl+C. Rerun `grait activate` to check the saved decision and remote settings. A retry can recover a private lock whose owner has stopped and leaves a lock held by a live process in place. If previously active rules cannot be verified, activation pauses automation while you reconcile them.
 
 ### Recover a direct push of the installation record
 

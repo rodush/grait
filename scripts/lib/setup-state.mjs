@@ -88,6 +88,7 @@ function validate(state, repo) {
       !answers ||
       typeof answers !== "object" ||
       Array.isArray(answers) ||
+      (answers.revision !== undefined && !/^[a-f0-9]{40}$/.test(answers.revision)) ||
       (answers.maintainers !== undefined && !Array.isArray(answers.maintainers))
     )
       throw new Error("Invalid saved setup answers; inspect the private setup checkpoint");

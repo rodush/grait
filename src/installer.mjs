@@ -269,6 +269,7 @@ export async function installWorkflow(input) {
     if (options.prior && !preliminary.changes.length) return preliminary;
     if (!options.prior) {
       store.state.initAnswers = {
+        revision,
         harness: options.harness,
         maintainers: options.maintainers,
         ...(options.projectOwner ? { projectOwner: options.projectOwner } : {}),

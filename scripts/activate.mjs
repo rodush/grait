@@ -12,17 +12,19 @@ import {
 } from "./lib/local-auth.mjs";
 import { Project } from "./lib/project.mjs";
 import { digest, sameLogin, validateConfig } from "./lib/policy.mjs";
-import { repositoryRules, resolveActionsAppId } from "./lib/bootstrap.mjs";
 import { configureRepositoryRules } from "./lib/ruleset-setup.mjs";
 import { isEntrypoint } from "./lib/entrypoint.mjs";
 import { bundledRuntime } from "./lib/runtime-resources.mjs";
 import {
   askSetupRules,
   interruptionError,
+  repositoryRules,
+  resolveActionsAppId,
   rulesetSetupLog,
   setupError,
   setupWarning,
-} from "../src/setup-terminal.mjs";
+  verifyActiveRepositoryRules,
+} from "./lib/bootstrap.mjs";
 
 export async function activateMain(
   args = process.argv.slice(2),
@@ -194,10 +196,26 @@ export async function activateMain(
     );
     const checkpoint = state.activation?.fingerprint === fingerprint ? state.activation : null;
     const remoteEnforcement = variables.get("RULESET_ENFORCEMENT");
-    const remotelyEnabled = variables.get("AUTOMATION_ENABLED") === "true";
-    const resumed = Boolean(
-      checkpoint && remotelyEnabled && remoteEnforcement === checkpoint.enforcement,
+    let remotelyEnabled = variables.get("AUTOMATION_ENABLED") === "true";
+    const matchedCheckpoint = checkpoint && remoteEnforcement === checkpoint.enforcement;
+    step = "verifying the active repository rulesets";
+    const drifted = Boolean(
+      checkpoint?.enforcement === "active" &&
+      !(await verifyActiveRepositoryRules(api, repo, rules)),
     );
+    const resumed = Boolean(matchedCheckpoint && remotelyEnabled && !drifted);
+    if (drifted && remotelyEnabled) {
+      step = "pausing automation after ruleset drift";
+      checkInterrupted();
+      await api.request("repos/" + repo + "/actions/variables/AUTOMATION_ENABLED", {
+        method: "PATCH",
+        body: { name: "AUTOMATION_ENABLED", value: "false" },
+      });
+      remotelyEnabled = false;
+      setupWarning(
+        "The required repository rulesets changed or could not be verified. Automation is paused while you reconcile the rules.",
+      );
+    }
     async function recordEnforcement(value) {
       if (variables.get("RULESET_ENFORCEMENT") === value) return;
       checkInterrupted();
@@ -225,7 +243,15 @@ export async function activateMain(
           return api.list(...arguments_);
         },
       };
-      if (!remotelyEnabled && !checkpoint) await recordEnforcement("pending");
+      if (!remotelyEnabled) {
+        checkInterrupted();
+        if (store.state.rulesetEnforcement !== "pending" || store.state.enabled !== false) {
+          store.state.rulesetEnforcement = "pending";
+          store.state.enabled = false;
+          await store.save();
+        }
+        await recordEnforcement("pending");
+      }
       const result = await configureRepositoryRules({
         api: guardedApi,
         repo,

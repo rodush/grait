@@ -105,15 +105,15 @@ export async function requireInstalledProvenance() {
 }
 
 export async function resolveInstallRevision(requested, { requireInstalled } = {}) {
-  const pin = requested === undefined ? undefined : revisionPin(requested);
+  const pin = revisionPin(requested);
   const revision = await installedRevision().catch(() => {
     throw provenanceError("Could not read the installed GRAIT Git revision.");
   });
   if (!revision) {
-    if (!requireInstalled && pin?.length === 40) return pin;
+    if (!requireInstalled && pin.length === 40) return pin;
     throw provenanceError();
   }
-  if (pin && !revision.startsWith(pin))
+  if (!revision.startsWith(pin))
     throw new Error(
       "Requested Git revision " +
         pin +

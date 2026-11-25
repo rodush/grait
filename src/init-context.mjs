@@ -1,9 +1,8 @@
 import { command, requireSubscription, withoutCredentials } from "../scripts/lib/setup-process.mjs";
-import { SetupState } from "../scripts/lib/setup-state.mjs";
 import { sameLogin } from "../scripts/lib/policy.mjs";
 import { installers, readInstallation } from "./installation-record.mjs";
 import { readArtifact } from "./artifact-stage.mjs";
-import { setupQuestion } from "./setup-terminal.mjs";
+import { setupQuestion } from "../scripts/lib/bootstrap.mjs";
 
 const repoPattern = /^[\w.-]+\/[\w.-]+$/;
 const projectNumber = (number) => /^[1-9]\d*$/.test(number ?? "") && Number(number) <= 2147483647;
@@ -17,18 +16,22 @@ function targetFromRemote(url) {
 }
 
 async function repositoryRemotes(root) {
-  const { code, stdout } = await command("git", ["config", "--get-regexp", "^remote\\..*\\.url$"], {
-    cwd: root,
-    allowFailure: true,
-  });
+  const { code, stdout } = await command(
+    "git",
+    ["config", "--get-regexp", "^remote\\..*\\.(url|pushurl)$"],
+    {
+      cwd: root,
+      allowFailure: true,
+    },
+  );
   if (code !== 0 && code !== 1) throw new Error("Cannot read the checkout's Git remotes");
   return stdout
     .trim()
     .split("\n")
     .flatMap((line) => {
-      const match = line.match(/^remote\.(.+)\.url\s+(.+)$/);
-      const repo = match && targetFromRemote(match[2]);
-      return repo ? [{ name: match[1], repo }] : [];
+      const match = line.match(/^remote\.(.+)\.(url|pushurl)\s+(.+)$/);
+      const repo = match && targetFromRemote(match[3]);
+      return repo ? [{ name: match[1], repo, fetch: match[2] === "url" }] : [];
     });
 }
 
@@ -57,8 +60,8 @@ async function chooseRepository(remotes) {
 
 async function localDefaultBranch(root, repo, remotes) {
   const branches = new Set();
-  for (const { name, repo: remote } of remotes) {
-    if (!sameLogin(remote, repo)) continue;
+  for (const { name, repo: remote, fetch } of remotes) {
+    if (!fetch || !sameLogin(remote, repo)) continue;
     const { code, stdout } = await command(
       "git",
       ["symbolic-ref", "--quiet", "refs/remotes/" + name + "/HEAD"],
@@ -106,7 +109,7 @@ export async function initContext(input) {
   const config = JSON.parse((await readArtifact(root, "workflow.config.json")) ?? "{}");
   const remotes = await repositoryRemotes(root);
   const currentTarget = prior?.repository ?? config.controllerRepository;
-  const recorded = (await SetupState.read(undefined, root)).state;
+  const recorded = input.recordedState;
   const repo = input.repo ?? currentTarget ?? recorded.repo ?? (await chooseRepository(remotes));
   if (!repoPattern.test(repo)) throw new Error("Provide --repo OWNER/REPOSITORY");
   if (currentTarget && !sameLogin(currentTarget, repo))
