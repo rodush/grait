@@ -31,6 +31,8 @@ export async function setupFixture(overrides = {}) {
   });
   if (git.status !== 0) throw new Error("Unable to initialize local acceptance repository");
   await cp(join(sourceRoot, "scripts"), join(directory, "scripts"), { recursive: true });
+  await mkdir(join(directory, "src"));
+  await cp(join(sourceRoot, "src/setup-terminal.mjs"), join(directory, "src/setup-terminal.mjs"));
   await cp(join(sourceRoot, "config"), join(directory, "config"), { recursive: true });
   for (const filename of ["package.json", "package-lock.json", "workflow.config.json", ".npmrc"])
     await cp(join(sourceRoot, filename), join(directory, filename));

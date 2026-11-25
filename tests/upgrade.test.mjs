@@ -110,10 +110,10 @@ writeFileSync(join(prefix, "package-lock.json"), ${JSON.stringify(packageLock(fe
   const { artifacts } = await planInstallation({
     root,
     repo: "acme/service",
-    revision: oldRevision,
+    verifiedRevision: oldRevision,
     version: oldVersion,
     harness: "codex",
-    maintainers: "operator",
+    maintainers: ["operator"],
     project: { name: "Service", context: "Workflow policy for Service." },
   });
   for (const [path, content] of Object.entries(artifacts)) await write(path, content);

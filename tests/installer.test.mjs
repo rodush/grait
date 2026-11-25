@@ -254,6 +254,7 @@ async function installerFixture(t, overrides = {}, distribution) {
   for (const path of [
     "workflow.config.json",
     "scripts",
+    "src",
     "automation",
     "config",
     "node_modules",
@@ -891,7 +892,7 @@ test("installed init reports ambiguous remotes and accepts an explicit target ov
 test("installed init blocks default-branch apply before plan confirmation", async (t) => {
   const f = await installerFixture(t);
   f.git(["switch", "main"]);
-  const result = await f.run(init, undefined, { NO_COLOR: "1" });
+  const result = await f.run(init, undefined, { GRAIT_FIXTURE_TERMINAL: "1", NO_COLOR: "1" });
   assert.notEqual(result.status, 0);
   assert.match(result.output, /(?:^|\n)ERROR\b/);
   assert.match(result.output, /default branch.*main|main.*default branch/i);
