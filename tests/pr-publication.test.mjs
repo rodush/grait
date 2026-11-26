@@ -61,6 +61,7 @@ async function fixture(t, { tdd = "green", exempt = false, runner } = {}) {
       'import test from "node:test"; import assert from "node:assert/strict"; test("unrelated test", () => assert.fail("local runner should omit this"));',
     );
     await writeFile(join(f.directory, "src/outcome.txt"), "original");
+    await writeFile(join(f.directory, "src/regression.txt"), "original");
     await writeFile(
       join(f.directory, "tests/affected.test.mjs"),
       'import test from "node:test"; import assert from "node:assert/strict"; test("existing behavior", () => assert.ok(true));',
@@ -155,23 +156,56 @@ globalThis.fetch = async (url, options = {}) => {
     'repos/acme/service/git/ref/heads/agent/issue-1',
     'repos/acme/service/pulls/99',
     'repos/acme/service/issues/comments/701',
-  ].includes(path) || path.startsWith('repos/acme/service/commits/') && path.endsWith('/check-runs')) {
+    'repos/acme/service/pulls/99/files',
+    'repos/acme/service/pulls/99/reviews',
+    'repos/acme/service/issues/99/comments',
+    'repos/acme/service/issues/comments/799',
+  ].includes(path) || path.startsWith('repos/acme/service/commits/') && path.endsWith('/check-runs')
+  || path.startsWith('repos/acme/service/statuses/')
+  || path === 'graphql' && options.body?.includes('updateProjectV2ItemFieldValue')) {
     const state = JSON.parse(readFileSync(process.env.GRAIT_SETUP_FIXTURE_STATE, 'utf8'));
     state.calls.push({ path, method });
     let response;
     if (path.includes('/git/ref/')) response = { object: { sha: state.remoteHead } };
     if (path.endsWith('/pulls/99')) {
+      const published = state.pullRequests?.find(pull => pull.number === 99);
       response = {
-        number: 99, state: 'open', draft: false,
-        head: { sha: state.remoteHead, repo: { full_name: 'acme/service' } },
+        number: 99, state: 'open', draft: false, ...published,
+        head: { ref: published?.head, sha: state.remoteHead, repo: { full_name: 'acme/service' } },
         base: { ref: 'main', repo: { full_name: 'acme/service' } },
       };
+    }
+    if (path.endsWith('/pulls/99/files')) response = [{ filename: 'src/outcome.txt' }];
+    if (path.endsWith('/pulls/99/reviews')) {
+      if (method === 'POST') {
+        response = {
+          commit_id: JSON.parse(options.body).commit_id,
+          state: "APPROVED",
+          user: { id: 20001 },
+        };
+        (state.publishedReviews ||= []).push(response);
+      } else response = state.publishedReviews || [];
     }
     if (path.endsWith('/check-runs'))
       response = { total_count: state.checkRuns.length, check_runs: state.checkRuns };
     if (method === 'PATCH' && path.endsWith('/comments/701')) {
       response = state.issueComments[0];
       response.body = JSON.parse(options.body).body;
+    }
+    if (path.endsWith('/issues/99/comments')) {
+      if (method === 'POST') {
+        response = { id: 799, user: { id: 10001 }, body: JSON.parse(options.body).body };
+        state.pullComments = [response];
+      } else response = state.pullComments || [];
+    }
+    if (method === 'PATCH' && path.endsWith('/comments/799')) {
+      response = state.pullComments[0];
+      response.body = JSON.parse(options.body).body;
+    }
+    if (path.includes('/statuses/')) response = { state: JSON.parse(options.body).state };
+    if (path === 'graphql') {
+      state.projectItems[0].fieldValueByName.name = JSON.parse(options.body).variables.option;
+      response = { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: 'project-issue-1' } } } };
     }
     writeFileSync(process.env.GRAIT_SETUP_FIXTURE_STATE, JSON.stringify(state));
     return Response.json(response);
@@ -262,7 +296,7 @@ test("check lookup reports the exact PR head with compact names conclusions and 
   assert.ok(!checked.calls.some(({ path }) => path.endsWith("/logs")));
 });
 
-test("claimed issue verifies only changed acceptance files through Red and Green before publication", async (t) => {
+async function publishValidatedCandidate(t) {
   const f = await fixture(t, {
     runner: { command: [process.execPath, "{nodeAdapter}", "{testFiles}"] },
   });
@@ -321,6 +355,138 @@ test("claimed issue verifies only changed acceptance files through Red and Green
   const published = (await f.state()).pullRequests[0];
   assert.equal(published.draft, false);
   assert.match(published.body, /Closes #1/);
+  return { f, greenHead };
+}
+
+test("claimed issue verifies only changed acceptance files through Red and Green before publication", async (t) => {
+  await publishValidatedCandidate(t);
+});
+
+test("a failed required CI check authorizes a tester-first correction and fresh Green before review", async (t) => {
+  const { f, greenHead } = await publishValidatedCandidate(t);
+  const sync = await f.run("orchestrator.mjs", ["sync", "--pr", "99"]);
+  assert.equal(sync.status, 0, sync.output);
+  assert.equal(JSON.parse(sync.output).status, f.config.statuses.review);
+  const original = (await f.state()).checkRuns[0];
+  const failure = { ...original, head_sha: greenHead, status: "completed", conclusion: "failure" };
+  const next = () => f.run("orchestrator.mjs", ["next", "--issue", "1", "--pr", "99", "--ci"]);
+  const reviewPath = join(f.directory, ".git/review.json");
+  async function review(prHead) {
+    await writeFile(
+      reviewPath,
+      JSON.stringify({
+        version: 1,
+        pr: 99,
+        head: prHead,
+        round: 1,
+        verdict: "APPROVE",
+        blockers: [],
+        rethink: false,
+        conflicts: false,
+      }),
+    );
+    return f.run("orchestrator.mjs", ["review", "--pr", "99", "--file", reviewPath]);
+  }
+
+  for (const runs of [
+    [],
+    [{ ...failure, head_sha: f.head }],
+    [{ ...failure, app: { id: requiredCheck.appId + 1 } }],
+    [{ ...failure, status: "in_progress", conclusion: null }],
+    [{ ...failure, conclusion: "success" }],
+    [{ ...failure, conclusion: "skipped" }],
+  ]) {
+    await f.update({ checkRuns: runs });
+    assert.notEqual(
+      (await next()).status,
+      0,
+      "Only a failure of a required check authorizes correction",
+    );
+  }
+
+  await f.update({ checkRuns: [failure] });
+  const blocked = await review(greenHead);
+  assert.notEqual(blocked.status, 0);
+  assert.match(blocked.output, /required CI checks/i);
+  assert.equal((await f.state()).publishedReviews?.length ?? 0, 0);
+
+  const started = await next();
+  assert.equal(started.status, 0, started.output);
+  const cycle = JSON.parse(started.output);
+  assert.equal(cycle.owner, "tester");
+  assert.equal(cycle.baseline, greenHead);
+  assert.equal(cycle.head, greenHead);
+  assert.equal(cycle.cycle, 2);
+  assert.equal((await f.state()).projectItems[0].fieldValueByName.name, f.config.statuses.review);
+  assert.notEqual((await next()).status, 0, "An active correction cycle cannot be restarted");
+
+  await writeFile(
+    join(f.directory, "tests/regression.test.mjs"),
+    'import test from "node:test"; import assert from "node:assert/strict"; import { readFileSync } from "node:fs"; test("full CI regression", () => assert.equal(readFileSync("src/regression.txt", "utf8"), "corrected"));',
+  );
+  f.git(["add", "tests"]);
+  f.git(["commit", "-m", "test: reproduce CI regression"]);
+  const redHead = f.git(["rev-parse", "HEAD"]);
+  const expected = ["tests/regression.test.mjs::full CI regression"];
+  const expectedPath = join(f.directory, ".git/ci-expected.json");
+  await writeFile(expectedPath, JSON.stringify(expected));
+  const red = await f.run("orchestrator.mjs", [
+    "verify",
+    "--issue",
+    "1",
+    "--phase",
+    "red",
+    "--expected",
+    expectedPath,
+  ]);
+  assert.equal(red.status, 0, red.output);
+  assert.equal(JSON.parse(red.output).owner, "implementer");
+  await writeFile(join(f.directory, "src/regression.txt"), "corrected");
+  f.git(["add", "src/regression.txt"]);
+  f.git(["commit", "-m", "fix: correct CI regression"]);
+  const corrected = f.git(["rev-parse", "HEAD"]);
+  await f.update({
+    remoteHead: corrected,
+    checkRuns: [{ ...failure, id: failure.id + 1, head_sha: corrected, conclusion: "success" }],
+  });
+  const unverified = await review(corrected);
+  assert.notEqual(unverified.status, 0);
+  assert.match(unverified.output, /current-head Green/i);
+  const green = await f.run("orchestrator.mjs", ["verify", "--issue", "1", "--phase", "green"]);
+  assert.equal(green.status, 0, green.output);
+  const result = JSON.parse(green.output);
+  assert.equal(result.head, corrected);
+  assert.equal(result.report.baseline, redHead);
+  assert.deepEqual(result.report.passed, expected);
+  const approved = await review(corrected);
+  assert.equal(approved.status, 0, approved.output);
+  assert.equal((await f.state()).publishedReviews[0].commit_id, corrected);
+});
+
+test("a distinct same-head branch success leaves a required PR merge failure ineligible for review", async (t) => {
+  const f = await fixture(t);
+  const original = (await f.state()).checkRuns[0];
+  await f.update({
+    checkRuns: [
+      { ...original, status: "completed", conclusion: "failure" },
+      {
+        ...original,
+        id: original.id + 1,
+        name: "Branch validation",
+        status: "completed",
+        conclusion: "success",
+      },
+    ],
+  });
+  const lookup = await f.run("github.mjs", ["checks", "--pr", "99"]);
+  assert.equal(lookup.status, 0, lookup.output);
+  const checks = JSON.parse(lookup.output);
+  assert.equal(checks.head, f.head);
+  assert.equal(checks.ready, false);
+  assert.equal(
+    checks.required.find(({ name }) => name === requiredCheck.name)?.conclusion,
+    "failure",
+  );
 });
 
 test("publisher opens a normal PR for an accepted TDD exemption without Green evidence", async (t) => {
