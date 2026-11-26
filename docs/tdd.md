@@ -52,7 +52,7 @@ grait orchestrator handoff --issue 123 --reason 'Acceptance criterion, expected 
 
 The tester independently evaluates that reason. It may revise tests but never production. Unresolved disagreement returns to triage or a human. The next Red uses the known Green baseline and checks only the new owner's changes for scope. Never weaken an assertion to bypass a failure. TDD handoffs are bounded to ten cycles; review rounds retain their separate lifetime limit.
 
-After a published review calls for fixes, `grait orchestrator next --issue N --pr N` starts a new tester-first cycle at the accepted current PR head. Incremental work remains Review; redesign first reacquires In Progress capacity. Every stage checks pause state and current claim. A reasoned triage exemption can skip testing only when the accepted assessment explicitly declares testing inapplicable.
+After a published review calls for fixes, `grait orchestrator next --issue N --pr N` starts a new tester-first cycle at the accepted current PR head. When a configured check completes with a `failure` conclusion on an open, ready PR's exact Green head, add `--ci` to start an incremental correction before formal review. The next candidate needs independent Red and Green followed by CI on the new head. The existing handoff limit applies. Incremental work remains Review; redesign first reacquires In Progress capacity. Every stage checks pause state and current claim. A reasoned triage exemption can skip testing only when the accepted assessment explicitly declares testing inapplicable.
 
 ## Public feedback boundary
 

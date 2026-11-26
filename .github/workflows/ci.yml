@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        validation: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"Template validation"},{"name":"Candidate validation"}]' || '[{"name":"Template validation"}]') }}
+        validation: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"Template validation"},{"name":"Candidate validation"}]' || '[{"name":"Branch validation"}]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

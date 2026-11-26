@@ -715,6 +715,56 @@ export class LocalOrchestrator {
     };
   }
 
+  async authorizeCiFix(pr, { prNumber, issue, branch, head }) {
+    const assertClaimedHead = (candidate) => {
+      const issues = closingIssues(candidate);
+      this.checkControlLabels(candidate);
+      if (
+        candidate.number !== prNumber ||
+        candidate.state !== "open" ||
+        candidate.draft ||
+        candidate.head?.sha !== head ||
+        candidate.head.ref !== branch ||
+        !sameLogin(candidate.head.repo?.full_name, this.repo) ||
+        issues.length !== 1 ||
+        issues[0] !== issue
+      )
+        throw new Error("CI correction requires the open ready claimed PR at its exact Green head");
+    };
+    assertClaimedHead(pr);
+    if (this.project.find(this.repo, issue)?.status !== this.config.statuses.review)
+      throw new Error("CI correction requires the claimed issue to be in Review");
+
+    const { state } = await this.ledger.load(prNumber);
+    this.checkState(state);
+    if (state.pendingReview)
+      throw new Error("An earlier review has an uncertain result; inspect GitHub before resuming");
+    if (
+      state.reviews &&
+      state.history &&
+      JSON.stringify(state.reviews) !== JSON.stringify(state.history)
+    )
+      throw new Error("Conflicting local and legacy review histories require human reconciliation");
+    const history = state.reviews || state.history || [];
+    if (history.length >= this.config.maxReviewRounds)
+      throw new Error("Ten review rounds exhausted");
+    const decision = loopDecision(history, this.config);
+    if (decision.action === "pause") throw new Error(decision.reason);
+    if (history.at(-1)?.head === head && decision.action === "rethink")
+      throw new Error("Current review requires redesign; use the review-driven correction path");
+
+    const checks = await this.checksForHead(head);
+    if (
+      !checks.required.some(
+        ({ status, conclusion }) => status === "completed" && conclusion === "failure",
+      )
+    )
+      throw new Error(
+        "CI correction requires a completed failed required check on the exact PR head",
+      );
+    assertClaimedHead(await this.api.request(`repos/${this.repo}/pulls/${prNumber}`));
+  }
+
   async review(number, data) {
     if (!Number.isSafeInteger(number) || number < 1 || !/^[a-f0-9]{40}$/.test(data.head))
       throw new Error("Review requires a positive PR number and exact head SHA");

@@ -40,12 +40,13 @@ export async function orchestratorMain() {
       expected: { type: "string" },
       reason: { type: "string" },
       "setup-review": { type: "boolean" },
+      ci: { type: "boolean" },
     },
   });
   const task = positionals[0] || "start";
   if (values.help) {
     console.log(
-      "Local GRAIT orchestrator\n\nstart                         Launch the native subscription-backed harness\nready --issue N --file JSON    Accept current triage against native blockers\nclaim --issue N                Reserve one of five Project story slots\nworktree --issue N             Prepare/reuse the claimed issue branch\nworker --issue N --role test|implement|fix  Launch a native session at that worktree\nverify --issue N --phase red|green [--expected FILE]  Verify committed snapshots and hand off\nhandoff --issue N --reason TEXT   Return test ownership for a correction\nnext --issue N --pr N          Start an accepted fix/redesign cycle\nready-pr --pr N                Mark the exact Green head ready for review\nreview --pr N --file JSON      Publish exact-head review using the reviewer App\nsync --pr N                   Update Project status; Done requires a merged PR\nstatus                        Show the Project queue\n\nUse one orchestrator host per Project. See docs/operations.md.",
+      "Local GRAIT orchestrator\n\nstart                         Launch the native subscription-backed harness\nready --issue N --file JSON    Accept current triage against native blockers\nclaim --issue N                Reserve one of five Project story slots\nworktree --issue N             Prepare/reuse the claimed issue branch\nworker --issue N --role test|implement|fix  Launch a native session at that worktree\nverify --issue N --phase red|green [--expected FILE]  Verify committed snapshots and hand off\nhandoff --issue N --reason TEXT   Return test ownership for a correction\nnext --issue N --pr N [--ci]   Start a review-driven fix or recover from required CI failure\nready-pr --pr N                Mark the exact Green head ready for review\nreview --pr N --file JSON      Publish exact-head review using the reviewer App\nsync --pr N                   Update Project status; Done requires a merged PR\nstatus                        Show the Project queue\n\nUse one orchestrator host per Project. See docs/operations.md.",
     );
     return;
   }
@@ -66,6 +67,8 @@ export async function orchestratorMain() {
     ].includes(task)
   )
     throw new Error("Unknown orchestrator operation; use --help");
+  if (values.ci && (task !== "next" || !values.issue))
+    throw new Error("Use --ci only with next --issue N --pr N");
   if (task === "start") {
     const context = await localContext();
     try {
@@ -139,38 +142,45 @@ export async function orchestratorMain() {
         .filter(Boolean)
         .map((filename) => ({ filename }));
       if (task === "next") {
-        if (!/^[1-9]\d*$/.test(values.pr || ""))
-          throw new Error("Provide --pr for the accepted review");
-        const pr = await context.api.request(`repos/${context.repo}/pulls/${values.pr}`);
-        const { state: reviewState } = await orchestrator.ledger.load(pr.number);
-        const decision = (await import("./lib/policy.mjs")).loopDecision(
-          reviewState.reviews || [],
-          context.config,
-        );
-        if (
-          pr.head.sha !== head ||
-          (pr.head.ref && pr.head.ref !== tdd.branch) ||
-          (pr.head.repo?.full_name &&
-            pr.head.repo.full_name.toLowerCase() !== context.repo.toLowerCase()) ||
-          !(pr.body || "").match(
-            new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${number}\\b`, "i"),
-          ) ||
-          !["fix", "rethink"].includes(decision.action) ||
-          reviewState.paused ||
-          tdd.phase !== "review" ||
-          tdd.head !== head
-        )
-          throw new Error(
-            "A new fix cycle needs an accepted current-head review and the previous Green handoff",
+        const prNumber = Number(values.pr);
+        if (!/^[1-9]\d*$/.test(values.pr || "") || !Number.isSafeInteger(prNumber))
+          throw new Error("Provide a positive --pr number for the correction");
+        const pr = await context.api.request(`repos/${context.repo}/pulls/${prNumber}`);
+        if (values.ci) {
+          if (tdd.phase !== "review" || tdd.head !== head || state.fixPR)
+            throw new Error("CI correction requires the previous Green handoff at this exact head");
+          await orchestrator.authorizeCiFix(pr, { prNumber, issue: number, branch, head });
+        } else {
+          const { state: reviewState } = await orchestrator.ledger.load(pr.number);
+          const decision = (await import("./lib/policy.mjs")).loopDecision(
+            reviewState.reviews || [],
+            context.config,
           );
-        if (decision.action === "rethink") {
-          const item = context.project.find(context.repo, number);
           if (
-            item.status !== context.config.statuses.inProgress &&
-            !(await orchestrator.availableStorySlots(item))
+            pr.head.sha !== head ||
+            (pr.head.ref && pr.head.ref !== tdd.branch) ||
+            (pr.head.repo?.full_name &&
+              pr.head.repo.full_name.toLowerCase() !== context.repo.toLowerCase()) ||
+            !(pr.body || "").match(
+              new RegExp(`\\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\\s+#${number}\\b`, "i"),
+            ) ||
+            !["fix", "rethink"].includes(decision.action) ||
+            reviewState.paused ||
+            tdd.phase !== "review" ||
+            tdd.head !== head
           )
-            throw new Error("Redesign is waiting for In Progress capacity");
-          await context.project.move(item, context.config.statuses.inProgress);
+            throw new Error(
+              "A new fix cycle needs an accepted current-head review and the previous Green handoff",
+            );
+          if (decision.action === "rethink") {
+            const item = context.project.find(context.repo, number);
+            if (
+              item.status !== context.config.statuses.inProgress &&
+              !(await orchestrator.availableStorySlots(item))
+            )
+              throw new Error("Redesign is waiting for In Progress capacity");
+            await context.project.move(item, context.config.statuses.inProgress);
+          }
         }
         state.tdd = createHandoff({
           issue: number,
@@ -180,7 +190,7 @@ export async function orchestratorMain() {
           acceptanceDigest: state.triagedDigest,
           cycle: tdd.cycle + 1,
         });
-        state.fixPR = pr.number;
+        state.fixPR = prNumber;
       } else {
         assertRoleChanges(paths, tdd.owner, context.config);
         if (task === "handoff") {

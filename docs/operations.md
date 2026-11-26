@@ -146,6 +146,14 @@ A `fix` decision starts another tester-first cycle in the same issue worktree. A
 grait orchestrator next --issue 123 --pr 456
 ```
 
+If a required CI check fails before formal review, find the failing step or annotation through `grait github checks --pr N`. From the claimed issue worktree, start a tester-first correction on the current Green head:
+
+```sh
+grait orchestrator next --issue 123 --pr 456 --ci
+```
+
+The issue stays in Review. This command requires a completed `failure` from a configured check on the exact PR head and an open, ready PR. The corrected head needs independent Green and successful required CI before formal review.
+
 Stop if the command reports `pause`; do not reset its history. After a human merges:
 
 ```sh

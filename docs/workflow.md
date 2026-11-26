@@ -22,7 +22,7 @@ All specialists run in the user's harness. The parent uses its own checkout and 
 
 ## Review and fixes
 
-Local Red and Green verify the focused acceptance scope. Publish the exact Green commit and open its normal issue-linked PR while CI is pending so GitHub Actions can run the full validation. Check CI with `grait github checks --pr N` and start formal review when every configured check has completed successfully for the current PR head.
+Local Red and Green verify the focused acceptance scope. Publish the exact Green commit and open its normal issue-linked PR while CI is pending so GitHub Actions can run the full validation. Check CI with `grait github checks --pr N` and start formal review when every configured check has completed successfully for the current PR head. If a required check completes with a failure on a claimed PR's verified Green head, `grait orchestrator next --issue N --pr N --ci` starts a bounded tester-first correction while the issue stays in Review. The corrected head needs fresh Green and required CI before review.
 
 The local reviewer evaluates the exact PR head without executing contributor code in its credentialed session. It returns stable finding IDs, severity, evidence, actionable corrections, and a formal APPROVE, REQUEST_CHANGES, or COMMENT decision. The deterministic publisher uses the separate reviewer App, verifies GitHub's recorded review, and updates the writer's `Agent review` status for that exact SHA.
 
