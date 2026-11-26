@@ -8,6 +8,11 @@ import { command, withoutCredentials } from "./lib/setup-process.mjs";
 import { conventionalTitle } from "./lib/policy.mjs";
 import { assertRoleChanges } from "./lib/tdd.mjs";
 
+function requireGreen(state, head, operation) {
+  if (state.tdd?.phase !== "review" || state.tdd.head !== head)
+    throw new Error(`Independent Green evidence for this exact ${operation} head is required`);
+}
+
 export async function githubMain() {
   const { positionals, values } = parseArgs({
     allowPositionals: true,
@@ -22,7 +27,7 @@ export async function githubMain() {
   const task = positionals[0];
   if (values.help) {
     console.log(
-      "Publish through the local writer App:\n  grait github push --issue N\n  grait github pr --issue N --title 'feat: ...' --body-file PATH [--draft]\nPRs are normal by default and require independent Green for the exact head or an accepted triage TDD exemption. Use --draft only when the user explicitly requests work in progress or early feedback.\nReviews use grait orchestrator review. Merge and release are human-only.",
+      "Publish claimed issue branches and PRs:\n  grait github push --issue N\n  grait github pr --issue N --title 'feat: ...' --body-file PATH [--draft]\nThe writer App publishes PRs and ordinary pushes. GRAIT source workflow pushes require independent Green and a workflow-capable GH_TOKEN.\nPRs are normal by default and require independent Green for the exact head or an accepted triage TDD exemption. Use --draft only when the user explicitly requests work in progress or early feedback.\nReviews use grait orchestrator review. Merge and release are human-only.",
     );
     return;
   }
@@ -36,24 +41,35 @@ export async function githubMain() {
     if (branch !== claim.branch || (await command("git", ["status", "--porcelain"])).stdout.trim())
       throw new Error("Publish only committed changes from the claimed issue branch");
     const repository = await context.api.request(`repos/${context.repo}`);
+    const head = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
     if (task === "push") {
       const base = (
-        await command("git", ["merge-base", "HEAD", `origin/${repository.default_branch}`])
+        await command("git", ["merge-base", head, `origin/${repository.default_branch}`])
       ).stdout.trim();
       const paths = (
-        await command("git", ["diff", "--no-renames", "--name-only", "-z", base, "HEAD"])
+        await command("git", ["diff", "--no-renames", "--name-only", "-z", base, head])
       ).stdout
         .split("\0")
         .filter(Boolean);
       if (!paths.length) throw new Error("No committed changes to publish");
       // Combined tester+implementer history is allowed; every file must still stay in
-      // the application allowlist. Per-stage diffs are checked at handoff.
+      // the repository write scope. Per-stage diffs are checked at handoff.
       for (const filename of paths) {
         try {
           assertRoleChanges([{ filename }], "tester", context.config);
         } catch {
           assertRoleChanges([{ filename }], "implementer", context.config);
         }
+      }
+      const sourceWorkflowPush =
+        context.development && paths.some((path) => path.startsWith(".github/workflows/"));
+      let token = context.api.token;
+      if (sourceWorkflowPush) {
+        const { state } = await orchestrator.ledger.load(claim.issue);
+        requireGreen(state, head, "workflow push");
+        token = process.env.GH_TOKEN;
+        if (!token)
+          throw new Error("Set GH_TOKEN with workflow write access to push GRAIT source workflows");
       }
       await command(
         "git",
@@ -64,31 +80,26 @@ export async function githubMain() {
           "credential.helper=!gh auth git-credential",
           "push",
           `https://github.com/${context.repo}.git`,
-          `HEAD:refs/heads/${branch}`,
+          `${head}:refs/heads/${branch}`,
         ],
         {
           interactive: true,
-          env: { ...withoutCredentials(), GH_TOKEN: context.api.token, GIT_TERMINAL_PROMPT: "0" },
+          env: { ...withoutCredentials(), GH_TOKEN: token, GIT_TERMINAL_PROMPT: "0" },
         },
       );
-      console.log(`Pushed ${branch} as the writer App.`);
+      console.log(`Pushed ${branch} using ${sourceWorkflowPush ? "GH_TOKEN" : "the writer App"}.`);
     } else {
       if (!conventionalTitle(values.title) || !values["body-file"])
         throw new Error(
           "Provide a Conventional Commit --title and --body-file with validation evidence",
         );
       const body = await readFile(values["body-file"], "utf8");
-      const head = (await command("git", ["rev-parse", "HEAD"])).stdout.trim();
       const remote = await context.api.request(`repos/${context.repo}/git/ref/heads/${branch}`);
       if (remote.object?.sha !== head)
         throw new Error("Push this exact commit before opening its PR");
       if (!values.draft) {
         const { state } = await orchestrator.ledger.load(Number(values.issue));
-        if (
-          state.triage?.tdd?.required !== false &&
-          (state.tdd?.phase !== "review" || state.tdd.head !== head)
-        )
-          throw new Error("Independent Green evidence for this exact PR head is required");
+        if (state.triage?.tdd?.required !== false) requireGreen(state, head, "PR");
       }
       const pr = await context.api.request(`repos/${context.repo}/pulls`, {
         method: "POST",

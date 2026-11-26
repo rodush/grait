@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { repositoryDevelopmentConfig } from "./development-scope.mjs";
 import { GitHub } from "./github.mjs";
 import { Project } from "./project.mjs";
 import { validateConfig } from "./policy.mjs";
@@ -11,8 +12,10 @@ import {
 import { SetupState } from "./setup-state.mjs";
 
 export async function localContext({ reviewer = false, setupReview = false } = {}) {
-  const config = validateConfig(JSON.parse(await readFile("workflow.config.json", "utf8")));
-  const repo = config.controllerRepository;
+  const repositoryConfig = validateConfig(
+    JSON.parse(await readFile("workflow.config.json", "utf8")),
+  );
+  const repo = repositoryConfig.controllerRepository;
   if (!repo) throw new Error("Run npm run setup first");
   const { directory, state } = await SetupState.read(repo);
   if (!state.enabled && !setupReview)
@@ -26,7 +29,9 @@ export async function localContext({ reviewer = false, setupReview = false } = {
       if (
         !reviewer ||
         actor.type !== "User" ||
-        !config.humanOperators.some((login) => login.toLowerCase() === actor.login.toLowerCase())
+        !repositoryConfig.humanOperators.some(
+          (login) => login.toLowerCase() === actor.login.toLowerCase(),
+        )
       )
         throw new Error(
           "Staged setup review requires a configured human operator and the reviewer publishing operation",
@@ -38,6 +43,7 @@ export async function localContext({ reviewer = false, setupReview = false } = {
     assertPublishingBindings(variables, state.apps);
     if (variables.get("AUTOMATION_ENABLED") !== "true" && !setupReview)
       throw new Error("Repository automation is paused");
+    const { config, development } = await repositoryDevelopmentConfig(repositoryConfig, humanApi);
     const project = await new Project(
       new GitHub(process.env.PROJECT_TOKEN || (await humanToken())),
       variables.get("PROJECT_ID"),
@@ -55,6 +61,7 @@ export async function localContext({ reviewer = false, setupReview = false } = {
       : undefined;
     return {
       config,
+      development,
       repo,
       api: new GitHub(writer.token),
       humanApi,
