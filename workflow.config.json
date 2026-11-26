@@ -40,6 +40,8 @@
       "config/**",
       "dist/**",
       "docs/**",
+      "grait-banner.jpeg",
+      "grait-social-preview.jpeg",
       "package-lock.json",
       "package.json",
       "scripts/**",
