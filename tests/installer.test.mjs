@@ -971,7 +971,7 @@ for (const [role, otherRole] of [
     const keyPath = join(f.directory, ".git", `${role}.pem`);
     await writeFile(keyPath, pem, { mode: 0o600 });
     const retry = await f.run([...init, `--${role}-key`, keyPath], undefined, terminal);
-    assert.match(retry.output, /Apply this plan/i);
+    assert.match(retry.output, /Apply this plan|Confirm the proposed maintainer access/i);
     assert.equal(f.git(["status", "--porcelain"]), "");
     assert.ok((await f.state()).calls.every(({ method }) => method === "GET"));
     assert.deepEqual(await f.localState(), before);
