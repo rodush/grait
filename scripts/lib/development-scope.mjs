@@ -13,7 +13,10 @@ export async function repositoryDevelopmentConfig(config, api) {
   try {
     file = await api.request(`repos/${sourceRepository}/contents/${configPath}`);
   } catch (error) {
-    if (error?.status === 404) return { config, development: false };
+    if (error?.status === 404)
+      throw new Error(`Missing trusted ${configPath} on the GRAIT default branch`, {
+        cause: error,
+      });
     throw error;
   }
 
@@ -27,9 +30,13 @@ export async function repositoryDevelopmentConfig(config, api) {
     const trusted = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
     if (!trusted || typeof trusted !== "object" || Array.isArray(trusted))
       throw new Error("Expected repository configuration");
-    if (!Object.hasOwn(trusted, "developmentWriteScope")) return { config, development: false };
     if (!sameLogin(trusted.controllerRepository, sourceRepository))
-      throw new Error("Development scope requires the GRAIT source repository");
+      throw new Error("Trusted configuration must identify the GRAIT source repository");
+    validateConfig(trusted);
+    assertApplicationRunner(trusted.tdd?.runner);
+    if (!Object.hasOwn(trusted, "developmentWriteScope"))
+      return { config: trusted, development: false };
+
     const { allowedWritePaths, protectedPaths } = trusted.developmentWriteScope ?? {};
     if (
       !Array.isArray(allowedWritePaths) ||
@@ -44,7 +51,6 @@ export async function repositoryDevelopmentConfig(config, api) {
     )
       throw new Error("Explicit write and protected path arrays are required");
 
-    assertApplicationRunner(trusted.tdd?.runner);
     return {
       config: validateConfig({
         ...trusted,
@@ -55,6 +61,6 @@ export async function repositoryDevelopmentConfig(config, api) {
       development: true,
     };
   } catch (cause) {
-    throw new Error(`Invalid GRAIT development scope in default-branch ${configPath}`, { cause });
+    throw new Error(`Invalid trusted ${configPath} on the GRAIT default branch`, { cause });
   }
 }

@@ -14,6 +14,8 @@ On top of general [coding guidelines](./coding-guidelines.md), these are additio
 
 Agents working on a claimed issue in `rodush/grait` can change GRAIT's source, tests, workflows, package manifests, and policy when the accepted issue requires it. The orchestrator and publisher use [the default-branch `workflow.config.json`](../workflow.config.json) for workflow controls and test verification, with `developmentWriteScope` defining the source writable and protected paths. Testers and implementers still have separate ownership under [the TDD policy](tdd.md).
 
+If the default-branch configuration omits `developmentWriteScope`, its ordinary write scopes and protections apply. GRAIT stops source repository operations when it cannot load or validate that configuration.
+
 Repositories using GRAIT, including repositories created from the GitHub template, use their own `workflow.config.json` write scopes and protected paths. The development scope applies only to `rodush/grait`.
 
 To add a new source path outside the development scope, update `developmentWriteScope` in a scoped PR and let the maintainer review and merge it before using the added path. Keep private Git and GRAIT state outside issue changes. GitHub's required checks, independent review, and human approval and squash merge apply to source changes.
