@@ -112,20 +112,29 @@ test("an adopting repository keeps its own write scope even with a copied develo
   );
 });
 
-test("a missing default branch configuration uses the baseline scope", async () => {
-  const resolved = await repositoryDevelopmentConfig(baseConfig, {
-    request(path) {
-      assert.equal(path, policyEndpoint);
-      throw Object.assign(new Error("File not found"), { status: 404 });
-    },
-  });
-
-  assert.equal(resolved.development, false);
-  assert.deepEqual(resolved.config, baseConfig);
+test("a missing canonical default branch configuration stops policy resolution", async () => {
+  await assert.rejects(
+    repositoryDevelopmentConfig(baseConfig, {
+      request() {
+        throw Object.assign(new Error("File not found"), { status: 404 });
+      },
+    }),
+  );
 });
 
-test("a local development marker cannot activate development before default branch approval", async () => {
-  const local = { ...baseConfig, developmentWriteScope };
+test("canonical controls still come from the default branch without a development marker", async () => {
+  const local = validateConfig({
+    ...baseConfig,
+    developmentWriteScope,
+    labels: { ...baseConfig.labels, paused: "local:pause" },
+    allowedWritePaths: [...baseConfig.allowedWritePaths, "package.json"],
+    protectedPaths: baseConfig.protectedPaths.filter((path) => path !== "package.json"),
+    tdd: {
+      ...baseConfig.tdd,
+      implementationPaths: [...baseConfig.tdd.implementationPaths, "package.json"],
+      runner: { command: ["local-test-runner"] },
+    },
+  });
   const resolved = await repositoryDevelopmentConfig(local, {
     request(path) {
       assert.equal(path, policyEndpoint);
@@ -134,7 +143,7 @@ test("a local development marker cannot activate development before default bran
   });
 
   assert.equal(resolved.development, false);
-  assert.deepEqual(resolved.config, local);
+  assert.deepEqual(resolved.config, baseConfig);
   assert.throws(() =>
     assertRoleChanges([{ filename: "package.json" }], "implementer", resolved.config),
   );
@@ -161,6 +170,7 @@ test("invalid source development policies do not grant write scope", async () =>
     { type: "dir", encoding: "base64", content: "e30=" },
     repositoryFile("{"),
     repositoryFile(invalidConfig),
+    repositoryFile({ ...baseConfig, schemaVersion: 1 }),
   ])
     await assert.rejects(repositoryDevelopmentConfig(baseConfig, { request: () => response }), {
       name: /Error$/,
