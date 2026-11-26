@@ -12,11 +12,11 @@ On top of general [coding guidelines](./coding-guidelines.md), these are additio
 
 ## Source repository write scope
 
-Agents working on a claimed issue in `rodush/grait` can change GRAIT's source, tests, workflows, package manifests, and policy when the accepted issue requires it. The orchestrator and publisher load [the development write scope](../config/grait-development.json) from the GitHub default branch. Testers and implementers still have separate ownership under [the TDD policy](tdd.md).
+Agents working on a claimed issue in `rodush/grait` can change GRAIT's source, tests, workflows, package manifests, and policy when the accepted issue requires it. The orchestrator and publisher use [the default-branch `workflow.config.json`](../workflow.config.json) for workflow controls and test verification, with `developmentWriteScope` defining the source writable and protected paths. Testers and implementers still have separate ownership under [the TDD policy](tdd.md).
 
-Repositories using GRAIT, including repositories created from the GitHub template, use their own `workflow.config.json` write scopes and protected paths. A copy of the development scope file grants no permissions in those repositories.
+Repositories using GRAIT, including repositories created from the GitHub template, use their own `workflow.config.json` write scopes and protected paths. The development scope applies only to `rodush/grait`.
 
-To add a new source path outside the development scope, update `config/grait-development.json` in a scoped PR and let the maintainer review and merge it before using the added path. Keep private Git and GRAIT state outside issue changes. GitHub's required checks, independent review, and human approval and squash merge apply to source changes.
+To add a new source path outside the development scope, update `developmentWriteScope` in a scoped PR and let the maintainer review and merge it before using the added path. Keep private Git and GRAIT state outside issue changes. GitHub's required checks, independent review, and human approval and squash merge apply to source changes.
 
 For a source PR that changes `.github/workflows/`, run independent Green for the exact commit before pushing. `grait github push` uses the configured `GH_TOKEN` with workflow write access for that claimed branch. The Writer App opens the PR and handles other branch pushes. The separate Reviewer App publishes the review. See [publishing operations](operations.md#tester-first-implementation-and-publishing).
 

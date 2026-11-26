@@ -24,14 +24,13 @@ export async function localContext({ reviewer = false, setupReview = false } = {
   await store.acquire();
   try {
     const humanApi = new GitHub(await humanToken());
+    const { config, development } = await repositoryDevelopmentConfig(repositoryConfig, humanApi);
     if (setupReview) {
       const actor = await humanApi.request("user");
       if (
         !reviewer ||
         actor.type !== "User" ||
-        !repositoryConfig.humanOperators.some(
-          (login) => login.toLowerCase() === actor.login.toLowerCase(),
-        )
+        !config.humanOperators.some((login) => login.toLowerCase() === actor.login.toLowerCase())
       )
         throw new Error(
           "Staged setup review requires a configured human operator and the reviewer publishing operation",
@@ -43,7 +42,6 @@ export async function localContext({ reviewer = false, setupReview = false } = {
     assertPublishingBindings(variables, state.apps);
     if (variables.get("AUTOMATION_ENABLED") !== "true" && !setupReview)
       throw new Error("Repository automation is paused");
-    const { config, development } = await repositoryDevelopmentConfig(repositoryConfig, humanApi);
     const project = await new Project(
       new GitHub(process.env.PROJECT_TOKEN || (await humanToken())),
       variables.get("PROJECT_ID"),

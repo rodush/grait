@@ -1,7 +1,8 @@
 import { sameLogin, validateConfig } from "./policy.mjs";
+import { assertApplicationRunner } from "./verification.mjs";
 
 const sourceRepository = "rodush/grait";
-const scopePath = "config/grait-development.json";
+const configPath = "workflow.config.json";
 
 export async function repositoryDevelopmentConfig(config, api) {
   if (!sameLogin(config.controllerRepository, sourceRepository))
@@ -10,22 +11,26 @@ export async function repositoryDevelopmentConfig(config, api) {
   // The Contents API uses the repository's default branch when no ref is supplied.
   let file;
   try {
-    file = await api.request(`repos/${sourceRepository}/contents/${scopePath}`);
+    file = await api.request(`repos/${sourceRepository}/contents/${configPath}`);
   } catch (error) {
     if (error?.status === 404) return { config, development: false };
     throw error;
   }
 
   if (file?.type !== "file" || file.encoding !== "base64" || typeof file.content !== "string")
-    throw new Error(`Cannot read ${scopePath} from the GRAIT default branch`);
+    throw new Error(`Cannot read ${configPath} from the GRAIT default branch`);
 
   try {
     const content = file.content.replace(/\r?\n/g, "");
     const bytes = Buffer.from(content, "base64");
     if (bytes.toString("base64") !== content) throw new Error("Invalid base64 content");
-    const { allowedWritePaths, protectedPaths } = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(bytes),
-    );
+    const trusted = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+    if (!trusted || typeof trusted !== "object" || Array.isArray(trusted))
+      throw new Error("Expected repository configuration");
+    if (!Object.hasOwn(trusted, "developmentWriteScope")) return { config, development: false };
+    if (!sameLogin(trusted.controllerRepository, sourceRepository))
+      throw new Error("Development scope requires the GRAIT source repository");
+    const { allowedWritePaths, protectedPaths } = trusted.developmentWriteScope ?? {};
     if (
       !Array.isArray(allowedWritePaths) ||
       !allowedWritePaths.length ||
@@ -39,16 +44,17 @@ export async function repositoryDevelopmentConfig(config, api) {
     )
       throw new Error("Explicit write and protected path arrays are required");
 
+    assertApplicationRunner(trusted.tdd?.runner);
     return {
       config: validateConfig({
-        ...config,
+        ...trusted,
         allowedWritePaths,
         protectedPaths,
-        tdd: { ...config.tdd, implementationPaths: allowedWritePaths },
+        tdd: { ...trusted.tdd, implementationPaths: allowedWritePaths },
       }),
       development: true,
     };
   } catch (cause) {
-    throw new Error(`Invalid GRAIT development scope in ${scopePath}`, { cause });
+    throw new Error(`Invalid GRAIT development scope in default-branch ${configPath}`, { cause });
   }
 }
