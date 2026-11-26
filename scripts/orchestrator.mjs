@@ -16,7 +16,7 @@ import {
   completeImplementation,
   returnToTester,
 } from "./lib/tdd.mjs";
-import { assertApplicationRunner, verifyCommits } from "./lib/verification.mjs";
+import { assertApplicationRunner, selectTestFiles, verifyCommits } from "./lib/verification.mjs";
 
 function skillPath(engine, role) {
   const directory = {
@@ -198,6 +198,21 @@ export async function orchestratorMain() {
             phase === "red"
               ? JSON.parse(await readFile(values.expected, "utf8"))
               : tdd.expectedFailures;
+          const runner = context.config.tdd.runner;
+          const testFiles = runner.command.includes("{testFiles}")
+            ? await selectTestFiles({
+                root: process.cwd(),
+                baseline: tdd.baseline,
+                redHead: phase === "red" ? head : tdd.redHead,
+                config: context.config,
+              })
+            : undefined;
+          if (
+            phase === "green" &&
+            tdd.testFiles &&
+            JSON.stringify(tdd.testFiles) !== JSON.stringify(testFiles)
+          )
+            throw new Error("Focused test selection changed since verified Red");
           const report = await verifyCommits({
             root: process.cwd(),
             issue: number,
@@ -206,7 +221,8 @@ export async function orchestratorMain() {
             baseline: phase === "red" ? tdd.baseline : tdd.redHead,
             phase,
             expectedFailures,
-            runner: context.config.tdd.runner,
+            runner,
+            testFiles,
           });
           state.tdd =
             phase === "red"

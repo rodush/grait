@@ -13,6 +13,7 @@ import {
   loopDecision,
   patchDigest,
   projectStoryKey,
+  requiredChecks,
   sameLogin,
   validateReview,
   validateTriage,
@@ -363,7 +364,7 @@ export async function cleanupTaskArtifacts({
 // The CLI serializes mutations on the designated host. This class never invokes a model
 // or dispatches Actions; the signed-in native harness owns agent execution.
 export class LocalOrchestrator {
-  constructor({ api, reviewerApi, project, repo, writerId, reviewerId, config, store }) {
+  constructor({ api, humanApi, reviewerApi, project, repo, writerId, reviewerId, config, store }) {
     if (!sameLogin(config.controllerRepository, repo) || !sameLogin(project.controller, repo))
       throw new Error("Repository and Project must be bound to this orchestrator");
     if (
@@ -376,6 +377,7 @@ export class LocalOrchestrator {
       throw new Error("Writer and reviewer must have distinct verified bot user IDs");
     Object.assign(this, {
       api,
+      humanApi,
       reviewerApi,
       project,
       repo,
@@ -668,6 +670,51 @@ export class LocalOrchestrator {
     return state.claim;
   }
 
+  async checks(number) {
+    if (!Number.isSafeInteger(number) || number < 1)
+      throw new Error("A positive PR number is required");
+    const path = `repos/${this.repo}/pulls/${number}`;
+    const pr = await this.api.request(path);
+    const result = await this.checksForHead(pr.head?.sha);
+    const current = await this.api.request(path);
+    if (current.head?.sha !== result.head)
+      throw new Error("PR head changed during check lookup; rerun for the current head");
+    return result;
+  }
+
+  async checksForHead(head) {
+    if (!exactHead(head)) throw new Error("Check lookup requires an exact PR head SHA");
+    const configured = requiredChecks(this.config);
+    const runs = await (this.humanApi ?? this.api).list(
+      `repos/${this.repo}/commits/${head}/check-runs?filter=all`,
+      "check_runs",
+    );
+    const latest = new Map();
+    for (const run of runs) {
+      if (run.head_sha !== head || !Number.isSafeInteger(run.id)) continue;
+      const key = JSON.stringify([run.name, run.app?.id]);
+      if (!latest.has(key) || run.id > latest.get(key).id) latest.set(key, run);
+    }
+    const summarize = (name, appId, run) => ({
+      name,
+      appId,
+      status: run?.status ?? "missing",
+      conclusion: run?.conclusion ?? null,
+      detailsUrl: run?.details_url ?? null,
+    });
+    const required = configured.map(({ name, appId }) =>
+      summarize(name, appId, latest.get(JSON.stringify([name, appId]))),
+    );
+    return {
+      head,
+      ready: required.every(
+        ({ status, conclusion }) => status === "completed" && conclusion === "success",
+      ),
+      checks: [...latest.values()].map((run) => summarize(run.name, run.app?.id ?? null, run)),
+      required,
+    };
+  }
+
   async review(number, data) {
     if (!Number.isSafeInteger(number) || number < 1 || !/^[a-f0-9]{40}$/.test(data.head))
       throw new Error("Review requires a positive PR number and exact head SHA");
@@ -749,6 +796,16 @@ export class LocalOrchestrator {
     delete metadata.body;
     const body = `${data.body || "Agent review"}\n\n\`\`\`workflow-review\n${JSON.stringify(metadata)}\n\`\`\``;
     if (Buffer.byteLength(body) > 50000) throw new Error("Review report is too large");
+    if (requiredChecks(this.config).length) {
+      const checks = await this.checksForHead(data.head);
+      if (!checks.ready)
+        throw new Error(
+          `Required CI checks must complete successfully for this PR head; run grait github checks --pr ${number}`,
+        );
+      const current = await this.api.request(`repos/${this.repo}/pulls/${number}`);
+      if (current.head?.sha !== data.head || current.state !== "open" || current.draft)
+        throw new Error("PR changed while checking required CI; reevaluate the current PR head");
+    }
     state.pendingReview = { head: data.head, round: data.round };
     await this.ledger.save(number);
     const published = await this.reviewerApi.request(`repos/${this.repo}/pulls/${number}/reviews`, {

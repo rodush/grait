@@ -7,7 +7,11 @@ import { bundledRuntime, runtimeFile } from "../lib/runtime-resources.mjs";
 
 export async function runNodeSuite(patterns = process.argv.slice(2)) {
   const files = [];
-  for (const pattern of patterns) for await (const file of glob(pattern)) files.push(file);
+  if (patterns[0] === "--literal-files") {
+    files.push(...patterns.slice(1).map((file) => `./${file}`));
+  } else {
+    for (const pattern of patterns) for await (const file of glob(pattern)) files.push(file);
+  }
   if (!files.length) {
     process.stdout.write(JSON.stringify({ passed: [], failed: [], infrastructureErrors: [] }));
   } else {

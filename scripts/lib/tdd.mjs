@@ -228,7 +228,7 @@ export function validateEvidence(
     )
       throw new Error("Red requires exactly the expected assertion failures");
   } else if (phase !== "green" || report.failed.length)
-    throw new Error("Green requires the complete suite to pass");
+    throw new Error("Green requires all executed tests to pass");
   if (phase === "green" && expectedFailures?.some((id) => !report.passed.includes(id)))
     throw new Error("Green must execute and pass every accepted test");
   return digest(JSON.stringify(report));
@@ -250,6 +250,7 @@ export function handoffToImplementer(state, report, expectedFailures) {
     owner: "implementer",
     phase: "implementation",
     redHead: state.head,
+    ...(report.testFiles && { testFiles: report.testFiles }),
     evidence: [...state.evidence, evidence],
   };
 }
@@ -258,7 +259,7 @@ export function returnToTester(state, reason) {
   if (state.owner !== "implementer" || !reason?.trim())
     throw new Error("A test revision needs an implementer handback reason");
   if (state.cycle >= 10) throw new Error("TDD handoff limit exhausted; human resolution required");
-  return {
+  const next = {
     ...state,
     owner: "tester",
     phase: "tests",
@@ -266,6 +267,8 @@ export function returnToTester(state, reason) {
     reason,
     redHead: null,
   };
+  delete next.testFiles;
+  return next;
 }
 
 export function completeImplementation(state, report) {

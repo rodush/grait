@@ -16,6 +16,12 @@
   "maxRepeatedBlockingReviews": 3,
   "controllerRepository": "rodush/grait",
   "humanOperators": ["rodush"],
+  "ci": {
+    "requiredChecks": [
+      { "name": "Template validation", "appId": 15368 },
+      { "name": "Candidate validation", "appId": 15368 }
+    ]
+  },
   "developmentWriteScope": {
     "allowedWritePaths": [
       ".agents/**",
@@ -157,7 +163,8 @@
     "testPatterns": ["tests/**", "**/test_*.py", "**/*.spec.py", "**/*.test.*"],
     "runner": {
       "install": ["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
-      "command": ["node", "{nodeAdapter}", "tests/*.test.mjs"]
+      "command": ["node", "{nodeAdapter}", "{testFiles}"],
+      "filePatterns": ["tests/*.test.mjs"]
     }
   },
   "execution": "local",

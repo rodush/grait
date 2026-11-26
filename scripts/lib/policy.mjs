@@ -19,7 +19,27 @@ export function parseBlock(body, name) {
 
 export const defaultMaxReady = 5;
 
+export function requiredChecks(config) {
+  const ci = config.ci;
+  if (ci === undefined) return [];
+  const checks = ci?.requiredChecks;
+  if (
+    !Array.isArray(checks) ||
+    checks.some(
+      (check) =>
+        typeof check?.name !== "string" ||
+        !check.name.trim() ||
+        !Number.isSafeInteger(check.appId) ||
+        check.appId < 1,
+    ) ||
+    new Set(checks.map(({ name, appId }) => JSON.stringify([name, appId]))).size !== checks.length
+  )
+    throw new Error("Configure ci.requiredChecks as unique check names and publisher App IDs");
+  return checks;
+}
+
 export function validateConfig(config) {
+  requiredChecks(config);
   if (config.schemaVersion !== 2 || config.execution !== "local")
     throw new Error(
       "Use schema version 2 with local harness execution; follow docs/installation.md to migrate",

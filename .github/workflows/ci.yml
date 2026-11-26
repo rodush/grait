@@ -13,13 +13,18 @@ env:
   NPM_CONFIG_MIN_RELEASE_AGE: "3"
 jobs:
   validate:
-    name: Template validation
+    name: ${{ matrix.validation.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        validation: ${{ fromJSON(github.event_name == 'pull_request' && '[{"name":"Template validation"},{"name":"Candidate validation"}]' || '[{"name":"Template validation"}]') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ matrix.validation.name == 'Candidate validation' && github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
