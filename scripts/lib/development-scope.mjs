@@ -32,10 +32,12 @@ export async function repositoryDevelopmentConfig(config, api) {
       throw new Error("Expected repository configuration");
     if (!sameLogin(trusted.controllerRepository, sourceRepository))
       throw new Error("Trusted configuration must identify the GRAIT source repository");
-    validateConfig(trusted);
-    assertApplicationRunner(trusted.tdd?.runner);
+    const sourceConfig = validateConfig(
+      Object.hasOwn(trusted, "sourceCi") ? { ...trusted, ci: trusted.sourceCi } : trusted,
+    );
+    assertApplicationRunner(sourceConfig.tdd?.runner);
     if (!Object.hasOwn(trusted, "developmentWriteScope"))
-      return { config: trusted, development: false };
+      return { config: sourceConfig, development: false };
 
     const { allowedWritePaths, protectedPaths } = trusted.developmentWriteScope ?? {};
     if (
@@ -53,10 +55,10 @@ export async function repositoryDevelopmentConfig(config, api) {
 
     return {
       config: validateConfig({
-        ...trusted,
+        ...sourceConfig,
         allowedWritePaths,
         protectedPaths,
-        tdd: { ...trusted.tdd, implementationPaths: allowedWritePaths },
+        tdd: { ...sourceConfig.tdd, implementationPaths: allowedWritePaths },
       }),
       development: true,
     };

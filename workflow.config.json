@@ -16,7 +16,7 @@
   "maxRepeatedBlockingReviews": 3,
   "controllerRepository": "rodush/grait",
   "humanOperators": ["rodush"],
-  "ci": {
+  "sourceCi": {
     "requiredChecks": [
       { "name": "Template validation", "appId": 15368 },
       { "name": "Candidate validation", "appId": 15368 }
