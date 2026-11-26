@@ -244,7 +244,7 @@ globalThis.fetch = async (url, options = {}) => {
     else if (login.endsWith("[bot]")) {
       status = 404;
       value = { message: "Unknown App bot" };
-    } else value = login === "acme" ? state.repository.owner : { login, id: 42, type: "User", node_id: "human-node" };
+    } else value = login === "acme" ? state.repository.owner : state.users?.[login] ?? { login, id: 42, type: "User", node_id: "human-node" };
   }
   else if (method === "GET" && path.startsWith("user/")) {
     const id = Number(path.split("/")[1]);

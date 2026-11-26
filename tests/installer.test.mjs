@@ -941,6 +941,43 @@ test("installed init describes partial publishing bindings before any confirmati
   assert.equal((await f.state()).createdProjects, 0);
 });
 
+for (const [role, otherRole] of [
+  ["writer", "reviewer"],
+  ["reviewer", "writer"],
+]) {
+  test(`installed init requires the bound ${role} App key before confirmation`, async (t) => {
+    const { pem, ...app } = localApps[role];
+    const f = await installerFixture(t, {
+      localApps: {
+        [otherRole]: { ...localApps[otherRole], botUserId: otherRole === "writer" ? 10001 : 20001 },
+        ...(role === "reviewer" ? { reviewer: { ...app, botUserId: 20001 } } : {}),
+      },
+      variables: [
+        { name: "AUTOMATION_ENABLED", value: "false" },
+        { name: "AUTOMATION_APP_ID", value: "100" },
+        { name: "AUTOMATION_BOT_USER_ID", value: "10001" },
+        { name: "REVIEW_APP_ID", value: "200" },
+        { name: "REVIEW_BOT_USER_ID", value: "20001" },
+      ],
+    });
+    const terminal = { GRAIT_FIXTURE_TERMINAL: "1", NO_COLOR: "1" };
+    const before = await f.localState();
+    const blocked = await f.run(init, undefined, terminal);
+    assert.notEqual(blocked.status, 0);
+    assert.equal(/Apply this plan|Confirm the proposed/i.test(blocked.output), false);
+    assert.match(blocked.output, new RegExp(`--${role}-key\\b`));
+    assert.doesNotMatch(blocked.output, /PRIVATE KEY|synthetic-setup-token/i);
+
+    const keyPath = join(f.directory, ".git", `${role}.pem`);
+    await writeFile(keyPath, pem, { mode: 0o600 });
+    const retry = await f.run([...init, `--${role}-key`, keyPath], undefined, terminal);
+    assert.match(retry.output, /Apply this plan/i);
+    assert.equal(f.git(["status", "--porcelain"]), "");
+    assert.ok((await f.state()).calls.every(({ method }) => method === "GET"));
+    assert.deepEqual(await f.localState(), before);
+  });
+}
+
 test("installed init renders a plain warning for recoverable ruleset setup", async (t) => {
   const f = await installerFixture(t, { rulesUnavailable: true });
   const result = await f.run([...init, "--yes"], undefined, { NO_COLOR: "1" });
@@ -1160,4 +1197,40 @@ test("installed activation rechecks missing delivery rulesets before reconciling
     assert.match(retry.output, /retry|resume|verify|configure/i);
     assert.doesNotMatch(retry.output, /Delivery rules are active/i);
   }
+});
+
+test("installed activation pauses automation on ruleset drift under another administrator", async (t) => {
+  const operator = { login: "operator", id: 42, type: "User", node_id: "human-node" };
+  const secondOperator = { login: "second-operator", id: 43, type: "User", node_id: "second-node" };
+  const f = await installerFixture(t, {
+    users: { [operator.login]: operator, [secondOperator.login]: secondOperator },
+  });
+  const args = init.map((argument) =>
+    argument === operator.login ? `${operator.login},${secondOperator.login}` : argument,
+  );
+  assert.equal((await f.run([...args, "--yes"])).status, 0);
+  await f.mergeConfiguration();
+  await f.update({ ciConclusion: "success" });
+  assert.equal((await f.run(["activate"])).status, 0);
+  await f.update({ actor: secondOperator });
+  assert.equal(
+    (await f.run(["activate"])).status,
+    0,
+    "Both configured administrators can activate",
+  );
+  assert.equal((await f.localState()).enabled, true);
+  const { rules, variables } = await f.state();
+  assert.equal(variables.find(({ name }) => name === "AUTOMATION_ENABLED").value, "true");
+  assert.equal(variables.find(({ name }) => name === "RULESET_ENFORCEMENT").value, "active");
+  const deliveryRule = rules.find(({ target }) => target === "branch");
+  assert.equal(deliveryRule?.enforcement, "active");
+  await f.update({
+    actor: operator,
+    rules: rules.filter(({ id }) => id !== deliveryRule.id),
+  });
+
+  const retry = await f.run(["activate"]);
+  assert.notEqual(retry.status, 0);
+  assert.match(retry.output, /ruleset/i);
+  await assertInactive(f);
 });
