@@ -6,10 +6,14 @@ import { command, withoutCredentials, requireSubscription } from "../scripts/lib
 import {
   assertSetupPublishingBindings,
   humanToken,
+  preflightPublishingAppCredentials,
   preparePublishingApps,
   publishingVariableMap,
+  publishingRoles,
 } from "../scripts/lib/local-auth.mjs";
 import { GitHub } from "../scripts/lib/github.mjs";
+import { sameLogin } from "../scripts/lib/policy.mjs";
+import { assertIntegrationBranch, githubLogin, verifyInitHarness } from "./init-context.mjs";
 import { bundledRuntime, packageResource, runtimeFile } from "../scripts/lib/runtime-resources.mjs";
 
 export async function privateStagingDirectory(root, prefix) {
@@ -25,24 +29,119 @@ export async function installerStore({ root, repo }) {
   return new SetupState(directory, state);
 }
 
-export async function provision(options) {
-  const { root, repo, store } = options;
-  const token = await humanToken();
+async function readProvisioningContext(repo) {
+  let token;
+  try {
+    token = await humanToken();
+  } catch {
+    throw new Error(
+      "GitHub authentication is required for " +
+        repo +
+        ". Run gh auth login, then retry grait init.",
+    );
+  }
   const api = new GitHub(token);
   const operator = await api.request("user");
-  const repository = await api.request(`repos/${repo}`);
-  if (operator.type !== "User" || !repository.permissions?.admin)
-    throw new Error("An authorized human repository administrator must apply setup");
+  const repository = await api.request("repos/" + repo);
+  if (operator.type !== "User" || !githubLogin(operator.login) || !repository.permissions?.admin)
+    throw new Error(
+      "An authorized human repository administrator must apply setup for " + repo + ".",
+    );
+  return { api, token, operator, repository };
+}
+
+function checkSetupBindings(repo, variables, state) {
+  try {
+    assertSetupPublishingBindings(variables, state);
+  } catch (error) {
+    const names = Object.values(publishingRoles).flatMap(({ app, bot }) => [app, bot]);
+    const present = names.filter((name) => variables.has(name));
+    const missing = names.filter((name) => !variables.has(name));
+    throw new Error(
+      "Incomplete repository publishing identities for " +
+        repo +
+        ". " +
+        error.message +
+        "\nPresent: " +
+        (present.join(", ") || "none") +
+        "\nMissing: " +
+        (missing.join(", ") || "none") +
+        "\nVerify the existing writer and reviewer App installations against the private setup checkpoint. Restore bindings for those Apps or reconcile stale repository variables with an administrator before retrying. Keep existing Apps and their keys.",
+    );
+  }
+}
+
+export async function preflightInstallation(options) {
+  const { root, repo, state } = options;
+  const { api, operator, repository } = await readProvisioningContext(repo);
+  const defaultBranch = repository.default_branch || options.defaultBranch;
+  await assertIntegrationBranch(root, defaultBranch);
   const maintainers = options.maintainers.length ? options.maintainers : [operator.login];
-  if (!maintainers.some((login) => login.toLowerCase() === operator.login.toLowerCase()))
+  if (!maintainers.some((login) => sameLogin(login, operator.login)))
+    throw new Error("Include the applying administrator among --maintainers");
+  if (options.prior) return { ...options, defaultBranch, maintainers };
+
+  const variables = publishingVariableMap(
+    await api.list("repos/" + repo + "/actions/variables", "variables"),
+  );
+  if (variables.get("AUTOMATION_ENABLED") === "true")
+    throw new Error(
+      "Pause the existing workflow for " + repo + " before applying installation changes.",
+    );
+  checkSetupBindings(repo, variables, state);
+  try {
+    await preflightPublishingAppCredentials({
+      variables,
+      apps: state?.apps,
+      keys: { writer: options.writerKey, reviewer: options.reviewerKey },
+    });
+  } catch (error) {
+    throw new Error(`Cannot reuse publishing App credentials for ${repo}. ${error.message}`);
+  }
+  const owner = variables.get("PROJECT_OWNER");
+  const number = variables.get("PROJECT_NUMBER");
+  if (
+    (owner && options.projectOwner && !sameLogin(owner, options.projectOwner)) ||
+    (number && options.projectNumber && number !== options.projectNumber)
+  )
+    throw new Error(
+      "The selected Project differs from the recorded binding for " +
+        repo +
+        ". Reuse the recorded owner and number.",
+    );
+  if (
+    !number &&
+    !options.projectNumber &&
+    !variables.get("PROJECT_ID") &&
+    variables.get("PROJECT_SETUP_STATUS") === "creating"
+  )
+    throw new Error(
+      "Project creation was interrupted for " +
+        repo +
+        ". Inspect GitHub and retry with the existing --project-owner and --project-number.",
+    );
+  await verifyInitHarness(options.harness);
+  return {
+    ...options,
+    defaultBranch,
+    maintainers,
+    projectSummary: number ? (owner || repo.split("/")[0]) + " #" + number : undefined,
+  };
+}
+
+export async function provision(options) {
+  const { root, repo, store } = options;
+  const { api, token, operator, repository } = await readProvisioningContext(repo);
+  const maintainers = options.maintainers.length ? options.maintainers : [operator.login];
+  if (!maintainers.some((login) => sameLogin(login, operator.login)))
     throw new Error("Include the applying administrator among --maintainers");
   await requireSubscription(options.harness, { login: true });
   const variables = publishingVariableMap(
-    await api.list(`repos/${repo}/actions/variables`, "variables"),
+    await api.list("repos/" + repo + "/actions/variables", "variables"),
   );
   if (variables.get("AUTOMATION_ENABLED") === "true")
     throw new Error("Pause the existing workflow before applying installation changes");
-  assertSetupPublishingBindings(variables, store.state);
+  checkSetupBindings(repo, variables, store.state);
   await preparePublishingApps({
     repo,
     ownerType: repository.owner.type,

@@ -4,8 +4,10 @@ import { readFile, writeFile } from "node:fs/promises";
 import { GitHub } from "./lib/github.mjs";
 import {
   repositoryRules,
+  askSetupRules,
   repositorySettings,
   resolveActionsAppId,
+  rulesetSetupLog,
   preserveCodeowners,
 } from "./lib/bootstrap.mjs";
 import {
@@ -62,6 +64,7 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
     maintainers,
     writer: values["writer-login"] || "UNCONFIGURED",
     reviewer: values["reviewer-login"] || "UNCONFIGURED",
+    askSetupRules,
     repositorySettings,
     rulesets: [
       "Required delivery gates (staged disabled until activation)",
@@ -348,6 +351,7 @@ export async function bootstrapMain(args = process.argv.slice(2)) {
         rules: repositoryRules(actors, statusAppId, values["release-app-id"], actionsAppId),
         phase: "stage",
         acknowledgeUnenforced: Boolean(values["acknowledge-unenforced-rules"]),
+        ...(values["setup-root"] ? { prompt: () => askSetupRules(), log: rulesetSetupLog } : {}),
       });
       await setVariable("RULESET_ENFORCEMENT", enforcement);
       for (const [name, color] of [

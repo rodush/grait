@@ -25,9 +25,72 @@ Continue with [guided configuration](#guided-configuration) from the new checkou
 
 Clone the target repository or update a clean checkout of its default branch. Keep its application manifests, CI, and instructions in place. Continue with [guided configuration](#guided-configuration). If it was created from the GRAIT template, follow [packaged migration](#existing-template-based-repository).
 
+## Guided configuration
+
+1. Install the CLI globally from Git, then create an integration branch in the target checkout.
+2. Run GRAIT init and review its plan. Complete the GitHub approvals when prompted.
+3. Commit the generated files together, push the integration branch, and open a configuration PR into the default branch.
+4. Have the configuration PR merged and wait for GRAIT validation on the current default-branch head (e.g. `main`).
+5. Update your checkout to the default branch and activate GRAIT.
+
+**Always use a configuration PR!**\
+A direct push of the setup commit to the default branch blocks activation even when GitHub allows the push.
+
+Install the packaged CLI with npm. The bootstrap selects the tip of `main` at install time, verifies npm's resolved Git SHA, and records that SHA against the global executable.
+
+```sh
+npm exec --yes --allow-git=all --ignore-scripts \
+  --package='git+https://github.com/rodush/grait.git#main' -- grait install-global
+```
+
+For a reviewed version, replace `main` with its full commit SHA or an exact Git tag such as `v1.2.3`. The revision must include the global installer. The Git opt-in is scoped to this npm invocation. If you install into an isolated npm prefix with `grait install-global --prefix PATH`, put that prefix's npm executable directory on your `PATH`. Bare `grait init` uses the installed immutable SHA even if its branch or tag moves. Generated CI also uses an immutable SHA.
+
+In a clean target checkout, create the integration branch and preview the plan:
+
+```sh
+git switch -c chore/adopt-grait
+grait init --plan
+```
+
+The plan shows the target repository, resolved revision, harness, maintainers, Project, and publishing Apps before the artifact diff. When a fork and upstream are both plausible, select the target with `--repo OWNER/REPOSITORY`. Choose `--harness codex`, `--harness claude`, or `--harness copilot` to override the harness. Use `--maintainers LOGIN,LOGIN` to propose human owners and `--project-owner LOGIN --project-number N` to bind an existing Project. Use `--revision SHA` or `--revision vX.X.X` to preview and apply a selected package. A 12-character SHA prefix for the running package remains supported. Use `--cwd PATH` before `init` to target another checkout.
+
+The preview does not provision resources or write the target. Apply the plan by running:
+
+```sh
+grait init
+```
+
+For scripted use, pass the CLI's `--yes` after `grait init` to confirm the displayed plan and any explicit maintainer selection. GitHub App registration and installation still require human approval. On an SSH host, see [remote approval and recovery](#resume-remote-hosts-and-credentials) for `--no-browser`. Scripts can also use the [pinned CLI](#choose-and-run-a-pinned-cli).
+
+The installer reuses confirmed setup answers, verified writer and reviewer Apps, and the recorded Project on retry. It stages provisioning privately and then applies the generated harness instructions, `workflow.config.json`, human CODEOWNERS, `.github/workflows/grait.yml`, and `.grait/installation.json` together. Publishing keys and recovery state stay under private Git metadata. Preserve the metadata and retry from the same checkout after an interruption. A bare retry uses the original verified revision saved with the setup answers. The CLI gives a recovery command if it cannot read verified provenance.
+
+Run `grait validate`, review and commit the configuration together, then push the integration branch and open a configuration PR. Run your application checks alongside the generated GRAIT validation workflow. Review `maxReady` in `workflow.config.json` before committing. It defaults to five, and matching your harness's maximum concurrent workers or subagents is a reasonable starting point. See [Ready queue capacity](setup.md#configure-ready-queue-capacity).
+
+Once a human merges the configuration PR and GRAIT validation succeeds on the current default-branch head, switch to that branch, pull the merge, and run:
+
+```sh
+grait activate
+```
+
+Activation verifies the human merge, exact artifacts at the merge commit and current default-branch head, current CI, Project access, human CODEOWNERS, and both App installations. If the installation record reached the default branch by direct push, follow [direct-push recovery](#recover-a-direct-push-of-the-installation-record). The generated workflow runs `grait validate` for GRAIT configuration and managed content. Keep your application checks and configure the application runner and write scopes in `workflow.config.json` before starting testable work. Once activated, run `grait orchestrator start` and follow [operations](operations.md).
+
+If a ruleset prompt pauses, follow the displayed GitHub settings instructions and rerun the same command. The separate `--acknowledge-unenforced-rules` confirms an unenforced ruleset. Ordinary `--yes` confirms the installation plan. Human approval and merge remain required. If activation is interrupted, it reports the active step and releases its local lock on Ctrl+C. Rerun `grait activate` to check the saved decision and remote settings. A retry can recover a private lock whose owner has stopped and leaves a lock held by a live process in place. If previously active rules cannot be verified, activation pauses automation while you reconcile them.
+
+### Recover a direct push of the installation record
+
+If activation reports **A configuration PR containing the installation record must be merged to the default branch by a human before activation**, check the record path and commit shown by the diagnostic. A later PR can list `.grait/installation.json` in its diff while the file is already identical on the default branch. The merge then leaves the record unchanged, and the earlier direct push remains the last commit that changed it.
+
+If setup was pushed directly and your current repository rules permit the reviewed revert, use two configuration PRs:
+
+1. Update the default branch and create a revert branch. Revert the direct setup commit and inspect the diff, especially if the commit includes other changes. Open a PR for the focused revert and have a human merge it.
+2. Start a new integration branch from the updated default branch. Reapply the original generated setup files from the direct setup commit, accounting for any intentional intervening edits. Open a configuration PR and have a human merge it.
+3. Wait for GRAIT validation on the current default-branch head, update the local checkout, and rerun `grait activate`.
+
+The revert temporarily removes tracked setup files introduced by the direct push, which may include the generated validation workflow. Plan the two PRs when that gap is acceptable and the repository's current merge rules permit it. Keep the existing Apps, Project binding, and private setup state throughout. Reapplying the original artifacts leaves `.grait/installation.json` intact and preserves Git history.
+
 ## Choose and run a pinned CLI
 
-Pick a reviewed commit from the GRAIT repository and copy its full 40-character Git SHA. The example below uses a merged commit that includes installation, activation, validation, migration, upgrade, orchestration, and publishing. Retain the SHA in the configuration PR and use the same value for preview, apply, and activation.
+For scripted setup, migration, or upgrade, pick a reviewed commit from the GRAIT repository and copy its full 40-character Git SHA. The example below uses a merged commit that includes installation, activation, validation, migration, upgrade, orchestration, and publishing. Retain the SHA in the configuration PR and use the same value for preview, apply, and activation.
 
 Define this function in the shell from which you run the examples. If you start a new shell or switch to the administrator's host, define it there with the same pin.
 
@@ -42,35 +105,14 @@ grait --help
 
 npm puts the CLI in its cache and runs the committed bundle. The command permits Git packages for this invocation and disables package lifecycle scripts. The installer checks the running package's resolved Git revision and records the full SHA in `.grait/installation.json` and the generated validation workflow. The npm `--yes` flag accepts fetching the package. Use `--yes` after `grait init` only when you intend to accept GRAIT's configuration prompts.
 
-## Guided configuration
+To preview a scripted installation with the pinned CLI, run:
 
-1. **Prepare an integration branch.** Run `git switch -c chore/adopt-grait` from the target repository's default branch. Define the [pinned CLI function](#choose-and-run-a-pinned-cli). Replace `OWNER/REPOSITORY` with the target repository and `alice` with the GitHub login of the applying administrator. Leave `--maintainers` out to use that administrator as the default. If you specify multiple maintainers, use comma-separated logins that include the applying administrator.
+```sh
+grait init --plan --repo OWNER/REPOSITORY --revision "$GRAIT_REVISION" \
+  --harness codex --maintainers alice
+```
 
-2. **Preview.** Choose `codex` (the default), `claude`, or `copilot` with `--harness`. The preview reads the local target and shows the artifact diff without writing the checkout, creating private setup state, or calling GitHub APIs for provisioning. npm may fetch the CLI before the preview runs.
-
-   ```sh
-   grait init --plan --repo OWNER/REPOSITORY --revision "$GRAIT_REVISION" \
-     --harness codex --maintainers alice
-   ```
-
-3. **Apply as an administrator.** Rerun the same command without `--plan`, and review the initial plan and resulting configuration diff.
-
-   ```sh
-   grait init --repo OWNER/REPOSITORY --revision "$GRAIT_REVISION" \
-     --harness codex --maintainers alice
-   ```
-
-   For a scripted invocation, add `--yes` to the apply command to accept the configuration prompts. GitHub App registration and installation still require human approval. If you have an existing Project, add `--project-owner LOGIN --project-number N` to the plan and apply commands. Its Status field must include Backlog, Ready, In Progress, Review, and Done. On an SSH host, see [remote approval and recovery](#resume-remote-hosts-and-credentials) for `--no-browser`. To select a checkout from another directory, put `--cwd PATH` before `init`.
-
-4. **Publish the reviewed configuration.** Setup creates or reuses the Project and two verified publishing Apps. It applies the selected harness files, `workflow.config.json`, CODEOWNERS, `.github/workflows/grait.yml`, and `.grait/installation.json` together. App keys and operational state stay in private Git metadata. Add your application-specific instructions and configure its write scopes and test runner before starting testable work. Run `grait validate`, review and commit the configuration together, then push the integration branch and open a configuration PR using your authorized GitHub account. Run your application checks alongside the generated GRAIT validation workflow.
-
-5. **Activate after human merge and CI.** Update your checkout to the repository's default branch after a human merges the configuration PR and CI passes on that branch. With the same CLI pin, run:
-
-   ```sh
-   grait activate
-   ```
-
-   Activation checks human merge, the installed artifacts at the merge and current default-branch head, CI, the Project binding, CODEOWNERS, both App installations, and repository delivery rules. An administrator must resolve any failed check before retrying. Once activated, run `grait orchestrator start` and follow [operations](operations.md).
+Repeat without `--plan` to apply. Replace `alice` with the applying administrator's login. If you specify multiple maintainers, include that login in the comma-separated list. An existing Project must have a Status field with Backlog, Ready, In Progress, Review, and Done.
 
 ## Ownership and access
 
@@ -123,11 +165,10 @@ On GitHub Free private repositories, manual configuration cannot enable the unav
 For a noninteractive run, read the printed configuration and explicitly acknowledge unenforced rules with:
 
 ```sh
-grait init --repo OWNER/REPOSITORY --revision "$GRAIT_REVISION" \
-  --yes --acknowledge-unenforced-rules
+grait init --yes --acknowledge-unenforced-rules
 ```
 
-Repeat your original target, harness, and Project flags as needed. `--yes` accepts the ordinary setup plan only; it does not acknowledge unenforced rules. Keep the saved Apps, Project binding, and Git revision when retrying. A ruleset pause can leave provisioning state before the installation artifacts are applied. If the command leaves a stale lock, follow the [recovery instructions](#resume-remote-hosts-and-credentials).
+Repeat your original revision, target, harness, and Project flags as needed. `--yes` accepts the ordinary setup plan only; it does not acknowledge unenforced rules. Keep the saved Apps, Project binding, and Git revision when retrying. A ruleset pause can leave provisioning state before the installation artifacts are applied. If the command leaves a stale lock, follow the [recovery instructions](#resume-remote-hosts-and-credentials).
 
 Activation needs its own acknowledgement if GitHub still cannot enforce the rules:
 
@@ -154,9 +195,9 @@ Commit the complete upgrade in one PR. After human merge and CI, update `GRAIT_R
 
 ## Resume, remote hosts, and credentials
 
-- **Interrupted setup.** Keep the private recovery state and retry `grait init` with the original package pin, repository, harness, and Project choices. An interrupted file transaction is reported by preview and recovered by a confirmed retry. If App registration or Project creation has an uncertain outcome, reconcile the recorded object before retrying. If activation failed, reconcile the cause and rerun `grait activate` at the same pin.
+- **Interrupted setup.** Keep the private recovery state and retry `grait init` from the same checkout. GRAIT reuses the saved revision and setup choices. Repeat any explicit overrides you still want to apply. An interrupted file transaction is reported by preview and recovered by a confirmed retry. If App registration or Project creation has an uncertain outcome, reconcile the recorded object before retrying. If activation failed, reconcile the cause and rerun `grait activate` at the same pin.
 - **Interrupted configuration publication.** The packaged installer applies artifacts locally. Keep the configuration commit and check the remote branch and PR before retrying a push or PR creation with your authorized GitHub account. If the PR already exists, continue with it. For a claimed story, use [writer publication recovery](operations.md#pause-and-recovery).
-- **Stale setup lock.** Confirm its recorded process has stopped, inspect the lock, and remove only that stale lock before retrying. Keep the journal and App credentials for recovery.
+- **Stale setup lock.** Activation recovers an identifiable stale setup lock on retry. If init is blocked or activation cannot recover the lock, inspect it and verify its process has stopped before removing only that stale lock. Keep the journal and App credentials for recovery.
 - **Another host.** Authenticate GitHub CLI and the native harness there, stop the old orchestrator, and securely transfer the private `<git-common-dir>/grait-setup/` directory with mode 700 for the directory and mode 600 for files. Exclude the old lock. Run `grait activate` on the new host after transferring setup state. For key import during initial provisioning, see the [publishing identity bindings](setup.md#publishing-identity-bindings).
 
 On an SSH host, pass `--no-browser` to `grait init` and forward the printed callback port to your browser machine, for example `ssh -L PORT:127.0.0.1:PORT HOST`. Open the printed loopback URL and finish GitHub's approvals. Setup uses the saved port on retry.

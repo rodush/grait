@@ -17,6 +17,7 @@ import {
   verifyOwnership,
 } from "./installation-record.mjs";
 import { installerStore, provision } from "./installer-services.mjs";
+import { assertIntegrationBranch } from "./init-context.mjs";
 import { generateProjectArtifacts } from "./project-policy.mjs";
 import { resolveInstallRevision } from "./installation-revision.mjs";
 
@@ -103,8 +104,7 @@ async function installationInputs(input) {
   const repo = input.repo ?? prior?.repository ?? existingConfig.controllerRepository;
   const harness = input.harness ?? prior?.harness ?? existingConfig.engine ?? "codex";
   const version = input.version;
-  const revision =
-    input.verifiedRevision ?? (await resolveInstallRevision(input.revision ?? prior?.revision));
+  const revision = input.verifiedRevision;
   validateTarget({ repository: repo, harness, version });
   if (
     [prior?.repository, existingConfig.controllerRepository].some(
@@ -117,10 +117,7 @@ async function installationInputs(input) {
     (prior.revision !== revision || prior.version !== version || prior.harness !== harness)
   )
     throw new Error("Use grait upgrade for a different pinned revision, version, or harness");
-  const maintainers =
-    input.maintainers === undefined
-      ? (existingConfig.humanOperators ?? [])
-      : input.maintainers.split(",").map((name) => name.trim().replace(/^@/, ""));
+  const maintainers = input.maintainers ?? existingConfig.humanOperators ?? [];
   if (
     !Array.isArray(maintainers) ||
     maintainers.some((login) => typeof login !== "string" || !/^[a-zA-Z0-9-]+$/.test(login))
@@ -128,7 +125,6 @@ async function installationInputs(input) {
     throw new Error("Maintainers must be GitHub user logins");
   if (
     prior &&
-    input.maintainers !== undefined &&
     maintainers.join(",").toLowerCase() !== existingConfig.humanOperators?.join(",").toLowerCase()
   )
     throw new Error("Edit the project-owned humanOperators configuration before repeating init");
@@ -230,21 +226,15 @@ function plannedOwners(options, prepared) {
 /** Preview durable artifacts without provisioning or creating private state. */
 export async function planInstallation(input) {
   const root = await realpath(input.root);
-  const installation = await readInstallation(root);
-  const repo =
-    input.repo ??
-    installation?.record.repository ??
-    JSON.parse((await readArtifact(root, configPath)) ?? "{}").controllerRepository;
-  if (!/^[\w.-]+\/[\w.-]+$/.test(repo ?? "")) throw new Error("Provide --repo OWNER/REPOSITORY");
+  const { repo } = input;
   const store = await installerStore({ root, repo });
   const transaction = pendingArtifactTransaction(store, "init");
   if (transaction) {
-    const revision = await resolveInstallRevision(
-      input.revision ?? transaction.revision ?? installation?.record.revision,
-    );
-    return { pendingRecovery: true, repo, revision };
+    if (transaction.revision !== input.verifiedRevision)
+      throw new Error("Retry the interrupted installation with --revision " + transaction.revision);
+    return { pendingRecovery: true, repo: input.repo, revision: input.verifiedRevision };
   }
-  const options = await installationInputs({ ...input, root, repo });
+  const options = await installationInputs({ ...input, root });
   const prepared = await prepareArtifacts(options);
   return {
     ...planFor(options, prepared, options.config, plannedOwners(options, prepared)),
@@ -264,6 +254,7 @@ export async function installWorkflow(input) {
     throw new Error("Installation recovery state changed since preview. Retry the same command.");
   if (transaction?.revision && transaction.revision !== revision)
     throw new Error("Retry the interrupted installation with its recorded GRAIT Git revision.");
+  await assertIntegrationBranch(root, input.defaultBranch);
   await store.acquire();
   try {
     if (transaction) await recoverArtifactTransaction({ root, store, transaction });
@@ -276,6 +267,17 @@ export async function installWorkflow(input) {
     if (transaction) await input.onRecoveredPlan(preliminary);
     else assertExpectedChanges(input.preview, preliminary.changes);
     if (options.prior && !preliminary.changes.length) return preliminary;
+    if (!options.prior) {
+      store.state.initAnswers = {
+        revision,
+        harness: options.harness,
+        maintainers: options.maintainers,
+        ...(options.projectOwner ? { projectOwner: options.projectOwner } : {}),
+        ...(options.projectNumber ? { projectNumber: options.projectNumber } : {}),
+        project: options.project,
+      };
+      await store.save();
+    }
     const { config, codeowners } = options.prior
       ? { config: options.config, codeowners: existingOwners }
       : await provision({ ...options, codeowners: prepared.owners, store });

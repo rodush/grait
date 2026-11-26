@@ -1,3 +1,6 @@
+import { createInterface } from "node:readline";
+import { sameLogin } from "./policy.mjs";
+
 export async function resolveActionsAppId(api) {
   const app = await api.request("apps/github-actions");
   if (
@@ -109,4 +112,101 @@ export function preserveCodeowners(original, logins) {
   });
   if (!hasDefault) lines.unshift(`* ${operators.join(" ")}`);
   return lines.join("\n").replace(/\n*$/, "\n");
+}
+
+function diagnostic(label, color, stream, message) {
+  const styled = stream.isTTY && process.env.NO_COLOR === undefined && process.env.TERM !== "dumb";
+  stream.write(
+    "\n" + (styled ? "\x1b[" + color + "m" + label + "\x1b[0m" : label) + " " + message + "\n",
+  );
+}
+
+export function setupWarning(message, stream = process.stdout) {
+  diagnostic("WARNING", 33, stream, message);
+}
+
+export function setupError(message) {
+  diagnostic("ERROR", 31, process.stderr, message);
+}
+
+export function interruptionError() {
+  const error = new Error("Setup interrupted");
+  error.code = "SETUP_INTERRUPTED";
+  return error;
+}
+
+export async function setupQuestion(message, signal) {
+  if (!process.stdin.isTTY) return null;
+  signal?.throwIfAborted();
+  const terminal = createInterface({ input: process.stdin, output: process.stdout });
+  const close = () => terminal.close();
+  let interrupted = false;
+  try {
+    const answer = await new Promise((resolve) => {
+      terminal.once("close", () => resolve(null));
+      terminal.once("SIGINT", () => {
+        interrupted = true;
+        close();
+      });
+      signal?.addEventListener("abort", close, { once: true });
+      terminal.question("\n" + message, resolve);
+    });
+    signal?.throwIfAborted();
+    if (interrupted) throw interruptionError();
+    return answer;
+  } finally {
+    signal?.removeEventListener("abort", close);
+    close();
+  }
+}
+
+export function askSetupRules(signal) {
+  return setupQuestion(
+    "Complete the configuration and type 'completed' to verify it. Type 'continue' to acknowledge unenforced rules, or 'pause' to resume later: ",
+    signal,
+  );
+}
+
+export function rulesetSetupLog(message) {
+  if (/^GitHub ruleset configuration/.test(message)) setupWarning(message);
+  else console.log(message);
+}
+
+function matchesRuleValue(actual, expected) {
+  if (Array.isArray(expected)) {
+    if (!Array.isArray(actual) || actual.length !== expected.length) return false;
+    const remaining = [...actual];
+    return expected.every((value) => {
+      const index = remaining.findIndex((candidate) => matchesRuleValue(candidate, value));
+      if (index < 0) return false;
+      remaining.splice(index, 1);
+      return true;
+    });
+  }
+  if (expected && typeof expected === "object")
+    return (
+      actual &&
+      typeof actual === "object" &&
+      !Array.isArray(actual) &&
+      Object.entries(expected).every(([key, value]) => matchesRuleValue(actual[key], value))
+    );
+  return actual === expected;
+}
+
+export async function verifyActiveRepositoryRules(api, repo, rules) {
+  try {
+    const rulesets = await api.list("repos/" + repo + "/rulesets");
+    for (const rule of rules) {
+      const stored = rulesets.find(
+        (item) => item.name === rule.name && sameLogin(item.source, repo),
+      );
+      if (!Number.isSafeInteger(stored?.id) || stored.id < 1) return false;
+      const current = await api.request("repos/" + repo + "/rulesets/" + stored.id);
+      if (!matchesRuleValue(current, rule)) return false;
+    }
+    return true;
+  } catch (error) {
+    if (error.status === 403 || error.status === 404) return false;
+    throw error;
+  }
 }
