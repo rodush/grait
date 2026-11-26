@@ -200,7 +200,8 @@ export async function activateMain(
     const matchedCheckpoint = checkpoint && remoteEnforcement === checkpoint.enforcement;
     step = "verifying the active repository rulesets";
     const drifted = Boolean(
-      checkpoint?.enforcement === "active" &&
+      (checkpoint?.enforcement === "active" ||
+        (remotelyEnabled && remoteEnforcement === "active")) &&
       !(await verifyActiveRepositoryRules(api, repo, rules)),
     );
     const resumed = Boolean(matchedCheckpoint && remotelyEnabled && !drifted);

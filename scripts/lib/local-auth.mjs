@@ -133,6 +133,57 @@ export function assertSetupPublishingBindings(variables, state) {
   throw new Error("Incomplete repository publishing identities; complete clean setup");
 }
 
+async function resolvePublishingAppCredential({ role, variables, app, keyPath }) {
+  const names = publishingRoles[role];
+  const id = identityNumber(variables.get(names.app));
+  const botUserId = identityNumber(variables.get(names.bot));
+  if (id && app?.id && app.id !== id)
+    throw new Error(`Saved ${role} App ID differs from the repository's identity`);
+  if (botUserId && app?.botUserId !== undefined && app.botUserId !== botUserId)
+    throw new Error(`Saved ${role} bot user ID differs from the repository's identity`);
+  if (keyPath) {
+    if (!id || !botUserId)
+      throw new Error(`No recorded numeric ${role} binding for key import; complete clean setup`);
+    const unreadable = () =>
+      new Error(`Cannot read the existing ${role} App key from --${role}-key PATH`);
+    const info = await lstat(keyPath).catch(() => {
+      throw unreadable();
+    });
+    if (
+      !info.isFile() ||
+      info.isSymbolicLink() ||
+      info.mode & 0o077 ||
+      (process.getuid && info.uid !== process.getuid())
+    )
+      throw new Error(
+        "Imported App keys must be private files owned by you (chmod 600), not symlinks",
+      );
+    app = {
+      ...app,
+      name: app?.name || `grait-${role}-${id}`,
+      id,
+      botUserId,
+      pem: await readFile(keyPath, "utf8").catch(() => {
+        throw unreadable();
+      }),
+      phase: "installed",
+      installed: true,
+    };
+  }
+  if (id && (!app?.id || !app.pem))
+    throw new Error(
+      `Import the existing ${role} App key with --${role}-key PATH; setup will not create a replacement identity`,
+    );
+  if (botUserId && !app?.botUserId)
+    throw new Error(`Missing saved ${role} bot user ID; complete clean setup`);
+  return { app, needsBinding: !id || !botUserId };
+}
+
+export async function preflightPublishingAppCredentials({ variables, apps = {}, keys }) {
+  for (const role of Object.keys(publishingRoles))
+    await resolvePublishingAppCredential({ role, variables, app: apps[role], keyPath: keys[role] });
+}
+
 export async function preparePublishingApps({
   repo,
   ownerType,
@@ -144,44 +195,14 @@ export async function preparePublishingApps({
 }) {
   let needsBindings = false;
   const owner = repo.split("/")[0];
-  for (const [role, names] of Object.entries(publishingRoles)) {
-    const id = identityNumber(variables.get(names.app));
-    const botUserId = identityNumber(variables.get(names.bot));
-    const keyPath = keys[role];
-    let saved = store.state.apps[role];
-    if (id && saved?.id && saved.id !== id)
-      throw new Error(`Saved ${role} App ID differs from the repository's identity`);
-    if (botUserId && saved?.botUserId !== undefined && saved.botUserId !== botUserId)
-      throw new Error(`Saved ${role} bot user ID differs from the repository's identity`);
-    if (keyPath) {
-      if (!id || !botUserId)
-        throw new Error(`No recorded numeric ${role} binding for key import; complete clean setup`);
-      const info = await lstat(keyPath);
-      if (
-        !info.isFile() ||
-        info.isSymbolicLink() ||
-        info.mode & 0o077 ||
-        (process.getuid && info.uid !== process.getuid())
-      )
-        throw new Error(
-          "Imported App keys must be private files owned by you (chmod 600), not symlinks",
-        );
-      saved = {
-        ...saved,
-        name: saved?.name || `grait-${role}-${id}`,
-        id,
-        botUserId,
-        pem: await readFile(keyPath, "utf8"),
-        phase: "installed",
-        installed: true,
-      };
-    }
-    if (id && !saved?.id)
-      throw new Error(
-        `Import the existing ${role} App key with --${role}-key PATH; setup will not create a replacement identity`,
-      );
-    if (botUserId && !saved?.botUserId)
-      throw new Error(`Missing saved ${role} bot user ID; complete clean setup`);
+  for (const role of Object.keys(publishingRoles)) {
+    const { app, needsBinding } = await resolvePublishingAppCredential({
+      role,
+      variables,
+      app: store.state.apps[role],
+      keyPath: keys[role],
+    });
+    let saved = app;
     if (!saved?.installed)
       saved = await registerApp({ role, repo, owner, ownerType, store, token, openBrowser });
     const {
@@ -190,7 +211,7 @@ export async function preparePublishingApps({
       ...verified
     } = await verifyPublishingIdentity(saved, { repo, role });
     store.state.apps[role] = verified;
-    needsBindings ||= !id || !botUserId;
+    needsBindings ||= needsBinding;
     await store.save();
   }
   publishingBindings(store.state.apps);

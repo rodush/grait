@@ -6,6 +6,7 @@ import { command, withoutCredentials, requireSubscription } from "../scripts/lib
 import {
   assertSetupPublishingBindings,
   humanToken,
+  preflightPublishingAppCredentials,
   preparePublishingApps,
   publishingVariableMap,
   publishingRoles,
@@ -88,6 +89,15 @@ export async function preflightInstallation(options) {
       "Pause the existing workflow for " + repo + " before applying installation changes.",
     );
   checkSetupBindings(repo, variables, state);
+  try {
+    await preflightPublishingAppCredentials({
+      variables,
+      apps: state?.apps,
+      keys: { writer: options.writerKey, reviewer: options.reviewerKey },
+    });
+  } catch (error) {
+    throw new Error(`Cannot reuse publishing App credentials for ${repo}. ${error.message}`);
+  }
   const owner = variables.get("PROJECT_OWNER");
   const number = variables.get("PROJECT_NUMBER");
   if (
