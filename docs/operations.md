@@ -87,6 +87,8 @@ grait orchestrator sync --pr 456
 
 Use `--draft` on the PR publishing command only when the user explicitly requests work in progress or early feedback. Drafts are not the normal delivery state and do not imply completed work. After finishing such a draft and obtaining exact-head Green or the accepted exemption, use `grait orchestrator ready-pr --pr 456` to mark it ready and synchronize the Project. Ready for review starts review; independent review and human approval/merge are still required. Publishing is limited to the claimed issue branch and configured writable paths; no force-push, merge, or release command is supplied to agents.
 
+For workflow file changes in `rodush/grait`, the push command checks independent Green for the exact head and uses the configured workflow-capable `GH_TOKEN` for that issue branch. The Writer App handles PR creation and ordinary pushes. See [GRAIT's source repository write scope](grait-development.md#source-repository-write-scope).
+
 ## Review publication
 
 Assign the exact PR head and trusted policy to the separate local reviewer. GitHub is the shared review record: the reviewer must publish a readable formal decision and inline findings on the remote PR, not merely return a local report. The parent passes a structured payload to the identity-scoped publisher, for example:

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { repositoryDevelopmentConfig } from "./development-scope.mjs";
 import { GitHub } from "./github.mjs";
 import { Project } from "./project.mjs";
 import { validateConfig } from "./policy.mjs";
@@ -11,8 +12,10 @@ import {
 import { SetupState } from "./setup-state.mjs";
 
 export async function localContext({ reviewer = false, setupReview = false } = {}) {
-  const config = validateConfig(JSON.parse(await readFile("workflow.config.json", "utf8")));
-  const repo = config.controllerRepository;
+  const repositoryConfig = validateConfig(
+    JSON.parse(await readFile("workflow.config.json", "utf8")),
+  );
+  const repo = repositoryConfig.controllerRepository;
   if (!repo) throw new Error("Run npm run setup first");
   const { directory, state } = await SetupState.read(repo);
   if (!state.enabled && !setupReview)
@@ -21,6 +24,7 @@ export async function localContext({ reviewer = false, setupReview = false } = {
   await store.acquire();
   try {
     const humanApi = new GitHub(await humanToken());
+    const { config, development } = await repositoryDevelopmentConfig(repositoryConfig, humanApi);
     if (setupReview) {
       const actor = await humanApi.request("user");
       if (
@@ -55,6 +59,7 @@ export async function localContext({ reviewer = false, setupReview = false } = {
       : undefined;
     return {
       config,
+      development,
       repo,
       api: new GitHub(writer.token),
       humanApi,

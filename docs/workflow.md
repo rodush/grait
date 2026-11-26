@@ -18,11 +18,13 @@ Existing claims and Review fixes remain resumable at capacity. Redesign can use 
 
 All specialists run in the user's harness. The parent uses its own checkout and assigns an issue worktree/branch to the tester/implementer pair, with sequential exclusive ownership. Follow [TDD](tdd.md) and [worktrees](worktrees.md). The worker cap `maxConcurrentWorkers` defaults to five and is independent of the five-story cap. Each active review uses one worker from the pool it shares with triage, testing, implementation, and fixes. Run at most one reviewer per story at a time. Tester and implementer handoffs within each story remain sequential. Agents normally finish the accepted scope, validation, and relevant documentation before opening a ready-for-review PR. A ready-for-review PR moves to Review. Use a draft only for explicitly requested work in progress or early feedback and keep the story In Progress until the PR is ready for review. Open one issue-linked PR per story with `Closes #N`.
 
+`rodush/grait` uses its [source repository write scope](grait-development.md#source-repository-write-scope) for issue work that changes GRAIT itself. Adopting repositories use their own configured write scopes and protected paths. Issue scope, role boundaries, and required review apply in both cases.
+
 ## Review and fixes
 
 The local reviewer evaluates the exact PR head without executing contributor code in its credentialed session. It returns stable finding IDs, severity, evidence, actionable corrections, and a formal APPROVE, REQUEST_CHANGES, or COMMENT decision. The deterministic publisher uses the separate reviewer App, verifies GitHub's recorded review, and updates the writer's `Agent review` status for that exact SHA.
 
-Incremental fixes stay Review. A rethink needs an In Progress slot before redesign; wait in Review when capacity is unavailable. Each testable fix repeats tester → independent Red → implementer → independent Green. The default writer scope excludes automation/policy. Fork authors apply their own branch changes; no automatic pushes to arbitrary contributor forks.
+Incremental fixes stay Review. A rethink needs an In Progress slot before redesign; wait in Review when capacity is unavailable. Each testable fix repeats tester → independent Red → implementer → independent Green. Fixes follow the same repository write scope as initial implementation. Fork authors apply their own branch changes; no automatic pushes to arbitrary contributor forks.
 
 ## Stops and completion
 
