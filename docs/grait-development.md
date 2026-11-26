@@ -2,6 +2,14 @@
 
 Use this file when changing GRAIT's policy, automation scripts, reusable roles and skills, harness adapters, or tooling tests. It applies both to the template repository and to GRAIT tooling maintained inside an adopting project. For application features, use the application's own stack and command reference linked from `AGENTS.md`.
 
+## Coding guidelines
+
+On top of general [coding guidelines](./coding-guidelines.md), these are additional and specific to the GRAIT's programming language and ecosystem (JavaScript / NodeJS).
+
+- Choose the newest stable version at least three days old, preserve `.npmrc` maturity settings, and never bypass the age gate.
+- Prefer template string literals when creating strings with variables inside, instead of concatenation of the string.
+  Example: DO - `This string includes ${variable} from the nearest scope`, DO NOT - "This string includes" + variable + " from the nearest scope".
+
 ## Runtime and commands
 
 GRAIT tooling uses Node.js 24 and the npm version recorded in its tooling `package.json`. This runtime supports the automation; the application may use any language. `.npmrc` keeps dependency install scripts disabled and requires package maturity.

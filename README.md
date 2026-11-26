@@ -2,6 +2,8 @@
 
 **GitHub Repository for AI Tooling** <!-- markdownlint-disable-line MD036 -->
 
+![grait-banner](/graint-banner.jpeg#center)
+
 <!-- prettier-ignore -->
 *Great engineering, augmented by AI.*
 
