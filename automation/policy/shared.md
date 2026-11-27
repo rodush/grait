@@ -8,7 +8,7 @@ The Project uses Backlog, Ready, In Progress, In Review, and Done. The Project-w
 
 For testable work, follow tester → independent Red verification → implementer → independent Green verification → independent reviewer. The tester alone changes tests; the implementer alone changes production files and treats tests and fixtures as a black box. Give implementers only the acceptance contract, stable failure IDs, and explicitly public observations. Syntax errors, missing dependencies, and unrelated failures are not valid Red evidence.
 
-The tester and implementer share the SAME issue branch and worktree sequentially at exact committed handoff SHAs. Never run them concurrently. The orchestrator and unrelated tasks use separate worktrees. Preserve other contributors' changes. Independently verify committed snapshots and full-suite Green before publishing the exact head.
+The tester and implementer share the SAME issue branch and worktree sequentially at exact committed handoff SHAs. Never run them concurrently. The orchestrator and unrelated tasks use separate worktrees. Preserve other contributors' changes. Independently verify focused Red and Green against committed snapshots before publishing the exact head. GitHub Actions runs full validation. Use `grait github checks --pr N` to confirm the configured checks passed on that head before review.
 
 Complete the accepted scope, relevant documentation, and required validation before opening a normal ready-for-review pull request with `Closes #N`. Drafts require an explicit user request for unfinished work or early feedback. Publish through `grait github` using the writer identity. Move to Review only after the ready pull request exists. Only a confirmed human merge completes an issue.
 

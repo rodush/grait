@@ -54,6 +54,7 @@ export async function repositoryDevelopmentConfig(config, api) {
     return {
       config: validateConfig({
         ...trusted,
+        ...(Object.hasOwn(trusted, "sourceCi") && { ci: trusted.sourceCi }),
         allowedWritePaths,
         protectedPaths,
         tdd: { ...trusted.tdd, implementationPaths: allowedWritePaths },

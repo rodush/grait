@@ -20,6 +20,7 @@ export async function githubMain() {
       help: { type: "boolean" },
       draft: { type: "boolean" },
       issue: { type: "string" },
+      pr: { type: "string" },
       title: { type: "string" },
       "body-file": { type: "string" },
     },
@@ -27,16 +28,25 @@ export async function githubMain() {
   const task = positionals[0];
   if (values.help) {
     console.log(
-      "Publish claimed issue branches and PRs:\n  grait github push --issue N\n  grait github pr --issue N --title 'feat: ...' --body-file PATH [--draft]\nThe writer App publishes PRs and ordinary pushes. GRAIT source workflow pushes require independent Green and a workflow-capable GH_TOKEN.\nPRs are normal by default and require independent Green for the exact head or an accepted triage TDD exemption. Use --draft only when the user explicitly requests work in progress or early feedback.\nReviews use grait orchestrator review. Merge and release are human-only.",
+      "Publish claimed issue branches and PRs:\n  grait github push --issue N\n  grait github pr --issue N --title 'feat: ...' --body-file PATH [--draft]\n  grait github checks --pr N\nThe writer App publishes PRs and ordinary pushes. GRAIT source workflow pushes require independent Green and a workflow-capable GH_TOKEN.\nPRs are normal by default and require independent Green for the exact head or an accepted triage TDD exemption. Use --draft only when the user explicitly requests work in progress or early feedback.\nReview waits for required CI on the exact PR head. Reviews use grait orchestrator review. Merge and release are human-only.",
     );
     return;
   }
-  if (!["push", "pr"].includes(task) || !/^[1-9]\d*$/.test(values.issue || ""))
-    throw new Error("Choose push or pr and provide --issue N; use --help");
+  const target = task === "checks" ? values.pr : values.issue;
+  if (
+    !["push", "pr", "checks"].includes(task) ||
+    !/^[1-9]\d*$/.test(target || "") ||
+    !Number.isSafeInteger(Number(target))
+  )
+    throw new Error("Choose push or pr with --issue N, or checks with --pr N; use --help");
   const context = await localContext();
   try {
     const orchestrator = new LocalOrchestrator(context);
-    const claim = await orchestrator.claim(Number(values.issue));
+    if (task === "checks") {
+      console.log(JSON.stringify(await orchestrator.checks(Number(target)), null, 2));
+      return;
+    }
+    const claim = await orchestrator.claim(Number(target));
     const branch = (await command("git", ["branch", "--show-current"])).stdout.trim();
     if (branch !== claim.branch || (await command("git", ["status", "--porcelain"])).stdout.trim())
       throw new Error("Publish only committed changes from the claimed issue branch");

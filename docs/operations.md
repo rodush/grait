@@ -85,7 +85,7 @@ Complete the accepted scope, validation, and relevant documentation before publi
 grait orchestrator sync --pr 456
 ```
 
-Use `--draft` on the PR publishing command only when the user explicitly requests work in progress or early feedback. Drafts are not the normal delivery state and do not imply completed work. After finishing such a draft and obtaining exact-head Green or the accepted exemption, use `grait orchestrator ready-pr --pr 456` to mark it ready and synchronize the Project. Ready for review starts review; independent review and human approval/merge are still required. Publishing is limited to the claimed issue branch and configured writable paths; no force-push, merge, or release command is supplied to agents.
+Use `--draft` on the PR publishing command only when the user explicitly requests work in progress or early feedback. Drafts are not the normal delivery state and do not imply completed work. After finishing such a draft and obtaining exact-head Green or the accepted exemption, use `grait orchestrator ready-pr --pr 456` to mark it ready and synchronize the Project. Marking the PR ready allows GitHub Actions to validate it. Review waits for the configured CI checks on its current head, and humans still approve and merge. Publishing is limited to the claimed issue branch and configured writable paths; no force-push, merge, or release command is supplied to agents.
 
 For workflow file changes in `rodush/grait`, the push command checks independent Green for the exact head and uses the configured workflow-capable `GH_TOKEN` for that issue branch. The Writer App handles PR creation and ordinary pushes. See [GRAIT's source repository write scope](grait-development.md#source-repository-write-scope).
 
@@ -123,6 +123,8 @@ grait orchestrator review --pr 456 --file /dev/stdin
 
 Supply the JSON payload above on standard input and close the input stream. Hosts without `/dev/stdin` can use `--file PATH` with a temporary transport file. The JSON carries exact-head/round metadata for validation; testers and fixers read the published GitHub conversation directly and do not need that file.
 
+Run `grait github checks --pr N` to see the current head SHA, readiness, and check names, publisher IDs, statuses, conclusions, and run links. The `required` list shows each configured check, including any with a `missing` status. In `workflow.config.json`, list each required GitHub Check Run under `ci.requiredChecks` as an object with its exact `name` and the positive numeric publisher `appId` returned by GitHub's Check Runs API. Configure jobs to run full project validation and report on the PR head. Existing configurations without this list keep their existing GitHub merge protections. Configured checks must complete with the `success` conclusion. Missing, pending, skipped, failed, and older-head runs keep review waiting, and the latest run ID for each configured name and publisher takes precedence. Open the affected run link and read its annotations or the failing step excerpt when investigating.
+
 For a setup/migration PR that must satisfy existing active agent-review rules before the new host is activated, a configured human operator can explicitly publish its locally evaluated review with `grait orchestrator review --setup-review --pr N --file PATH`. This permits only the reviewer publishing operation during staged setup; it never enables claims, implementation, or a fix loop. Existing issue/PR pause state and lifetime limits still apply. Use ordinary review publication after activation.
 
 The publisher uses the reviewer App, verifies the actual GitHub review identity/head/decision, and records lifetime history. Only a valid approval makes the writer's `Agent review` status succeed for that exact SHA. A new head needs a new review. Humans still approve and squash merge.
@@ -143,6 +145,14 @@ A `fix` decision starts another tester-first cycle in the same issue worktree. A
 ```sh
 grait orchestrator next --issue 123 --pr 456
 ```
+
+If a required CI check fails before formal review, find the failing step or annotation through `grait github checks --pr N`. From the claimed issue worktree, start a tester-first correction on the current Green head:
+
+```sh
+grait orchestrator next --issue 123 --pr 456 --ci
+```
+
+The issue stays in Review. This command requires a completed `failure` from a configured check on the exact PR head and an open, ready PR. The corrected head needs independent Green and successful required CI before formal review.
 
 Stop if the command reports `pause`; do not reset its history. After a human merges:
 

@@ -23,6 +23,7 @@ const head = "a".repeat(40);
 
 function fixture({
   store,
+  ci,
   defaultBranch = "main",
   closingIssueNodes = [{ number: 1, repository: { nameWithOwner: repo } }],
 } = {}) {
@@ -32,6 +33,8 @@ function fixture({
     humanOperators: ["operator"],
     labels: { ...baseConfig.labels },
   };
+  delete config.ci;
+  if (ci) config.ci = ci;
   const issue = {
     number: 1,
     node_id: "issue-node",
@@ -59,6 +62,7 @@ function fixture({
   const publishedReviews = [];
   const linkedReviewPulls = new Map();
   const reviewPulls = new Map();
+  const checkRuns = new Map();
   const moves = [];
   let commentId = 100;
   const item = {
@@ -164,7 +168,17 @@ function fixture({
       }
       throw new Error(`Unsupported local API operation: ${method} ${path}`);
     },
-    async list(path) {
+    async list(path, key) {
+      const checks = path.match(
+        /^repos\/acme\/service\/commits\/([a-f0-9]{40})\/check-runs(?:\?|$)/,
+      );
+      if (checks) {
+        requests.push({ path, key });
+        assert.equal(key, "check_runs");
+        const runs = checkRuns.get(checks[1]);
+        if (runs instanceof Error) throw runs;
+        return runs || [];
+      }
       const match = path.match(/\/issues\/(\d+)\/comments$/);
       if (match) return comments.get(Number(match[1])) || [];
       const dependencyMatch = path.match(/\/issues\/(\d+)\/dependencies\/blocked_by$/);
@@ -265,6 +279,7 @@ function fixture({
     publishedReviews,
     linkedReviewPulls,
     reviewPulls,
+    checkRuns,
     assessment,
     review,
   };
@@ -653,6 +668,68 @@ test("local review rejects stale heads and the PR author's own reviewer identity
   f.pull.user = { login: "reviewer[bot]", id: 10102, type: "Bot" };
   await assert.rejects(() => f.orchestrator.review(7, f.review()));
   assert.equal(f.publishedReviews.length, 0);
+});
+
+test("review requires current successful check runs from every configured publisher", async () => {
+  const candidate = "b".repeat(40);
+  const requiredChecks = [
+    { name: "Compile", appId: 17 },
+    { name: "Integration", appId: 18 },
+  ];
+  const run = (required, overrides = {}) => ({
+    id: 100,
+    name: required.name,
+    app: { id: required.appId },
+    head_sha: candidate,
+    status: "completed",
+    conclusion: "success",
+    details_url: "https://github.com/acme/service/actions/runs/12",
+    ...overrides,
+  });
+  const compile = run(requiredChecks[0]);
+  const integration = run(requiredChecks[1], { id: 110 });
+  for (const [label, runs] of [
+    ["missing", [compile]],
+    ["unavailable", new Error("Check runs unavailable")],
+    ["in progress", [compile, { ...integration, status: "in_progress", conclusion: null }]],
+    ["failed", [compile, { ...integration, conclusion: "failure" }]],
+    ["skipped", [compile, { ...integration, conclusion: "skipped" }]],
+    ["wrong publisher", [compile, { ...integration, app: { id: 17 } }]],
+    ["stale result", [compile, { ...integration, head_sha: head }]],
+    [
+      "newer rerun pending",
+      [{ ...integration, id: 111, status: "queued", conclusion: null }, compile, integration],
+    ],
+  ]) {
+    const f = fixture({ ci: { requiredChecks } });
+    f.pull.head.sha = candidate;
+    f.checkRuns.set(
+      head,
+      [compile, integration].map((check) => ({ ...check, head_sha: head })),
+    );
+    f.checkRuns.set(candidate, runs);
+    await assert.rejects(() => f.orchestrator.review(7, f.review()), undefined, label);
+    assert.equal(f.publishedReviews.length, 0, label);
+    assert.ok(
+      f.requests.some(({ path }) =>
+        path.startsWith(`repos/${repo}/commits/${candidate}/check-runs`),
+      ),
+      label,
+    );
+    assert.ok(!f.requests.some(({ path }) => path.includes(`/commits/${head}/check-runs`)), label);
+  }
+
+  const f = fixture({ ci: { requiredChecks } });
+  f.pull.head.sha = candidate;
+  f.checkRuns.set(candidate, [
+    integration,
+    { ...integration, id: 109, conclusion: "failure" },
+    { ...compile, id: 300, app: { id: 99 }, conclusion: "failure" },
+    compile,
+  ]);
+  await f.orchestrator.review(7, f.review());
+  assert.equal(f.publishedReviews.length, 1);
+  assert.equal(f.publishedReviews[0].commit_id, candidate);
 });
 
 test("local review stops conflicting instructions before another automatic fix", async () => {

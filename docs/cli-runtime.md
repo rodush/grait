@@ -8,6 +8,7 @@ grait orchestrator claim --issue 123
 grait orchestrator worktree --issue 123
 grait github push --issue 123
 grait github pr --issue 123 --title 'feat: accepted behavior' --body-file /tmp/pr.md
+grait github checks --pr 456
 grait orchestrator review --pr 456 --file /tmp/review.json
 ```
 

@@ -2,7 +2,7 @@
 
 ## Ownership and evidence
 
-A testable issue follows **tester → independent Red verification → implementer → independent Green verification → reviewer**. Every AI role runs in the user's harness. A deterministic local verifier executes committed snapshots; GitHub CI remains a separate required delivery check.
+A testable issue follows **tester → independent Red verification → implementer → independent Green verification → reviewer**. Every AI role runs in the user's harness. A deterministic local verifier runs focused acceptance tests from committed snapshots. GitHub Actions runs the full suite and required repository checks.
 
 The tester alone creates/edits/deletes/renames configured test files. The implementer alone changes production paths and treats test source, fixtures, and assertion internals as a black box. Both use the SAME issue worktree/branch sequentially at exact committed handoffs. The orchestrator owns an independent checkout and authorizes the next role only after verified evidence. See [worktrees](worktrees.md).
 
@@ -10,7 +10,9 @@ The tester alone creates/edits/deletes/renames configured test files. The implem
 
 New packaged installations leave application write scopes, test patterns, and the runner unconfigured. Before starting testable work, set `allowedWritePaths`, `tdd.testPatterns`, and `tdd.implementationPaths` in `workflow.config.json` to match your application. Allow both the intended production files and the tests in `allowedWritePaths`. Test globs support nested, separate, or collocated test files and take precedence over implementation scopes. To configure exact paths or directory scopes disjoint from implementation paths, use `tdd.testPaths` in place of `tdd.testPatterns`. Protected paths and both sides of a rename are checked for each role. Set separate model and reasoning preferences in `tdd.profiles`.
 
-Set `tdd.runner.command` to the application's test adapter and its arguments. If the adapter needs dependencies installed first, set the optional `tdd.runner.install` argument array. For example, GRAIT's own tooling explicitly uses `npm ci --ignore-scripts --no-audit --no-fund` and `node {nodeAdapter} tests/*.test.mjs`. The optional `{nodeAdapter}` placeholder resolves to GRAIT's Node JSON adapter. An application can use any adapter that reports `passed` IDs, `failed` entries with stable `id` and `kind`, and `infrastructureErrors`. Use repository-relative identities without temporary paths or line numbers.
+Set `tdd.runner.command` to the application's test adapter and its arguments. If the adapter needs dependencies installed first, set the optional `tdd.runner.install` argument array. For example, GRAIT's own tooling uses `npm ci --ignore-scripts --no-audit --no-fund` and `node {nodeAdapter} {testFiles}`. The optional `{nodeAdapter}` placeholder resolves to GRAIT's Node JSON adapter. An application can use any adapter that reports `passed` IDs, `failed` entries with stable `id` and `kind`, and `infrastructureErrors`. Use repository-relative identities without temporary paths or line numbers.
+
+Put `{testFiles}` in the command as a standalone argument. The verifier expands it to one literal repository-relative path per changed test file from the committed baseline to Red, using the configured test ownership patterns. Set optional `tdd.runner.filePatterns` to narrow the selection to runnable files when the ownership patterns also include fixtures. Adapters can also map changed paths to their project's focused runner inputs. Red requires a nonempty selection and checks the selected files that exist at the original baseline. Legacy commands without the placeholder still run as configured. Migrate them by adding `{testFiles}` and teaching the adapter to accept the selected paths as literal arguments.
 
 An accepted TDD exemption, such as a reasoned docs-only exemption, can publish scoped implementation changes with `allowedWritePaths` and `tdd.implementationPaths` configured. Protected paths and any configured test paths still apply.
 
@@ -38,7 +40,7 @@ The implementer verifies that accepted SHA and changes production only. It recei
 grait orchestrator verify --issue 123 --phase green
 ```
 
-Green reruns the accepted Red baseline and the complete candidate suite. It must execute and pass all accepted tests with no infrastructure errors, and the diff must stay in implementer paths. The ledger moves to review ownership only after validation succeeds. Push the exact commit and publish a normal ready-for-review PR after completing the accepted scope and documentation, then synchronize it with `grait orchestrator sync --pr N`. Drafts are only for explicitly user-requested work in progress or early feedback; use `grait orchestrator ready-pr --pr N` after finishing such a draft. A different head needs fresh evidence.
+Green reproduces Red on the accepted Red commit and runs the same focused selection on the implementation commit. It must execute and pass all accepted test IDs with no infrastructure errors, and the diff must stay in implementer paths. The ledger records Green after validation succeeds. Push the exact commit and publish a normal ready-for-review PR after completing the accepted scope and documentation, then synchronize it with `grait orchestrator sync --pr N`. CI can start from the published PR. Review waits for the configured checks to pass on its current head. Drafts are only for explicitly user-requested work in progress or early feedback; use `grait orchestrator ready-pr --pr N` after finishing such a draft. A different head needs fresh evidence.
 
 ## Test corrections
 
@@ -50,7 +52,7 @@ grait orchestrator handoff --issue 123 --reason 'Acceptance criterion, expected 
 
 The tester independently evaluates that reason. It may revise tests but never production. Unresolved disagreement returns to triage or a human. The next Red uses the known Green baseline and checks only the new owner's changes for scope. Never weaken an assertion to bypass a failure. TDD handoffs are bounded to ten cycles; review rounds retain their separate lifetime limit.
 
-After a published review calls for fixes, `grait orchestrator next --issue N --pr N` starts a new tester-first cycle at the accepted current PR head. Incremental work remains Review; redesign first reacquires In Progress capacity. Every stage checks pause state and current claim. A reasoned triage exemption can skip testing only when the accepted assessment explicitly declares testing inapplicable.
+After a published review calls for fixes, `grait orchestrator next --issue N --pr N` starts a new tester-first cycle at the accepted current PR head. When a configured check completes with a `failure` conclusion on an open, ready PR's exact Green head, add `--ci` to start an incremental correction before formal review. The next candidate needs independent Red and Green followed by CI on the new head. The existing handoff limit applies. Incremental work remains Review; redesign first reacquires In Progress capacity. Every stage checks pause state and current claim. A reasoned triage exemption can skip testing only when the accepted assessment explicitly declares testing inapplicable.
 
 ## Public feedback boundary
 
